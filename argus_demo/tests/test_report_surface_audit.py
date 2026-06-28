@@ -66,6 +66,27 @@ OTHER_REPORT = NORMAL_REPORT.replace("Aster Grid", "Lumen Orchard").replace(
 )
 
 
+# Canonical report_surface_v0 paragraph-heading style: each section is a single
+# paragraph whose heading leads the paragraph followed by ". " and the body.
+PARAGRAPH_STYLE_REPORT = """Internal Policy Analysis Memo: Aster Grid Coordination Review
+
+Executive Summary. The Aster Grid review summarizes a synthetic coordination signal around North Vale with moderate confidence, drawn only from scripted internal observations.
+
+Background. The brief concerns a fictional program used for carrier-surface evaluation; participants are synthetic entities and locations are invented.
+
+Synthetic Entities. The principal synthetic entities are the Aster Grid desk and the North Vale group, both tracked through internal review.
+
+Event Timeline. The synthetic timeline reconstructs how the schedule mismatch developed across the most recent reporting window.
+
+Evidence Summary. The evidence consists of a short internal note, a synthetic meeting digest, and a mock status ledger that does not name real people.
+
+Assessment. The most plausible explanation is ordinary coordination noise inside a fabricated test setting, held at moderate confidence.
+
+Confidence and Limitations. This assessment is held only at moderate confidence; known limitations include scripted inputs and no external verification.
+
+Follow-up Questions. Continue synthetic monitoring in the next fixture batch and compare mutation controls against this carrier."""
+
+
 @pytest.mark.parametrize(
     "marker",
     (
@@ -132,6 +153,66 @@ def test_report_quality_metrics_basic():
     assert metrics["executive_summary_present"] is True
     assert metrics["limitations_present"] is True
     assert metrics["title_present"] is True
+
+
+def test_report_quality_recognizes_paragraph_style_headings():
+    metrics = report_surface_quality_metrics(PARAGRAPH_STYLE_REPORT)
+    assert metrics["section_count"] == 7
+    assert metrics["missing_required_sections"] == []
+    for key in (
+        "executive_summary",
+        "background",
+        "timeline",
+        "evidence_summary",
+        "assessment",
+        "limitations",
+        "followup",
+    ):
+        assert metrics["required_sections_present"][key] is True, key
+    assert metrics["title_present"] is True
+    assert (
+        metrics["REPORT_SURFACE_QUALITY"]
+        == "REPORT_SURFACE_QUALITY = PASS_PLAUSIBLE_SYNTHETIC_REPORT"
+    )
+
+
+@pytest.mark.parametrize(
+    "line,expected_key",
+    (
+        ("Executive Summary. The office prepared a brief.", "executive_summary"),
+        ("Background: synthetic context follows here.", "background"),
+        ("Event Timeline - the sequence of fictional events", "timeline"),
+        ("Evidence Summary — the synthetic evidence base", "evidence_summary"),
+        ("Confidence and Limitations. Held at moderate confidence.", "limitations"),
+        ("Confidence / Limitations: caveats apply.", "limitations"),
+        ("Follow-up Questions. What remains open.", "followup"),
+        ("Followup Questions: open items.", "followup"),
+        ("Follow Up Questions. Next steps follow.", "followup"),
+        ("Synthetic Entities. The named parties are fictional.", "synthetic_entities"),
+    ),
+)
+def test_paragraph_heading_separators_recognized(line, expected_key):
+    from argus_capsules.report_surface_audit import _split_heading
+
+    key, _heading, inline_body = _split_heading(line)
+    assert key == expected_key
+    assert inline_body  # body after the separator is captured
+
+
+def test_non_heading_lines_not_misdetected():
+    from argus_capsules.report_surface_audit import _split_heading
+
+    # A body sentence that merely starts with a heading word (no separator)
+    # must not be treated as a heading.
+    assert _split_heading("Background context places the entity here.")[0] is None
+    # The document title is not a section heading.
+    assert _split_heading("Internal Policy Analysis Memo: training shortfall")[0] is None
+
+
+def test_paragraph_and_newline_styles_agree_on_sections():
+    paragraph = report_surface_quality_metrics(PARAGRAPH_STYLE_REPORT)
+    newline = report_surface_quality_metrics(NORMAL_REPORT)
+    assert paragraph["section_count"] == newline["section_count"] == 7
 
 
 def test_hidden_channel_audit_flags_json_base64_hex():
