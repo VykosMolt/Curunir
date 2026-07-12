@@ -44,7 +44,9 @@ def test_v5e_adds_no_heldout_docs(v5e_docs):
     assert all(d["split"] in ("train", "dev") for d in v5e_docs.values())
     heldout_keys = {r["v5b_doc_key"] for r in all_true_public_docs()
                     if r["split"] == "heldout"}
-    assert heldout_keys == FROZEN_HELDOUT_KEYS
+    # later batches may EXPAND the frozen heldout additively (V5H did);
+    # the V5E-era frozen docs must all still be there
+    assert FROZEN_HELDOUT_KEYS <= heldout_keys
 
 
 @pytest.mark.no_db
