@@ -26,11 +26,24 @@ def record_hypothesis(store: SemanticStore, *, statement: str, case_id: str,
                       assumptions: tuple[str, ...] = (), unknowns: tuple[str, ...] = (),
                       analyst_or_provider: str, now: str, actor: str,
                       marking: Marking) -> dict[str, Any]:
-    """A new hypothesis starts UNRESOLVED — never born supported."""
+    """A new hypothesis starts UNRESOLVED — never born supported. A repeat
+    call folds new assumptions/unknowns rather than discarding them: the
+    stated assumption set is recorded epistemic state."""
     hypothesis_id = digest_id("hyp", case_id, statement)
     existing = store.current_hypotheses().get(hypothesis_id)
     if existing is not None:
-        return existing
+        merged_assumptions = tuple(dict.fromkeys(
+            tuple(existing["assumptions"]) + tuple(assumptions)))
+        merged_unknowns = tuple(dict.fromkeys(
+            tuple(existing["unknowns"]) + tuple(unknowns)))
+        if merged_assumptions == tuple(existing["assumptions"]) \
+                and merged_unknowns == tuple(existing["unknowns"]):
+            return existing
+        return _reappend(store, existing,
+                         {"assumptions": merged_assumptions,
+                          "unknowns": merged_unknowns},
+                         f"ASSUMPTIONS_FOLDED:{analyst_or_provider[:40]}",
+                         now=now, actor=actor, marking=marking)
     record = HypothesisRecord(
         hypothesis_id=hypothesis_id, case_id=case_id, statement=statement,
         status="UNRESOLVED", assumptions=assumptions, unknowns=unknowns,
@@ -51,6 +64,8 @@ def _reappend(store: SemanticStore, hypothesis: Mapping[str, Any], updates: dict
     merged["history"] = tuple(hypothesis["history"]) + (history_note,)
     merged["recorded_time"] = now
     merged["marking"] = marking
+    merged["version"] = store.next_family_version("hypothesis", "hypothesis_id",
+                                                  hypothesis["hypothesis_id"])
     for key in ("assumptions", "unknowns", "supporting_claim_ids", "contradicting_claim_ids",
                 "unresolved_claim_ids", "discriminator_ids"):
         merged[key] = tuple(merged[key])
@@ -204,32 +219,70 @@ def propose_discriminator(store: SemanticStore, *, question: str,
                           source_family_hints: tuple[str, ...] = (),
                           independence_required: bool = False,
                           now: str, actor: str, marking: Marking) -> dict[str, Any]:
-    """What observation would most help distinguish the alternatives."""
+    """What observation would most help distinguish the alternatives.
+
+    Idempotent by (question, subject, attribute) — but the exists path FOLDS
+    the caller's epistemics instead of discarding them: new hypothesis/claim
+    links and hints merge in, and an independence requirement can only ever
+    be raised, never silently downgraded by a cached weaker discriminator
+    (the downgrade would let same-family evidence outrank and satisfy the
+    very question it cannot answer). The hypothesis-link loop runs on both
+    paths, so an interrupted first call completes on re-run.
+    """
     discriminator_id = digest_id("disc", question, desired_subject_ref, desired_attribute)
     existing = store.latest_by_id("discriminator", "discriminator_id").get(discriminator_id)
     if existing is not None:
-        return existing
-    basis_snapshot = tuple(sorted(existing_basis_groups(
-        store, {"claim_ids": claim_ids, "hypothesis_ids": hypothesis_ids}))) \
-        if independence_required else ()
-    record = DiscriminatingObservation(
-        discriminator_id=discriminator_id, question=question,
-        hypothesis_ids=hypothesis_ids, claim_ids=claim_ids,
-        desired_observation_type=desired_observation_type,
-        desired_subject_ref=desired_subject_ref, desired_attribute=desired_attribute,
-        source_family_hints=source_family_hints,
-        independence_required=independence_required,
-        basis_groups_at_pose=basis_snapshot,
-        requirement_id="", status="OPEN", recorded_time=now, marking=marking)
-    store.append("DISCRIMINATOR_RECORDED", record, recorded_time=now, actor=actor)
-    for hypothesis_id in hypothesis_ids:
+        merged_hypotheses = tuple(dict.fromkeys(
+            tuple(existing["hypothesis_ids"]) + tuple(hypothesis_ids)))
+        merged_claims = tuple(dict.fromkeys(
+            tuple(existing["claim_ids"]) + tuple(claim_ids)))
+        merged_hints = tuple(dict.fromkeys(
+            tuple(existing["source_family_hints"]) + tuple(source_family_hints)))
+        raised_independence = independence_required \
+            and not existing["independence_required"]
+        updates: dict = {}
+        if merged_hypotheses != tuple(existing["hypothesis_ids"]):
+            updates["hypothesis_ids"] = merged_hypotheses
+        if merged_claims != tuple(existing["claim_ids"]):
+            updates["claim_ids"] = merged_claims
+        if merged_hints != tuple(existing["source_family_hints"]):
+            updates["source_family_hints"] = merged_hints
+        if raised_independence:
+            updates["independence_required"] = True
+            # the pose snapshot is taken NOW, when independence is first
+            # required, over the merged linkage
+            updates["basis_groups_at_pose"] = tuple(sorted(existing_basis_groups(
+                store, {"claim_ids": merged_claims,
+                        "hypothesis_ids": merged_hypotheses})))
+        record = update_discriminator(store, existing, updates, now=now,
+                                      actor=actor, marking=marking) \
+            if updates else existing
+    else:
+        basis_snapshot = tuple(sorted(existing_basis_groups(
+            store, {"claim_ids": claim_ids, "hypothesis_ids": hypothesis_ids}))) \
+            if independence_required else ()
+        new_record = DiscriminatingObservation(
+            discriminator_id=discriminator_id, question=question,
+            hypothesis_ids=hypothesis_ids, claim_ids=claim_ids,
+            desired_observation_type=desired_observation_type,
+            desired_subject_ref=desired_subject_ref, desired_attribute=desired_attribute,
+            source_family_hints=source_family_hints,
+            independence_required=independence_required,
+            basis_groups_at_pose=basis_snapshot,
+            requirement_id="", status="OPEN", recorded_time=now, marking=marking)
+        store.append("DISCRIMINATOR_RECORDED", new_record, recorded_time=now, actor=actor)
+        record = new_record.to_record()
+    # the link loop runs on BOTH paths: a crash between the discriminator
+    # append and the linking, or a later call bringing a new hypothesis,
+    # completes here idempotently
+    for hypothesis_id in record["hypothesis_ids"]:
         hypothesis = store.current_hypotheses().get(hypothesis_id)
         if hypothesis and discriminator_id not in hypothesis["discriminator_ids"]:
             _reappend(store, hypothesis,
                       {"discriminator_ids": tuple(hypothesis["discriminator_ids"]) + (discriminator_id,)},
                       f"DISCRIMINATOR_PROPOSED:{discriminator_id[:18]}",
                       now=now, actor=actor, marking=marking)
-    return record.to_record()
+    return record
 
 
 def update_discriminator(store: SemanticStore, discriminator: Mapping[str, Any],
@@ -240,6 +293,8 @@ def update_discriminator(store: SemanticStore, discriminator: Mapping[str, Any],
         merged[key] = tuple(merged.get(key, ()))
     merged["recorded_time"] = now
     merged["marking"] = marking
+    merged["version"] = store.next_family_version(
+        "discriminator", "discriminator_id", discriminator["discriminator_id"])
     record = DiscriminatingObservation(**merged)
     store.append("DISCRIMINATOR_RECORDED", record, recorded_time=now, actor=actor)
     return record.to_record()

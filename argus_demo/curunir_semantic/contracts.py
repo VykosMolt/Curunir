@@ -257,9 +257,12 @@ class HypothesisRecord(Record):
     analyst_or_provider: str; review_state: str
     history: tuple[str, ...]
     recorded_time: str; marking: Marking
+    version: int = 1  # strict next-version: a stale writer raises, never shadows
 
     def __post_init__(self):
         _member(self.status, HYPOTHESIS_STATUSES, "hypothesis status")
+        if self.version < 1:
+            raise ValueError("hypothesis versions start at 1")
         require_aware(self.recorded_time)
         if not self.statement:
             raise ValueError("a hypothesis requires a statement")
@@ -282,9 +285,12 @@ class DiscriminatingObservation(Record):
     basis_groups_at_pose: tuple[str, ...]
     requirement_id: str; status: str
     recorded_time: str; marking: Marking
+    version: int = 1  # strict next-version: a stale writer raises, never shadows
 
     def __post_init__(self):
         _member(self.status, DISCRIMINATOR_STATUSES, "discriminator status")
+        if self.version < 1:
+            raise ValueError("discriminator versions start at 1")
         _member(self.desired_observation_type, OBSERVATION_TYPES, "observation type")
         require_aware(self.recorded_time)
         if not self.question:
@@ -304,9 +310,12 @@ class CollectionRoute(Record):
     score: float; rank: int; explanation: str
     status: str; execution_id: str; task_id: str
     recorded_time: str; marking: Marking
+    version: int = 1  # strict next-version: a stale writer raises, never shadows
 
     def __post_init__(self):
         _member(self.status, ROUTE_STATUSES, "route status")
+        if self.version < 1:
+            raise ValueError("route versions start at 1")
         require_aware(self.recorded_time)
         if not self.explanation:
             raise ValueError("a collection route must explain its ranking")
@@ -323,9 +332,12 @@ class ReviewItem(Record):
     detail: str; evidence_refs: tuple[str, ...]
     status: str; resolution_note: str
     recorded_time: str; marking: Marking
+    version: int = 1  # strict next-version: a stale writer raises, never shadows
 
     def __post_init__(self):
         _member(self.kind, REVIEW_KINDS, "review kind")
+        if self.version < 1:
+            raise ValueError("review item versions start at 1")
         _member(self.status, REVIEW_STATUSES, "review status")
         require_aware(self.recorded_time)
         if self.status != "OPEN" and not self.resolution_note:

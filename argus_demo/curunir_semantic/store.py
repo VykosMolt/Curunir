@@ -25,6 +25,29 @@ SEMANTIC_EVENT_TYPES = {
 
 class SemanticStore(FabricStore):
     EVENT_TYPES = {**FabricStore.EVENT_TYPES, **SEMANTIC_EVENT_TYPES}
+    # the four re-appended families replay latest-wins; strict next-version
+    # enforcement (inside the append lock, after catch-up) makes a stale
+    # writer raise instead of silently shadowing another writer's update —
+    # and guarantees log order equals version order, keeping latest_by_id
+    # correct
+    VERSIONED_RECORD_TYPES = {
+        **FabricStore.VERSIONED_RECORD_TYPES,
+        "hypothesis": "hypothesis_id",
+        "discriminator": "discriminator_id",
+        "collection_route": "route_id",
+        "review_item": "item_id",
+        # the proposition ledger itself: version plumbing already exists
+        # (next_claim_version); enforcement makes a stale writer's claim
+        # version raise instead of shadowing current propositions
+        "semantic_claim": "claim_id",
+        # escalation folds re-append requirements
+        "information_requirement": "requirement_id",
+    }
+
+    def next_family_version(self, record_type: str, id_field: str,
+                            record_id: str) -> int:
+        known = self.latest_by_id(record_type, id_field).get(record_id)
+        return (known.get("version", 1) + 1) if known else 1
 
     # ---- replayed views over semantic records ---------------------------
 

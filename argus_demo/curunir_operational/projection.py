@@ -148,8 +148,15 @@ class Projection:
         elif kind == "accreditation":
             self.accreditations.append(record)
         elif kind == "information_requirement":
-            self.requirements[record["requirement_id"]] = {"record": record, "status": record["status"],
-                                                           "transitions": []}
+            known = self.requirements.get(record["requirement_id"])
+            if known is None:
+                self.requirements[record["requirement_id"]] = {
+                    "record": record, "status": record["status"], "transitions": []}
+            else:
+                # a re-appended requirement (priority escalation / affected-id
+                # fold) updates the record but must not reset the workflow
+                # status derived from transitions, nor wipe the audit trail
+                known["record"] = record
         elif kind == "analyst_task":
             self.analyst_tasks[record["task_id"]] = {"record": record, "status": record["status"], "transitions": []}
         elif kind == "evidence_request":

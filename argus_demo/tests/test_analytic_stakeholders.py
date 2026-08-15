@@ -140,6 +140,7 @@ def test_identity_ambiguity_travels_with_assessment(tmp_path):
                           subject_kind=item["subject_kind"], subject_id=item["subject_id"],
                           detail=item["detail"], evidence_refs=tuple(item["evidence_refs"]),
                           status="RESOLVED", resolution_note="human reviewed: same entity",
+                          version=item.get("version", 1) + 1,
                           recorded_time=ctx.now_fn(), marking=MARK)
     ctx.store.append("REVIEW_ITEM_RECORDED", resolved,
                      recorded_time=resolved.recorded_time, actor="jan")

@@ -137,7 +137,8 @@ def interpret_change(ctx: IntegrationContext, prior_manifestation_id: str,
         differences = classify_pairwise(prior_observations, current_observations,
                                         current_text)
 
-    existing_change_ids = {r["change_id"] for r in store.records_of("semantic_change")}
+    existing_changes = {r["change_id"]: r for r in store.records_of("semantic_change")}
+    existing_change_ids = set(existing_changes)
     emitted: list[dict[str, Any]] = []
     truncated = differences[max_records:]
     if truncated:
@@ -157,6 +158,11 @@ def interpret_change(ctx: IntegrationContext, prior_manifestation_id: str,
                               (current_obs or {}).get("observation_id", ""),
                               (prior_obs or {}).get("observation_id", ""))
         if change_id in existing_change_ids:
+            # the change record exists, but the propagation tail (claim
+            # lifecycle + review item) may have been lost to an interruption
+            # after the append — _propagate is idempotent, so completing it
+            # here makes a re-run finish the flow instead of skipping it
+            _propagate(ctx, existing_changes[change_id])
             continue
         affected_objects, affected_claims = _affected(store, (prior_obs, current_obs))
         record = SemanticChangeRecord(
@@ -214,25 +220,52 @@ _STATE_FOR_CLASS = {
 
 def _propagate(ctx: IntegrationContext, change: Mapping[str, Any]) -> None:
     """Carry a classified change onto the claims it touches: lifecycle state
-    plus a review item. Prior claim versions and states stay in the log."""
+    plus a review item. Prior claim versions and states stay in the log.
+
+    Re-entrant for crash recovery, but completion is GAP-DETECTION, not
+    re-judgment: a change's staleness verdict about a claim stands only
+    while the change is the newest information about it. A later change or
+    a later claim version supersedes it — re-stamping an old change's
+    verdict over a claim that has since moved on would mark correct current
+    state STALE for a reason two versions old."""
     store = ctx.store
     mapping = _STATE_FOR_CLASS.get(change["change_class"])
     if mapping is None:
         return
     claim_state, review_kind = mapping
     now = ctx.now_fn()
+    from curunir_operational.canonical import parse_time
+    all_changes = store.records_of("semantic_change")
+    change_position = next((i for i, c in enumerate(all_changes)
+                            if c["change_id"] == change["change_id"]),
+                           len(all_changes))
     for claim_id in change["affected_claim_ids"]:
         current = store.current_claims().get(claim_id)
         if current is None:
             continue
+        superseded_by_later_change = any(
+            claim_id in later["affected_claim_ids"]
+            and later["change_class"] in _STATE_FOR_CLASS
+            for later in all_changes[change_position + 1:])
+        superseded_by_later_version = parse_time(current["recorded_time"]) \
+            > parse_time(change["recorded_time"])
+        lifecycle_applicable = not superseded_by_later_change \
+            and not superseded_by_later_version
         # Deliberate: when the integrator has already advanced the claim to
         # the changed value, the transition is expressed by the version bump
         # and the claim's standing is CURRENT — a stale/corrected marker would
         # misdescribe the current version. The lifecycle write below therefore
         # fires only when the claim still carries the pre-change value; the
         # review item always opens either way.
-        if claim_state and current["object_or_value"] != change["current_value"]:
-            if store.claim_state(claim_id) not in (claim_state, "RETRACTED"):
+        if claim_state and lifecycle_applicable \
+                and current["object_or_value"] != change["current_value"]:
+            # a SERVICE actor may transition a claim's standing only OUT of
+            # machine-bookkeeping states: RETRACTED, CORRECTED, DISPUTED and
+            # SOURCE_WITHDRAWN carry adjudication weight, and completion
+            # re-runs of this propagation must never re-stamp over a human's
+            # later judgment
+            if store.claim_state(claim_id) in ("CURRENT", "STALE", "SUPERSEDED") \
+                    and store.claim_state(claim_id) != claim_state:
                 state = ClaimStateRecord(
                     state_id=digest_id("clstate", claim_id, claim_state, change["change_id"]),
                     claim_id=claim_id, state=claim_state,

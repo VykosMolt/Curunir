@@ -62,6 +62,7 @@ class SemanticPipeline:
             subject_kind="fabric_manifestation", subject_id=manifestation_id,
             detail=detail,
             evidence_refs=(manifestation_id,), status="OPEN", resolution_note="",
+            version=self.store.next_family_version("review_item", "item_id", item_id),
             recorded_time=self.now_fn(), marking=self.marking)
         self.store.append("REVIEW_ITEM_RECORDED", item, recorded_time=item.recorded_time,
                           actor=self.actor)
@@ -77,6 +78,7 @@ class SemanticPipeline:
             subject_kind="fabric_manifestation", subject_id=manifestation_id,
             detail=latest["detail"], evidence_refs=tuple(latest["evidence_refs"]),
             status="RESOLVED", resolution_note="reprocessed successfully",
+            version=self.store.next_family_version("review_item", "item_id", item_id),
             recorded_time=self.now_fn(), marking=self.marking)
         self.store.append("REVIEW_ITEM_RECORDED", resolved,
                           recorded_time=resolved.recorded_time, actor=self.actor)
@@ -142,6 +144,31 @@ class SemanticPipeline:
         return {(r["prior_manifestation_id"], r["current_manifestation_id"])
                 for r in self.store.records_of("semantic_change")}
 
+    def _complete_pair(self, prior_id: str, current_id: str,
+                       raise_alerts: bool = True) -> list[str]:
+        """An already-interpreted pair may still be missing its propagation
+        tail (claim lifecycle, review item, alert) if the original run was
+        interrupted after the change records landed. Completing is cheap —
+        no re-normalization or re-classification — and idempotent."""
+        from .changes import _propagate
+        pair_changes = [c for c in self.store.records_of("semantic_change")
+                        if c["prior_manifestation_id"] == prior_id
+                        and c["current_manifestation_id"] == current_id]
+        ctx = self.context()
+        for change in pair_changes:
+            _propagate(ctx, change)
+        if not raise_alerts:
+            return []
+        # complete only MISSING alerts: an alert is keyed by its change_id, a
+        # one-time fact — re-raising an existing one would append a no-op
+        # "retriggered" transition on every poll, growing the append-only
+        # chain without bound
+        missing = [c for c in pair_changes
+                   if c["change_class"] != "SEMANTICALLY_UNCHANGED"
+                   and self.store.find_alert_by_dedup(
+                       digest_id("semalert", c["change_id"])) is None]
+        return self._raise_semantic_alerts(missing) if missing else []
+
     def process_fabric_changes(self, *, raise_alerts: bool = True) -> list[dict[str, Any]]:
         """Interpret watch-detected byte changes semantically, with alerts."""
         interpreted = self._interpreted_pairs()
@@ -156,6 +183,7 @@ class SemanticPipeline:
             if current_id not in manifestations:
                 continue
             if (prior_id, current_id) in interpreted:
+                self._complete_pair(prior_id, current_id, raise_alerts=raise_alerts)
                 continue
             for manifestation_id in (prior_id, current_id):
                 if manifestation_id in manifestations:
@@ -189,6 +217,8 @@ class SemanticPipeline:
             if manifestation["temporal_status"] != "HISTORICAL":
                 continue
             if manifestation["manifestation_id"] in interpreted:
+                self._complete_pair("", manifestation["manifestation_id"],
+                                    raise_alerts=False)
                 continue
             self.process_manifestation(manifestation)
             ctx = self.context()

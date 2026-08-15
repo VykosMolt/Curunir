@@ -13,7 +13,8 @@ from typing import Any, Mapping
 
 from .access import AccessContext, Marking
 from .canonical import digest_id
-from .contracts import (AnalystTask, EvidenceRequest, InformationRequirement, WorkflowTransition)
+from .contracts import (REQUIREMENT_PRIORITIES, AnalystTask, EvidenceRequest,
+                        InformationRequirement, WorkflowTransition)
 from .store import MissionDataStore
 
 
@@ -69,9 +70,30 @@ class MissionWorkflow:
             owning_role=owning_role, created_time=recorded_time, due_time=due_time,
             status="OPEN", closure_criteria=closure_criteria, marking=marking,
         )
+        latest = None
         for existing in self.store.records_of("information_requirement"):
             if existing["requirement_id"] == requirement.requirement_id:
-                return existing
+                latest = existing
+        if latest is not None:
+            # fold, don't discard: a later caller may escalate priority or
+            # widen the affected set — an existing requirement must not
+            # silently swallow that epistemic state
+            rank = {p: i for i, p in enumerate(REQUIREMENT_PRIORITIES)}
+            merged_priority = latest["priority"] \
+                if rank[latest["priority"]] >= rank[priority] else priority
+            merged_affected = tuple(dict.fromkeys(
+                tuple(latest["affected_ids"]) + tuple(requirement.affected_ids)))
+            if merged_priority == latest["priority"] \
+                    and merged_affected == tuple(latest["affected_ids"]):
+                return latest
+            updated = InformationRequirement(
+                **{**{k: v for k, v in latest.items() if k != "record_type"},
+                   "priority": merged_priority, "affected_ids": merged_affected,
+                   "version": latest.get("version", 1) + 1,
+                   "marking": marking})
+            self.store.append("REQUIREMENT_RECORDED", updated,
+                              recorded_time=recorded_time, actor=actor)
+            return updated.to_record()
         self.store.append("REQUIREMENT_RECORDED", requirement, recorded_time=recorded_time, actor=actor)
         return requirement.to_record()
 

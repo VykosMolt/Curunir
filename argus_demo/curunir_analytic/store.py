@@ -47,10 +47,15 @@ class AnalyticStore(SemanticStore):
     EVENT_TYPES = {**SemanticStore.EVENT_TYPES, **ANALYTIC_EVENT_TYPES}
     # every analytical record family is versioned: append enforces strict
     # next-version so a concurrent writer's stale update raises instead of
-    # silently shadowing current state (last-append-wins is not truth)
-    VERSIONED_RECORD_TYPES = {record_type: id_field
-                              for record_type, (_, id_field)
-                              in ANALYTIC_ID_FIELDS.items()}
+    # silently shadowing current state (last-append-wins is not truth).
+    # EXTENDS the semantic plane's map — replacing it would silently strip
+    # protection from hypotheses/discriminators/routes/review items on the
+    # very store the shipped stack runs on
+    VERSIONED_RECORD_TYPES = {
+        **SemanticStore.VERSIONED_RECORD_TYPES,
+        **{record_type: id_field
+           for record_type, (_, id_field) in ANALYTIC_ID_FIELDS.items()},
+    }
 
     # ---- generic versioned views ----------------------------------------
 

@@ -52,21 +52,28 @@ def requirement_for_discriminator(store: SemanticStore, discriminator: Mapping[s
                                   now: str, actor: str, marking: Marking) -> dict[str, Any]:
     """Open (or reuse) the mission information requirement for a discriminator."""
     workflow = MissionWorkflow(store)
+    # decide from the store's CURRENT record, never the caller's snapshot: a
+    # stale mapping must not regress a discriminator that has since been
+    # SATISFIED (or otherwise advanced) back to REQUESTED
+    current = store.latest_by_id("discriminator", "discriminator_id").get(
+        discriminator["discriminator_id"], discriminator)
     requirement = workflow.open_requirement(
-        mission_context=mission_context, question=discriminator["question"],
-        affected_ids=tuple(discriminator["hypothesis_ids"]) + tuple(discriminator["claim_ids"]),
-        priority="HIGH" if discriminator["independence_required"] else "MEDIUM",
+        mission_context=mission_context, question=current["question"],
+        affected_ids=tuple(current["hypothesis_ids"]) + tuple(current["claim_ids"]),
+        priority="HIGH" if current["independence_required"] else "MEDIUM",
         rationale="discriminating observation for unresolved world-model uncertainty",
         required_evidence_type="PUBLIC_SOURCE_EVIDENCE", owning_role="ANALYST",
         closure_criteria="human review of the discriminating observation",
         due_time=None, recorded_time=now, marking=marking, actor=actor)
-    if discriminator["requirement_id"] != requirement["requirement_id"] \
-            or discriminator["status"] == "OPEN":
-        discriminator = update_discriminator(
-            store, discriminator,
-            {"requirement_id": requirement["requirement_id"], "status": "REQUESTED"},
-            now=now, actor=actor, marking=marking)
-    return {"requirement": requirement, "discriminator": discriminator}
+    updates: dict = {}
+    if current["requirement_id"] != requirement["requirement_id"]:
+        updates["requirement_id"] = requirement["requirement_id"]
+    if current["status"] == "OPEN":
+        updates["status"] = "REQUESTED"  # only OPEN advances; nothing regresses
+    if updates:
+        current = update_discriminator(store, current, updates,
+                                       now=now, actor=actor, marking=marking)
+    return {"requirement": requirement, "discriminator": current}
 
 
 def _source_origin_family(source_id: str, query_value: str) -> str:
@@ -210,7 +217,8 @@ def plan_collection_routes(store: SemanticStore, registry: RegistryView,
             routes.append(known)
             continue
         route = CollectionRoute(
-            route_id=route_id,
+            route_id=route_id, version=store.next_family_version(
+                "collection_route", "route_id", route_id),
             requirement_id=requirement_id,
             discriminator_id=discriminator["discriminator_id"],
             source_id=candidate["source_id"], operation=candidate["operation"],
@@ -260,6 +268,8 @@ def assign_human_route(store: SemanticStore, route: Mapping[str, Any], *,
     updated = CollectionRoute(**{
         **{k: v for k, v in route.items() if k != "record_type"},
         "factors": tuple(tuple(f) for f in route["factors"]),
+        "version": store.next_family_version("collection_route", "route_id",
+                                             route["route_id"]),
         "task_id": task["task_id"], "recorded_time": now, "marking": marking})
     store.append("COLLECTION_ROUTE_RECORDED", updated, recorded_time=now, actor=actor)
     return task
@@ -270,48 +280,115 @@ def execute_route(pipeline: SemanticPipeline, registry: RegistryView,
                   ) -> dict[str, Any]:
     """Execute one automatable route through the OSINT fabric, then run the
     acquired evidence through semantic understanding and refresh the
-    originating discriminator and hypotheses."""
+    originating discriminator and hypotheses.
+
+    Re-run safe in both directions: a route already EXECUTED is NOT
+    re-acquired — only its accounting tail (satisfaction, uncertainty
+    signals, hypothesis refresh) is completed idempotently; and a failure
+    inside the tail records a durable PROCESSING_FAILED review item on the
+    route, so the gap is visible and repairable instead of silently
+    marooning the collection loop over already-integrated evidence.
+    """
     if not route["automatable"]:
         raise ValueError("a human-required route cannot be executed by the machine; "
                          "assign it with assign_human_route instead")
     store = pipeline.store
-    fabric_ctx = FabricContext(
-        store=store, registry=registry,
-        custody=SourceCustodyStore(pipeline.custody_root),
-        actor=pipeline.actor, marking=pipeline.marking, now_fn=pipeline.now_fn,
-        transports=dict(transports or {}), rate_gate=RateGate(0.5))
-    query = QuerySpec(
-        query_id=digest_id("routequery", route["route_id"]),
-        family="RELATIONSHIP_PIVOT", value=route["query_value"], language="", script="",
-        operation=route["operation"], source_id=route["source_id"],
-        time_bounds=(None, None), origin="RULE", origin_detail="collection-planner",
-        rationale=f"route {route['route_id'][:18]} for requirement "
-                  f"{route['requirement_id'][:18]}",
-        derived_from=(route["discriminator_id"],))
-    outcome = execute_single(fabric_ctx, query=query, source_id=route["source_id"])
-    now = pipeline.now_fn()
-    updated = CollectionRoute(**{
-        **{k: v for k, v in route.items() if k != "record_type"},
-        "factors": tuple(tuple(f) for f in route["factors"]),
-        "status": "EXECUTED" if outcome.execution.outcome in
-        ("EXECUTED_WITH_RESULTS", "EXECUTED_EMPTY") else "FAILED",
-        "execution_id": outcome.execution.execution_id,
-        "recorded_time": now, "marking": pipeline.marking})
-    store.append("COLLECTION_ROUTE_RECORDED", updated, recorded_time=now,
-                 actor=pipeline.actor)
+    current_route = store.latest_by_id("collection_route", "route_id").get(
+        route["route_id"], route)
+    # everything below operates on the STORE-CURRENT route: a caller's stale
+    # mapping must not resurrect pre-assignment or pre-execution state
+    route = current_route
+    if current_route["status"] == "EXECUTED" and current_route["execution_id"]:
+        # completion path: the acquisition already happened; re-running the
+        # query would be re-collection, not recovery
+        execution = next((e for e in store.records_of("fabric_execution")
+                          if e["execution_id"] == current_route["execution_id"]), None)
+        if execution is None:
+            raise ValueError(
+                f"route {route['route_id'][:24]} records execution "
+                f"{current_route['execution_id'][:24]} but no such execution "
+                "exists in the log: refusing to guess an outcome")
+        execution_outcome = execution["outcome"]
+        manifestation_ids: list[str] = []
+    else:
+        fabric_ctx = FabricContext(
+            store=store, registry=registry,
+            custody=SourceCustodyStore(pipeline.custody_root),
+            actor=pipeline.actor, marking=pipeline.marking, now_fn=pipeline.now_fn,
+            transports=dict(transports or {}), rate_gate=RateGate(0.5))
+        query = QuerySpec(
+            query_id=digest_id("routequery", route["route_id"]),
+            family="RELATIONSHIP_PIVOT", value=route["query_value"], language="", script="",
+            operation=route["operation"], source_id=route["source_id"],
+            time_bounds=(None, None), origin="RULE", origin_detail="collection-planner",
+            rationale=f"route {route['route_id'][:18]} for requirement "
+                      f"{route['requirement_id'][:18]}",
+            derived_from=(route["discriminator_id"],))
+        outcome = execute_single(fabric_ctx, query=query, source_id=route["source_id"])
+        now = pipeline.now_fn()
+        updated = CollectionRoute(**{
+            **{k: v for k, v in route.items() if k != "record_type"},
+            "factors": tuple(tuple(f) for f in route["factors"]),
+            "version": store.next_family_version("collection_route", "route_id",
+                                                 route["route_id"]),
+            "status": "EXECUTED" if outcome.execution.outcome in
+            ("EXECUTED_WITH_RESULTS", "EXECUTED_EMPTY") else "FAILED",
+            "execution_id": outcome.execution.execution_id,
+            "recorded_time": now, "marking": pipeline.marking})
+        store.append("COLLECTION_ROUTE_RECORDED", updated, recorded_time=now,
+                     actor=pipeline.actor)
+        execution_outcome = outcome.execution.outcome
+        manifestation_ids = [m.manifestation_id for m in outcome.manifestations]
 
+    try:
+        return _route_accounting(pipeline, route, execution_outcome,
+                                 manifestation_ids)
+    except Exception as error:
+        # the acquired evidence is preserved and (partially) integrated; the
+        # accounting gap must be durable state, not a swallowed exception
+        item_id = digest_id("review-processing", "route", route["route_id"])
+        latest = store.latest_by_id("review_item", "item_id").get(item_id)
+        detail = (f"route accounting failed after execution: "
+                  f"{type(error).__name__}: {str(error)[:240]}; re-run "
+                  f"execute_route on this route to complete satisfaction and "
+                  f"hypothesis accounting (the acquisition is NOT repeated)")
+        if latest is None or latest["status"] != "OPEN" or latest["detail"] != detail:
+            item = ReviewItem(
+                item_id=item_id, kind="PROCESSING_FAILED",
+                subject_kind="collection_route", subject_id=route["route_id"],
+                detail=detail, evidence_refs=(route["route_id"],),
+                status="OPEN", resolution_note="",
+                version=store.next_family_version("review_item", "item_id", item_id),
+                recorded_time=pipeline.now_fn(), marking=pipeline.marking)
+            store.append("REVIEW_ITEM_RECORDED", item,
+                         recorded_time=item.recorded_time, actor=pipeline.actor)
+        raise
+
+
+def _route_accounting(pipeline: SemanticPipeline, route: Mapping[str, Any],
+                      execution_outcome: str,
+                      manifestation_ids: list[str]) -> dict[str, Any]:
+    """The idempotent tail: understand the evidence, account discriminator
+    satisfaction, record typed uncertainty, refresh hypotheses."""
+    store = pipeline.store
     processed = pipeline.process_new_evidence()
+
+    # a previously recorded accounting failure resolves on a completed pass
+    failure_id = digest_id("review-processing", "route", route["route_id"])
+    open_failure = store.latest_by_id("review_item", "item_id").get(failure_id)
 
     # discriminator satisfaction + evidence request + hypothesis refresh
     discriminator = store.latest_by_id("discriminator", "discriminator_id").get(
         route["discriminator_id"])
     satisfied_by = discriminator_satisfied_by(store, discriminator) if discriminator else []
+    route_execution_id = store.latest_by_id("collection_route", "route_id").get(
+        route["route_id"], route).get("execution_id", "")
     if discriminator and satisfied_by and discriminator["status"] != "SATISFIED":
         discriminator = update_discriminator(
             store, discriminator, {"status": "SATISFIED"},
             now=pipeline.now_fn(), actor=pipeline.actor, marking=pipeline.marking)
     elif discriminator and not satisfied_by \
-            and outcome.execution.outcome == "EXECUTED_EMPTY":
+            and execution_outcome == "EXECUTED_EMPTY":
         # the search ran and the expected observation was not there: a typed
         # uncertainty signal, never an inferred event — absence of results is
         # not evidence of absence
@@ -325,7 +402,7 @@ def execute_route(pipeline: SemanticPipeline, registry: RegistryView,
                        f"returned no results for: {discriminator['question'][:180]}. "
                        f"Absence of results is not evidence of absence; coverage of "
                        f"other families remains open.",
-                evidence_refs=(outcome.execution.execution_id,),
+                evidence_refs=(route_execution_id or route["route_id"],),
                 status="OPEN", resolution_note="",
                 recorded_time=pipeline.now_fn(), marking=pipeline.marking)
             store.append("REVIEW_ITEM_RECORDED", item, recorded_time=item.recorded_time,
@@ -341,9 +418,20 @@ def execute_route(pipeline: SemanticPipeline, registry: RegistryView,
         refreshed = refresh_hypotheses_for_claims(ctx, touched_claims) if touched_claims else []
     else:
         refreshed = []
+    if open_failure is not None and open_failure["status"] == "OPEN":
+        resolved = ReviewItem(
+            item_id=failure_id, kind="PROCESSING_FAILED",
+            subject_kind="collection_route", subject_id=route["route_id"],
+            detail=open_failure["detail"],
+            evidence_refs=tuple(open_failure["evidence_refs"]),
+            status="RESOLVED", resolution_note="route accounting completed",
+            version=store.next_family_version("review_item", "item_id", failure_id),
+            recorded_time=pipeline.now_fn(), marking=pipeline.marking)
+        store.append("REVIEW_ITEM_RECORDED", resolved,
+                     recorded_time=resolved.recorded_time, actor=pipeline.actor)
     return {"route_id": route["route_id"],
-            "execution_outcome": outcome.execution.outcome,
-            "manifestations": [m.manifestation_id for m in outcome.manifestations],
+            "execution_outcome": execution_outcome,
+            "manifestations": manifestation_ids,
             "processed": len(processed["processed"]),
             "discriminator_status": discriminator["status"] if discriminator else "UNKNOWN",
             "observations_satisfying": len(satisfied_by),

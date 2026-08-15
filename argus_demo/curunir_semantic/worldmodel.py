@@ -321,12 +321,17 @@ def _integrate_entity(ctx: IntegrationContext, document: Mapping[str, Any], subj
 
 
 def _queue_identity_ambiguity(ctx: IntegrationContext, proposal: Mapping[str, Any],
-                              observation: Mapping[str, Any] | None) -> None:
+                              observation: Mapping[str, Any] | None,
+                              known_item_ids: set[str] | None = None) -> None:
     from .contracts import ReviewItem
     store = ctx.store
     item_id = digest_id("review-identity", proposal["left_object_id"],
                         proposal["right_object_id"])
-    if any(r["item_id"] == item_id for r in store.records_of("review_item")):
+    if known_item_ids is not None:
+        if item_id in known_item_ids:
+            return
+        known_item_ids.add(item_id)
+    elif any(r["item_id"] == item_id for r in store.records_of("review_item")):
         return
     now = ctx.now_fn()
     item = ReviewItem(
@@ -436,7 +441,23 @@ def _integrate_claim(ctx: IntegrationContext, document: Mapping[str, Any], subje
     versions = [c for c in store.records_of("semantic_claim") if c["claim_id"] == claim_id]
     seen_observations = {o for c in versions for o in c["observation_ids"]}
     if observation["observation_id"] in seen_observations:
-        return  # this evidence is already accounted in the claim's history
+        # the evidence is accounted — but the standing tail (state reset or
+        # unadjudicated-standing review item) may have been lost to an
+        # interruption after the claim append; completing it here makes the
+        # PROCESSING_FAILED retry repair the gap instead of reporting
+        # PROCESSED over partial state. Gated on THIS observation being the
+        # one that produced the latest advance: a re-entry over any older
+        # observation must not re-stamp standing (a later human adjudication
+        # would be falsely 'reset by fresh evidence' that never arrived).
+        if len(versions) >= 2 \
+                and observation["observation_id"] in versions[-1]["observation_ids"] \
+                and observation["observation_id"] \
+                not in versions[-2]["observation_ids"] \
+                and versions[-2]["object_or_value"] != versions[-1]["object_or_value"]:
+            _ensure_claim_standing(ctx, claim_id, versions[-1]["version"],
+                                   new_value=versions[-1]["object_or_value"],
+                                   observation_id=observation["observation_id"])
+        return
 
     def _state_time(observation_ids: Iterable[str]) -> str:
         """When the observed source state was current — never knowledge time.
@@ -515,42 +536,68 @@ def _integrate_claim(ctx: IntegrationContext, document: Mapping[str, Any], subje
         recorded_time=now, marking=ctx.marking,
     )
     store.append("SEMANTIC_CLAIM_RECORDED", claim, recorded_time=now, actor=ctx.actor)
-    # a lifecycle state describes the CURRENT version's standing — but only
-    # machine-bookkeeping states (STALE, SUPERSEDED) may be machine-reset when
-    # fresh evidence advances the claim. RETRACTED, CORRECTED, DISPUTED and
-    # SOURCE_WITHDRAWN carry adjudication weight: a SERVICE actor never
-    # reverts them; the tension is queued for review instead.
     if current is not None and current["object_or_value"] != observation["value"]:
-        prior_state = store.claim_state(claim_id)
-        from .contracts import ClaimStateRecord, ReviewItem
-        if prior_state in ("STALE", "SUPERSEDED"):
-            reset = ClaimStateRecord(
-                state_id=digest_id("clstate", claim_id, "CURRENT", now),
-                claim_id=claim_id, state="CURRENT",
-                reason=f"superseded by fresh evidence at version {claim.version}",
-                caused_by=observation["observation_id"],
-                superseded_by=f"{claim_id}@v{claim.version}",
-                actor_id=ctx.actor, actor_kind="SERVICE",
-                recorded_time=ctx.now_fn(), marking=ctx.marking)
-            store.append("SEMANTIC_CLAIM_STATE_RECORDED", reset,
-                         recorded_time=reset.recorded_time, actor=ctx.actor)
-        elif prior_state != "CURRENT":
-            item_id = digest_id("review-standing", claim_id, str(claim.version))
-            if not any(r["item_id"] == item_id for r in store.records_of("review_item")):
-                item = ReviewItem(
-                    item_id=item_id, kind="MANIFESTATION_CHANGED",
-                    subject_kind="semantic_claim", subject_id=claim_id,
-                    detail=f"fresh evidence advanced the claim to version "
-                           f"{claim.version} ({observation['value'][:120]!r}) while its "
-                           f"{prior_state} standing is unadjudicated; the state was "
-                           f"not machine-reset and needs review",
-                    evidence_refs=(observation["observation_id"],),
-                    status="OPEN", resolution_note="",
-                    recorded_time=ctx.now_fn(), marking=ctx.marking)
-                store.append("REVIEW_ITEM_RECORDED", item,
-                             recorded_time=item.recorded_time, actor=ctx.actor)
+        _ensure_claim_standing(ctx, claim_id, claim.version,
+                               new_value=observation["value"],
+                               observation_id=observation["observation_id"])
     result["claims"].append({"claim_id": claim_id, "version": claim.version,
                              "value": observation["value"][:80]})
+
+
+def _ensure_claim_standing(ctx: IntegrationContext, claim_id: str, version: int, *,
+                           new_value: str, observation_id: str) -> None:
+    """Standing bookkeeping after fresh evidence advanced a claim's value —
+    idempotent, so an interrupted run is completed by any later re-entry.
+
+    Only machine-bookkeeping states (STALE, SUPERSEDED) are machine-reset,
+    and only when the state PRECEDES the advance: a standing recorded after
+    the advance is a later judgment about the advanced claim, not something
+    "fresh evidence" may touch. RETRACTED, CORRECTED, DISPUTED and
+    SOURCE_WITHDRAWN carry adjudication weight: a SERVICE actor never
+    reverts them; the tension is queued for review instead."""
+    store = ctx.store
+    from curunir_operational.canonical import parse_time
+    latest_version = next((c for c in reversed(store.records_of("semantic_claim"))
+                           if c["claim_id"] == claim_id), None)
+    state_record = store.claim_states().get(claim_id)
+    if latest_version is not None and state_record is not None \
+            and parse_time(state_record["recorded_time"]) \
+            >= parse_time(latest_version["recorded_time"]):
+        # the standing postdates (or shares the instant of) the advance:
+        # nothing to complete — parsed comparison, never raw strings whose
+        # offsets can misorder, and ties fail safe toward NOT resetting.
+        # The in-line call always sees a strictly earlier standing (the
+        # advance's own append moved the clock past it).
+        return
+    prior_state = store.claim_state(claim_id)
+    from .contracts import ClaimStateRecord, ReviewItem
+    if prior_state in ("STALE", "SUPERSEDED"):
+        now = ctx.now_fn()
+        reset = ClaimStateRecord(
+            state_id=digest_id("clstate", claim_id, "CURRENT", now),
+            claim_id=claim_id, state="CURRENT",
+            reason=f"superseded by fresh evidence at version {version}",
+            caused_by=observation_id,
+            superseded_by=f"{claim_id}@v{version}",
+            actor_id=ctx.actor, actor_kind="SERVICE",
+            recorded_time=now, marking=ctx.marking)
+        store.append("SEMANTIC_CLAIM_STATE_RECORDED", reset,
+                     recorded_time=reset.recorded_time, actor=ctx.actor)
+    elif prior_state != "CURRENT":
+        item_id = digest_id("review-standing", claim_id, str(version))
+        if not any(r["item_id"] == item_id for r in store.records_of("review_item")):
+            item = ReviewItem(
+                item_id=item_id, kind="MANIFESTATION_CHANGED",
+                subject_kind="semantic_claim", subject_id=claim_id,
+                detail=f"fresh evidence advanced the claim to version "
+                       f"{version} ({new_value[:120]!r}) while its "
+                       f"{prior_state} standing is unadjudicated; the state was "
+                       f"not machine-reset and needs review",
+                evidence_refs=(observation_id,),
+                status="OPEN", resolution_note="",
+                recorded_time=ctx.now_fn(), marking=ctx.marking)
+            store.append("REVIEW_ITEM_RECORDED", item,
+                         recorded_time=item.recorded_time, actor=ctx.actor)
 
 
 def _record_claim_conflict(ctx: IntegrationContext, current_claim: Mapping[str, Any],
@@ -598,8 +645,16 @@ def propose_cross_scheme_associations(ctx: IntegrationContext) -> list[dict[str,
         for ref in version.get("external_refs", ()):
             if ref.get("identity_bearing", True):
                 by_identifier.setdefault((ref["system"], ref["external_id"]), set()).add(object_id)
-    proposed_pairs = {tuple(sorted((p["left_object_id"], p["right_object_id"])))
-                      for p in store.records_of("association_proposal")}
+    recorded_proposals = {tuple(sorted((p["left_object_id"], p["right_object_id"]))): p
+                          for p in store.records_of("association_proposal")}
+    proposed_pairs = set(recorded_proposals)
+    # a proposal whose review item was lost to an interruption between the
+    # two appends would otherwise sit unadjudicated forever: the sweep
+    # completes the queueing idempotently for every recorded proposal (the
+    # known-item set is computed once, not per proposal)
+    known_item_ids = {r["item_id"] for r in store.records_of("review_item")}
+    for proposal in recorded_proposals.values():
+        _queue_identity_ambiguity(ctx, proposal, None, known_item_ids)
     engine = AssociationEngine(store)
     proposals = []
     for members in by_identifier.values():

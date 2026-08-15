@@ -406,9 +406,14 @@ class InformationRequirement(Record):
     required_evidence_type: str; owning_role: str
     created_time: str; due_time: str | None; status: str
     closure_criteria: str; marking: Marking
+    # V6: escalation folds re-append; strict next-version keeps a stale
+    # concurrent fold from silently de-escalating priority
+    version: int = 1
 
     def __post_init__(self):
         _member(self.priority, REQUIREMENT_PRIORITIES, "requirement priority")
+        if self.version < 1:
+            raise ValueError("requirement versions start at 1")
         _member(self.status, REQUIREMENT_STATUS, "requirement status")
         if self.owning_role not in ROLE_RANK:
             raise ValueError(f"unknown owning role: {self.owning_role}")
