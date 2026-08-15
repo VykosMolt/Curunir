@@ -1,0 +1,37 @@
+{
+ "admission": {
+  "claim_basis_status": "SINGLE_BASIS",
+  "dependencies": [
+   "COMMON_ORIGIN_REVIEW",
+   "EXTRACTION_REVIEW"
+  ],
+  "independence_status": "UNRESOLVED"
+ },
+ "assertion": {
+  "assertion_id": "asrt-live-54c5c0d8715268011bb4",
+  "evidence_basis_id": "basis-live-74750c190f24af5aca84",
+  "extracted_span_hint": {
+   "first_offset": 15,
+   "mapping": "APPROXIMATE_DOM_TEXT",
+   "needle": "earthquake"
+  },
+  "mapping_status": "APPROXIMATE",
+  "report_time": "2026-07-20T21:05:25.789266+00:00",
+  "reported_status": "REPORTED_HAZARD_EVENT",
+  "review_state": "AI_SECONDARY_REVIEW",
+  "subject_ref": "GDACS-EQ-1552752",
+  "summary": "Official GDACS report page for Earthquake in Peru (alert Orange)"
+ },
+ "document": {
+  "authority_state": "AUTHORITY_NOT_ASSESSED",
+  "document_id": "document-4b8e863c828c9cbc5e47"
+ },
+ "identity": {
+  "status": "IDENTITY_PROVISIONAL"
+ },
+ "source_object": {
+  "content_sha256": "a561e3bc763e3a0f360f4dabce8b8914d5aea8159407b563277c2152777940ab",
+  "source_object_id": "source-object-7fe6f9e7ea0668773ddb"
+ },
+ "source_relationships": []
+}
