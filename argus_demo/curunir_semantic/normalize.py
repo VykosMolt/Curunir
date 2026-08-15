@@ -30,7 +30,11 @@ from . import PARSER_VERSION
 from .contracts import NormalizedDocumentRecord
 from .store import SemanticStore
 
-MAX_FIELDS = 5000
+# bounds a pathological payload without truncating real registry records: a
+# maximal Wikidata organisation entity flattens to ~24k rows, so 50k keeps
+# identity- and relation-bearing fields (external ids, official website)
+# addressable while FIELDS_TRUNCATED_AT_* still fires on genuine outliers
+MAX_FIELDS = 50_000
 MAX_FIELD_VALUE = 2000
 MAX_REGIONS = 400
 
