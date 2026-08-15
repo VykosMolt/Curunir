@@ -497,7 +497,12 @@ def _integrate_claim(ctx: IntegrationContext, document: Mapping[str, Any], subje
             # supersession — newer is not automatically truer across sources.
             new_time = _state_time([observation["observation_id"]])
             current_time = _state_time(current["observation_ids"])
-            if not new_time or not current_time or new_time <= current_time:
+            from curunir_operational.canonical import parse_time
+            # parsed comparison: connector-supplied capture/source times keep
+            # their own offsets, and raw strings would misorder them against
+            # UTC retrieval times
+            if not new_time or not current_time \
+                    or parse_time(new_time) <= parse_time(current_time):
                 # unknown ordering is treated as not-newer: the observation
                 # stays recorded as evidence but does not displace the claim
                 return

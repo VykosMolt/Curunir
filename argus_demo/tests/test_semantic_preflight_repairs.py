@@ -716,3 +716,41 @@ def test_n3_n4_standing_time_gate_is_offset_safe(tmp_path):
     assert store.claim_state(claim["claim_id"]) == "SUPERSEDED", \
         "a post-advance standing must never be machine-reset, whatever its offset"
     assert len(store.records_of("semantic_claim_state")) == states_before
+
+
+def test_n5_first_pass_backlog_cannot_stale_a_current_claim(tmp_path):
+    """Final-round N5: even on the FIRST interpretation pass, a change whose
+    manifestation is older than the evidence the claim already rests on must
+    not stamp staleness — the ordering axis is the evidence, not the log."""
+    from semantic_support import PAGE_V1, PAGE_V2_SEMANTIC
+    pipeline = make_pipeline(tmp_path)
+    store = pipeline.store
+    page_v3 = PAGE_V1.replace(b"Kari Nordmann", b"Per Berg")
+    v1 = plant_manifestation(pipeline, source_id="live-web",
+                             native_id="https://vessia.example/about",
+                             body=PAGE_V1, media_type="text/html",
+                             retrieval_time="2026-08-17T12:05:00+00:00")
+    v2 = plant_manifestation(pipeline, source_id="live-web",
+                             native_id="https://vessia.example/about",
+                             body=PAGE_V2_SEMANTIC, media_type="text/html",
+                             retrieval_time="2026-08-17T12:20:00+00:00",
+                             prior_manifestation_id=v1["manifestation_id"])
+    v3 = plant_manifestation(pipeline, source_id="live-web",
+                             native_id="https://vessia.example/about",
+                             body=page_v3, media_type="text/html",
+                             retrieval_time="2026-08-17T12:40:00+00:00",
+                             prior_manifestation_id=v2["manifestation_id"])
+    # integration first: the claim advances to the newest value BEFORE any
+    # change is interpreted (the demo driver ordering)
+    pipeline.process_new_evidence()
+    claim = next(c for c in store.current_claims().values()
+                 if c["object_or_value"] == "Per Berg")
+    # now the backlog is interpreted oldest-first — the v1→v2 change is the
+    # NEWEST record in the log but carries the OLDEST evidence
+    interpret_change(pipeline.context(), v1["manifestation_id"],
+                     v2["manifestation_id"])
+    assert store.claim_state(claim["claim_id"]) == "CURRENT", \
+        "a change resting on older evidence staled a claim resting on newer"
+    interpret_change(pipeline.context(), v2["manifestation_id"],
+                     v3["manifestation_id"])
+    assert store.claim_state(claim["claim_id"]) == "CURRENT"

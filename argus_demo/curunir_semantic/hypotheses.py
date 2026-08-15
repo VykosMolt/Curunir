@@ -308,9 +308,10 @@ def discriminator_satisfied_by(store: SemanticStore,
     required, evidence from an origin family already in the basis does not
     satisfy: the ranking's judgment and the satisfaction judgment agree."""
     from .worldmodel import dependence_group_for
+    from curunir_operational.canonical import parse_time
     first_posed = min((r["recorded_time"] for r in store.records_of("discriminator")
                        if r["discriminator_id"] == discriminator["discriminator_id"]),
-                      default=discriminator["recorded_time"])
+                      key=parse_time, default=discriminator["recorded_time"])
     if not discriminator["independence_required"]:
         basis_groups = set()
     else:
@@ -322,7 +323,7 @@ def discriminator_satisfied_by(store: SemanticStore,
                       for m in store.records_of("fabric_manifestation")}
     matches = []
     for observation in store.records_of("semantic_observation"):
-        if observation["recorded_time"] <= first_posed:
+        if parse_time(observation["recorded_time"]) <= parse_time(first_posed):
             continue
         if observation["observation_type"] != discriminator["desired_observation_type"]:
             continue

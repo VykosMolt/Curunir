@@ -218,6 +218,35 @@ _STATE_FOR_CLASS = {
 }
 
 
+def _manifestation_state_time(manifestation: Mapping[str, Any]) -> str:
+    """When the manifestation's source state was current — capture time for
+    archives, retrieval time for live fetches; "" when unknown."""
+    if not manifestation:
+        return ""
+    if manifestation.get("temporal_status") == "HISTORICAL":
+        return manifestation.get("archive_capture_time") \
+            or manifestation.get("source_time") or ""
+    return manifestation.get("retrieval_time") or ""
+
+
+def _claim_newest_evidence_time(ctx: IntegrationContext,
+                                claim: Mapping[str, Any]) -> str:
+    """The newest source-state time among the claim's current observations."""
+    store = ctx.store
+    observations = {o["observation_id"]: o
+                    for o in store.records_of("semantic_observation")}
+    times = []
+    for observation_id in claim["observation_ids"]:
+        observation = observations.get(observation_id)
+        if observation is None:
+            continue
+        state_time = _manifestation_state_time(
+            ctx.manifestation(observation["manifestation_id"]))
+        if state_time:
+            times.append(state_time)
+    return max(times, default="")
+
+
 def _propagate(ctx: IntegrationContext, change: Mapping[str, Any]) -> None:
     """Carry a classified change onto the claims it touches: lifecycle state
     plus a review item. Prior claim versions and states stay in the log.
@@ -249,8 +278,21 @@ def _propagate(ctx: IntegrationContext, change: Mapping[str, Any]) -> None:
             for later in all_changes[change_position + 1:])
         superseded_by_later_version = parse_time(current["recorded_time"]) \
             > parse_time(change["recorded_time"])
+        # the EVIDENCE axis, not just record order: when a backlog is
+        # interpreted after integration already advanced the claim, the old
+        # change's records postdate the claim version — but the claim's own
+        # evidence is newer than the change's manifestation, and an old
+        # source state must not stale a claim resting on newer source state
+        superseded_by_newer_evidence = False
+        change_manifestation = ctx.manifestation(change["current_manifestation_id"])
+        change_time = _manifestation_state_time(change_manifestation)
+        claim_time = _claim_newest_evidence_time(ctx, current)
+        if change_time and claim_time \
+                and parse_time(claim_time) > parse_time(change_time):
+            superseded_by_newer_evidence = True
         lifecycle_applicable = not superseded_by_later_change \
-            and not superseded_by_later_version
+            and not superseded_by_later_version \
+            and not superseded_by_newer_evidence
         # Deliberate: when the integrator has already advanced the claim to
         # the changed value, the transition is expressed by the version bump
         # and the claim's standing is CURRENT — a stale/corrected marker would
