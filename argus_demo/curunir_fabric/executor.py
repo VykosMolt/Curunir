@@ -214,7 +214,12 @@ def execute_single(ctx: ExecutionContext, *, query: QuerySpec, source_id: str,
         historical = query.operation.startswith("HISTORICAL_")
         single = response.results[0] if len(response.results) == 1 else None
         capture_time = single.source_time if historical and single else None
-        native_id = single.native_id if single else ""
+        # a multi-result response (e.g. a CDX enumeration) is identified by
+        # the target it enumerates, not left anonymous: dependence grouping
+        # and prior-version linking key on this identity
+        native_id = single.native_id if single else (
+            query.value if query.operation in ("HISTORICAL_ENUMERATE", "ENUMERATE", "POLL")
+            else "")
         manifestations = (_manifestation(
             ctx, source_id=source_id, connector=connector,
             execution_id=digest_id("execution", plan_id, query.query_id, source_id, started),

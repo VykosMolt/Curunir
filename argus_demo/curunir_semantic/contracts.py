@@ -1,0 +1,332 @@
+"""Typed records for the semantic plane's event log.
+
+Same discipline as the operational and fabric contracts: frozen validated
+dataclasses, serialized once, replayed as dicts. The two invariants that keep
+this layer honest are enforced at construction: an observation without an
+evidence anchor cannot exist, and an anchor without a manifestation and
+content hash cannot exist. "Source says X" (observation) and "Curunír's
+current reading of X" (claim + state) stay separate record types.
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+
+from curunir_operational.access import Marking
+from curunir_operational.canonical import require_aware, require_aware_or_none, require_sha256
+from curunir_operational.contracts import Record, TIME_PRECISIONS, _member
+
+ANCHOR_KINDS = ("TEXT_SPAN", "FIELD", "RECORD", "DOCUMENT")
+REPRESENTATIONS = ("ORIGINAL", "TRANSLATED")
+DOCUMENT_FORMATS = ("HTML", "XML", "PLAIN_TEXT", "PDF", "JSON", "FEED")
+
+OBSERVATION_TYPES = ("ENTITY_ATTRIBUTE", "ENTITY_IDENTIFIER", "ENTITY_NAME", "RELATION",
+                     "EVENT", "ROLE_SIGNAL", "LIFECYCLE_SIGNAL", "PUBLICATION", "STATEMENT")
+
+PRODUCER_KINDS = ("DETERMINISTIC_PARSER", "MODEL_PROVIDER")
+
+CLAIM_STATES = ("CURRENT", "CORRECTED", "RETRACTED", "SUPERSEDED", "DISPUTED",
+                "STALE", "SOURCE_WITHDRAWN")
+
+CHANGE_CLASSES = ("NEW_PROPOSITION", "REMOVED_PROPOSITION", "VALUE_CHANGED",
+                  "RELATION_ADDED", "RELATION_REMOVED", "ROLE_CHANGED",
+                  "ENTITY_ATTRIBUTE_CHANGED", "EVENT_ADDED", "EVENT_UPDATED",
+                  "SOURCE_CORRECTION", "SOURCE_RETRACTION", "HISTORICAL_STATE_DISCOVERED",
+                  "SEMANTICALLY_UNCHANGED", "UNRESOLVED_CHANGE")
+
+HYPOTHESIS_STATUSES = ("OPEN", "SUPPORTED", "WEAKLY_SUPPORTED", "DISPUTED",
+                       "REJECTED", "UNRESOLVED", "SUPERSEDED")
+
+DISCRIMINATOR_STATUSES = ("OPEN", "REQUESTED", "SATISFIED", "UNSATISFIABLE")
+
+ROUTE_STATUSES = ("PROPOSED", "SELECTED", "EXECUTED", "FAILED", "HUMAN_REQUIRED", "DECLINED")
+
+REVIEW_KINDS = ("CONTRADICTED", "STALE_BASIS", "SOURCE_CORRECTED", "SOURCE_RETRACTED",
+                "MANIFESTATION_CHANGED", "IDENTITY_AMBIGUITY", "COVERAGE_GAP",
+                "EXPECTED_NOT_OBSERVED", "PROCESSING_FAILED")
+
+REVIEW_STATUSES = ("OPEN", "RESOLVED", "DISMISSED")
+
+
+@dataclass(frozen=True)
+class EvidenceAnchor(Record):
+    """Exact evidence descent: manifestation + span/field, never a bare URL.
+
+    ``normalized_sha256`` names the store payload the anchor addresses: the
+    normalized text for TEXT_SPAN/DOCUMENT anchors, the field table for FIELD
+    anchors. Offsets/paths are exact within that payload; ``mapping_status``
+    states honestly how it maps back to original source bytes.
+    """
+    RECORD_TYPE = "evidence_anchor"
+    manifestation_id: str; source_id: str; content_sha256: str
+    kind: str; normalized_sha256: str = ""
+    start: int | None = None; end: int | None = None
+    field_path: str = ""; exact_value: str = ""
+    mapping_status: str = "UNSPECIFIED"
+    representation: str = "ORIGINAL"; translation_id: str = ""
+
+    def __post_init__(self):
+        _member(self.kind, ANCHOR_KINDS, "anchor kind")
+        _member(self.representation, REPRESENTATIONS, "representation")
+        require_sha256(self.content_sha256)
+        if not self.manifestation_id:
+            raise ValueError("an anchor requires its manifestation")
+        if self.kind == "TEXT_SPAN":
+            if self.start is None or self.end is None or self.end < self.start:
+                raise ValueError("a text-span anchor requires valid offsets")
+            if not self.normalized_sha256:
+                raise ValueError("a text-span anchor requires the normalized text identity")
+        if self.kind == "FIELD" and not self.field_path:
+            raise ValueError("a field anchor requires its field path")
+        if self.representation == "TRANSLATED" and not self.translation_id:
+            raise ValueError("a translated anchor requires its translation identity")
+
+
+@dataclass(frozen=True)
+class NormalizedDocumentRecord(Record):
+    """Normalized representation of one manifestation, with payload custody.
+
+    The normalized text and (for structured sources) the field table are
+    content-addressed payloads in the store; this record binds their identity
+    to the manifestation, parser and structure so replay can recover them.
+    """
+    RECORD_TYPE = "semantic_document"
+    document_id: str; manifestation_id: str; source_id: str
+    retrieval_id: str; native_id: str
+    content_sha256: str; normalized_sha256: str; fields_sha256: str
+    format: str; content_class: str; language: str
+    title: str; publisher: str
+    source_time: str | None; retrieval_time: str
+    temporal_status: str  # LIVE | HISTORICAL, copied from the manifestation
+    region_count: int; field_count: int
+    regions: tuple[tuple[str, int, int], ...]  # bounded structural regions
+    structural: tuple[tuple[str, str], ...]
+    parser: str; parser_version: str
+    warnings: tuple[str, ...]; recorded_time: str; marking: Marking
+
+    def __post_init__(self):
+        _member(self.format, DOCUMENT_FORMATS, "document format")
+        require_sha256(self.content_sha256)
+        require_aware(self.recorded_time); require_aware(self.retrieval_time)
+        require_aware_or_none(self.source_time)
+        if not self.manifestation_id:
+            raise ValueError("a normalized document requires its manifestation")
+        if self.format == "JSON" and not self.fields_sha256:
+            raise ValueError("structured records keep their fields addressable, not prose-only")
+
+
+@dataclass(frozen=True)
+class SemanticObservation(Record):
+    """One 'source says X', pinned to evidence.
+
+    Observations are immutable extraction facts: they never change when the
+    world model's interpretation changes. ``producer_kind`` distinguishes a
+    deterministic parser from a model provider; model output additionally
+    carries the operational InferenceRecord id.
+    """
+    RECORD_TYPE = "semantic_observation"
+    observation_id: str; document_id: str; manifestation_id: str; source_id: str
+    observation_type: str
+    subject_ref: str      # source-native subject: "LEI:...", "QID:...", url, name
+    attribute: str        # attribute name or relation predicate
+    value: str
+    object_ref: str       # for RELATION/EVENT: the other participant
+    valid_from: str | None; valid_to: str | None
+    source_time: str | None; time_precision: str
+    language: str; representation: str
+    anchors: tuple[EvidenceAnchor, ...]
+    producer_kind: str; producer_id: str; producer_version: str
+    inference_id: str; recorded_time: str; marking: Marking
+
+    def __post_init__(self):
+        _member(self.observation_type, OBSERVATION_TYPES, "observation type")
+        _member(self.representation, REPRESENTATIONS, "representation")
+        _member(self.producer_kind, PRODUCER_KINDS, "producer kind")
+        _member(self.time_precision, TIME_PRECISIONS, "time precision")
+        require_aware(self.recorded_time)
+        for value in (self.valid_from, self.valid_to, self.source_time):
+            require_aware_or_none(value)
+        if not self.anchors:
+            raise ValueError("an observation without evidence anchors is an "
+                             "inference wearing an observation's name")
+        if not self.subject_ref:
+            raise ValueError("an observation requires its source-native subject")
+        if self.producer_kind == "MODEL_PROVIDER" and not self.inference_id:
+            raise ValueError("model-produced observations require their inference record")
+
+
+@dataclass(frozen=True)
+class SemanticClaim(Record):
+    """Curunír's proposition ledger entry: a typed reading of observations.
+
+    A claim aggregates observations into one proposition, carries the
+    independence arithmetic of its basis, and records which world-model
+    versions it materialized into. Claims version forward: a re-append with
+    the same claim_id and version+1 supersedes on replay, and every prior
+    version stays in the log.
+    """
+    RECORD_TYPE = "semantic_claim"
+    claim_id: str; version: int; statement: str
+    subject_ref: str; subject_object_id: str
+    predicate: str; object_or_value: str; object_object_id: str
+    valid_from: str | None; valid_to: str | None; time_precision: str
+    polarity: str  # AFFIRMED | NEGATED
+    observation_ids: tuple[str, ...]
+    dependence_group_ids: tuple[str, ...]
+    independent_basis_count: int; basis_note: str
+    world_refs: tuple[str, ...]  # object/relationship/activity version ids
+    epistemic_state: str; review_state: str
+    recorded_time: str; marking: Marking
+
+    def __post_init__(self):
+        require_aware(self.recorded_time)
+        require_aware_or_none(self.valid_from); require_aware_or_none(self.valid_to)
+        _member(self.time_precision, TIME_PRECISIONS, "time precision")
+        if self.polarity not in ("AFFIRMED", "NEGATED"):
+            raise ValueError(f"invalid polarity: {self.polarity!r}")
+        if not self.observation_ids:
+            raise ValueError("a claim requires at least one supporting observation")
+        if self.version < 1:
+            raise ValueError("claim versions start at 1")
+        if self.independent_basis_count < 0:
+            raise ValueError("independent basis count cannot be negative")
+        if self.independent_basis_count > len(self.observation_ids):
+            raise ValueError("independent basis cannot exceed the observation count")
+
+
+@dataclass(frozen=True)
+class ClaimStateRecord(Record):
+    """Lifecycle of a claim: latest state wins on replay, history stays."""
+    RECORD_TYPE = "semantic_claim_state"
+    state_id: str; claim_id: str; state: str; reason: str
+    caused_by: str  # change_id / notice / review item that caused this state
+    superseded_by: str
+    actor_id: str; actor_kind: str
+    recorded_time: str; marking: Marking
+
+    def __post_init__(self):
+        _member(self.state, CLAIM_STATES, "claim state")
+        require_aware(self.recorded_time)
+        if self.state in ("CORRECTED", "RETRACTED", "SUPERSEDED", "STALE") and not self.reason:
+            raise ValueError(f"claim state {self.state} requires a reason")
+
+
+@dataclass(frozen=True)
+class SemanticChangeRecord(Record):
+    """Interpreted difference between two manifestations of one target."""
+    RECORD_TYPE = "semantic_change"
+    change_id: str; source_id: str
+    prior_manifestation_id: str; current_manifestation_id: str
+    watch_id: str; fabric_change_id: str
+    change_class: str; detail: str
+    subject_ref: str; attribute: str
+    prior_value: str; current_value: str
+    prior_observation_id: str; current_observation_id: str
+    affected_object_ids: tuple[str, ...]
+    affected_claim_ids: tuple[str, ...]
+    recorded_time: str; marking: Marking
+
+    def __post_init__(self):
+        _member(self.change_class, CHANGE_CLASSES, "semantic change class")
+        require_aware(self.recorded_time)
+        if not self.current_manifestation_id:
+            raise ValueError("a semantic change requires the current manifestation")
+        if self.change_class not in ("SEMANTICALLY_UNCHANGED", "HISTORICAL_STATE_DISCOVERED",
+                                     "UNRESOLVED_CHANGE") \
+                and not self.prior_manifestation_id:
+            raise ValueError("a change against prior state requires the prior manifestation")
+
+
+@dataclass(frozen=True)
+class HypothesisRecord(Record):
+    """Competing hypothesis, following the V4 shape, event-sourced.
+
+    Re-appending the same hypothesis_id supersedes on replay; ``history``
+    carries the human-readable trail and the log carries every prior version.
+    A hypothesis is never born supported: new records start UNRESOLVED unless
+    they continue an existing id.
+    """
+    RECORD_TYPE = "hypothesis"
+    hypothesis_id: str; case_id: str; statement: str
+    status: str; assumptions: tuple[str, ...]; unknowns: tuple[str, ...]
+    supporting_claim_ids: tuple[str, ...]
+    contradicting_claim_ids: tuple[str, ...]
+    unresolved_claim_ids: tuple[str, ...]
+    independent_evidence_count: int
+    source_dependence_summary: str
+    discriminator_ids: tuple[str, ...]
+    analyst_or_provider: str; review_state: str
+    history: tuple[str, ...]
+    recorded_time: str; marking: Marking
+
+    def __post_init__(self):
+        _member(self.status, HYPOTHESIS_STATUSES, "hypothesis status")
+        require_aware(self.recorded_time)
+        if not self.statement:
+            raise ValueError("a hypothesis requires a statement")
+        if self.independent_evidence_count < 0:
+            raise ValueError("independent evidence count cannot be negative")
+
+
+@dataclass(frozen=True)
+class DiscriminatingObservation(Record):
+    """What observation would most help distinguish the alternatives."""
+    RECORD_TYPE = "discriminator"
+    discriminator_id: str; question: str
+    hypothesis_ids: tuple[str, ...]; claim_ids: tuple[str, ...]
+    desired_observation_type: str; desired_subject_ref: str; desired_attribute: str
+    source_family_hints: tuple[str, ...]
+    independence_required: bool
+    # origin families in the basis when the question was POSED: satisfaction
+    # under independence_required filters against this snapshot, so evidence
+    # cannot disqualify itself by being absorbed into the basis first
+    basis_groups_at_pose: tuple[str, ...]
+    requirement_id: str; status: str
+    recorded_time: str; marking: Marking
+
+    def __post_init__(self):
+        _member(self.status, DISCRIMINATOR_STATUSES, "discriminator status")
+        _member(self.desired_observation_type, OBSERVATION_TYPES, "observation type")
+        require_aware(self.recorded_time)
+        if not self.question:
+            raise ValueError("a discriminating observation requires its question")
+        if not self.hypothesis_ids and not self.claim_ids:
+            raise ValueError("a discriminator must reference what it discriminates")
+
+
+@dataclass(frozen=True)
+class CollectionRoute(Record):
+    """One ranked, explained candidate collection action."""
+    RECORD_TYPE = "collection_route"
+    route_id: str; requirement_id: str; discriminator_id: str
+    source_id: str; operation: str; query_value: str
+    automatable: bool; human_reason: str
+    factors: tuple[tuple[str, float], ...]
+    score: float; rank: int; explanation: str
+    status: str; execution_id: str; task_id: str
+    recorded_time: str; marking: Marking
+
+    def __post_init__(self):
+        _member(self.status, ROUTE_STATUSES, "route status")
+        require_aware(self.recorded_time)
+        if not self.explanation:
+            raise ValueError("a collection route must explain its ranking")
+        if not self.automatable and self.status not in ("HUMAN_REQUIRED", "DECLINED") \
+                and self.status in ("EXECUTED",):
+            raise ValueError("a non-automatable route cannot be marked executed by the machine")
+
+
+@dataclass(frozen=True)
+class ReviewItem(Record):
+    """Stale-assumption / contradiction queue entry; latest state wins."""
+    RECORD_TYPE = "review_item"
+    item_id: str; kind: str; subject_kind: str; subject_id: str
+    detail: str; evidence_refs: tuple[str, ...]
+    status: str; resolution_note: str
+    recorded_time: str; marking: Marking
+
+    def __post_init__(self):
+        _member(self.kind, REVIEW_KINDS, "review kind")
+        _member(self.status, REVIEW_STATUSES, "review status")
+        require_aware(self.recorded_time)
+        if self.status != "OPEN" and not self.resolution_note:
+            raise ValueError("resolving or dismissing a review item requires a note")
