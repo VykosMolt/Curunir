@@ -40,12 +40,15 @@ export async function reportsView(main) {
 }
 
 function sentenceEditor(sentence = {}) {
-  const textEl = h("textarea", { placeholder: "one atomic statement…" }, sentence.text || "");
+  const originalText = sentence.text || "";
+  const textEl = h("textarea", { placeholder: "one atomic statement…" }, originalText);
   const statusEl = h("select", {},
     ["SUPPORTED", "EXPLICITLY_INFERENTIAL", "UNRESOLVED"].map((s) =>
       h("option", { selected: s === sentence.status || undefined }, s)));
   const basisEl = h("input", { placeholder: "basis refs (comma-separated ids)", size: 52,
     value: (sentence.basis_refs || []).join(",") });
+  const assumptionsEl = h("input", { placeholder: "assumption ids (comma-separated)", size: 52,
+    value: (sentence.assumption_ids || []).join(",") });
   const inferenceEl = h("input", { placeholder: "inference note (required if inferential)", size: 52,
     value: sentence.inference_note || "" });
   const unresolvedEl = h("input", { placeholder: "unresolved reason (required if unresolved)", size: 52,
@@ -60,11 +63,14 @@ function sentenceEditor(sentence = {}) {
       h("label", {}, "temporal"), scopeEl,
       h("label", {}, h("span", {}, independentEl, " asserts independent sources")),
       h("button", { class: "danger", onclick: () => wrap.remove() }, "remove")),
-    basisEl, inferenceEl, unresolvedEl);
+    basisEl, assumptionsEl, inferenceEl, unresolvedEl);
   wrap.value = () => ({
-    sentence_id: undefined,
+    // keep a stable id while the text is unchanged, so annotations and
+    // dissent stay anchored; a rewritten sentence is a new statement
+    sentence_id: textEl.value === originalText ? sentence.sentence_id : undefined,
     text: textEl.value, status: statusEl.value,
     basis_refs: basisEl.value.split(",").map((s) => s.trim()).filter(Boolean),
+    assumption_ids: assumptionsEl.value.split(",").map((s) => s.trim()).filter(Boolean),
     inference_note: inferenceEl.value, unresolved_reason: unresolvedEl.value,
     temporal_scope: scopeEl.value === "(no temporal claim)" ? "" : scopeEl.value,
     asserts_independent: independentEl.checked,
@@ -83,6 +89,9 @@ function sectionEditor(section = {}) {
       h("button", { class: "danger", onclick: () => wrap.remove() }, "remove section")),
     sentenceHost);
   wrap.value = () => ({
+    // the section id stays stable across kind/title edits, so sentence ids
+    // and their annotations survive a retitle
+    section_id: section.section_id,
     kind: kindEl.value, title: titleEl.value,
     sentences: [...sentenceHost.children].map((c) => c.value()),
     option_ids: section.option_ids || [],
@@ -93,6 +102,8 @@ function sectionEditor(section = {}) {
 function sentenceDisplay(sentence) {
   const note = sentence.status === "EXPLICITLY_INFERENTIAL" ? sentence.inference_note
     : sentence.status === "UNRESOLVED" ? sentence.unresolved_reason : "";
+  const assumptions = (sentence.assumption_ids || []).length
+    ? ` · assumptions: ${(sentence.assumption_ids || []).length}` : "";
   return h("div", { class: `sentence s-${sentence.status.toLowerCase()}` },
     h("div", {}, sentence.text, " ", badge(sentence.status),
       sentence.temporal_scope ? badge(sentence.temporal_scope) : null,
@@ -202,11 +213,15 @@ export async function reportView(main, params, id) {
           ? h("button", { onclick: () => nav(`/reports/${id}?edit=1`) }, "Revise (new draft version)") : null,
         r.status === "IN_REVIEW"
           ? [h("button", { class: "primary", onclick: act(async () => {
-               const dissent = rec.annotations.filter((a) => a.kind === "DISSENT" && a.status === "OPEN");
+               // the server's dissent set covers sentence/section anchors
+               // across every version — the UI drives the dialog from it
+               const dissent = validation.open_dissent || [];
                await post(`/api/commands/reports/${id}/approve`, {
                  expected_version: r.version,
                  acknowledge_dissent: dissent.length && confirm(
-                   `${dissent.length} open dissent annotation(s) exist. Approve WITH dissent (kept visible)?`)
+                   `${dissent.length} open dissent annotation(s) exist ` +
+                   `(${dissent.map((a) => a.author).join(", ")}). ` +
+                   "Approve WITH dissent (kept visible on the disposition)?")
                    ? dissent.map((a) => a.annotation_id) : [] });
              }) }, "Approve (validated, human act)"),
              h("button", { onclick: act(async () => {

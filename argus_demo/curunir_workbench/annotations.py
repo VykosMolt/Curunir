@@ -77,6 +77,38 @@ def resolve_annotation(store: WorkbenchStore, annotation_id: str, *, actor: str,
     return record.to_record()
 
 
+def target_marking(projection: MissionProjection, target_kind: str,
+                   target_id: str):
+    """The marking of the record an annotation binds to, or None when the
+    target family is unmarked (registry metadata) or unresolvable."""
+    if target_kind == "object":
+        record = projection.object_current(target_id)
+        return record.get("marking") if record else None
+    for key, id_field in (("relationships", "relationship_id"),
+                          ("alerts", "alert_id"),
+                          ("recommendations", "recommendation_id"),
+                          ("decisions", "decision_id"),
+                          ("information_requirements", "requirement_id"),
+                          ("analyst_tasks", "task_id")):
+        if target_kind in (key[:-1], id_field[:-3], "information_requirement",
+                           "analyst_task", "alert", "recommendation",
+                           "decision", "relationship"):
+            for record in projection.base_view.get(key, []):
+                if record.get(id_field) == target_id:
+                    return record.get("marking")
+    if target_kind == "report_sentence":
+        for report in projection.family("workbench_report"):
+            for section in report["sections"]:
+                if any(x["sentence_id"] == target_id for x in section["sentences"]):
+                    return report.get("marking")
+        return None
+    try:
+        record = projection.get(target_kind, target_id)
+    except KeyError:
+        return None
+    return record.get("marking") if record else None
+
+
 def _target_visible(projection: MissionProjection, target_kind: str,
                     target_id: str) -> bool:
     if target_kind == "object":

@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from typing import Any, Callable, Iterable, Mapping
 
 from argus.source_intelligence.models import digest_id
-from curunir_operational.access import Marking
+from curunir_operational.access import Marking, marking_from_record
 from curunir_operational.contracts import AnalystAction, AnalyticalProposal
 
 from .contracts import AnalyticalTransition
@@ -509,18 +509,23 @@ def resolve_candidate(ctx: AnalyticContext, proposal_id: str, *, accept: bool,
     if accept and actor_kind != "HUMAN":
         raise ValueError("only a human can accept a model-proposed analytical object")
     now = ctx.now_fn()
+    # the resolution and its analyst action inherit the PROPOSAL's marking:
+    # a recorded act about compartmented state is itself compartmented, and
+    # a re-append never re-classifies
+    proposal_marking = marking_from_record(latest["marking"]) \
+        if isinstance(latest.get("marking"), dict) else latest["marking"]
     action = AnalystAction(
         action_id=digest_id("anact", proposal_id, "ACCEPT" if accept else "REJECT", now),
         actor_id=actor_id, actor_kind=actor_kind, actor_roles=actor_roles,
         kind="ACCEPT" if accept else "REJECT",
         subject_kind="analytical_proposal", subject_id=proposal_id,
-        note=note, recorded_time=now, marking=ctx.marking)
+        note=note, recorded_time=now, marking=proposal_marking)
     ctx.store.append("ANALYST_ACTION_RECORDED", action, recorded_time=now, actor=actor_id)
     resolved = AnalyticalProposal(
         proposal_id=proposal_id, inference_id=latest["inference_id"],
         proposal_type=latest["proposal_type"], content=dict(latest["content"]),
         status="ACCEPTED" if accept else "REJECTED",
-        recorded_time=ctx.now_fn(), marking=ctx.marking)
+        recorded_time=ctx.now_fn(), marking=proposal_marking)
     ctx.store.append("ANALYTICAL_PROPOSAL_RECORDED", resolved,
                      recorded_time=resolved.recorded_time, actor=actor_id)
     return resolved.to_record()

@@ -22,7 +22,7 @@ from curunir_fabric.coverage import coverage_summary
 from curunir_fabric.executor import ExecutionContext as FabricContext
 from curunir_fabric.executor import RateGate, execute_single
 from curunir_fabric.registry import RegistryView
-from curunir_operational.access import Marking
+from curunir_operational.access import Marking, marking_from_record
 from curunir_operational.missions import MissionWorkflow
 
 from .contracts import CollectionRoute, ReviewItem
@@ -258,19 +258,23 @@ def assign_human_route(store: SemanticStore, route: Mapping[str, Any], *,
                        assigned_actor: str, now: str, actor: str,
                        marking: Marking) -> dict[str, Any]:
     """A non-automatable route becomes a mission analyst task, never faked."""
+    # the assignment and the spawned task inherit the ROUTE's marking: the
+    # task text embeds the route's query, and a re-append never re-classifies
+    route_marking = marking_from_record(route["marking"]) \
+        if isinstance(route.get("marking"), dict) else route["marking"]
     workflow = MissionWorkflow(store)
     task = workflow.assign_task(
         assigned_role="ANALYST", assigned_actor=assigned_actor, task_type="COLLECTION_FOLLOWUP",
         affected_ids=(route["requirement_id"], route["discriminator_id"]),
         required_action=f"Collect from {route['source_id']}: {route['query_value']} "
                         f"({route['human_reason'] or 'human judgment required'})",
-        due_time=None, depends_on=(), recorded_time=now, marking=marking, actor=actor)
+        due_time=None, depends_on=(), recorded_time=now, marking=route_marking, actor=actor)
     updated = CollectionRoute(**{
         **{k: v for k, v in route.items() if k != "record_type"},
         "factors": tuple(tuple(f) for f in route["factors"]),
         "version": store.next_family_version("collection_route", "route_id",
                                              route["route_id"]),
-        "task_id": task["task_id"], "recorded_time": now, "marking": marking})
+        "task_id": task["task_id"], "recorded_time": now, "marking": route_marking})
     store.append("COLLECTION_ROUTE_RECORDED", updated, recorded_time=now, actor=actor)
     return task
 
@@ -334,7 +338,10 @@ def execute_route(pipeline: SemanticPipeline, registry: RegistryView,
             "status": "EXECUTED" if outcome.execution.outcome in
             ("EXECUTED_WITH_RESULTS", "EXECUTED_EMPTY") else "FAILED",
             "execution_id": outcome.execution.execution_id,
-            "recorded_time": now, "marking": pipeline.marking})
+            "recorded_time": now,
+            # a re-append never re-classifies the route
+            "marking": marking_from_record(route["marking"])
+            if isinstance(route.get("marking"), dict) else route["marking"]})
         store.append("COLLECTION_ROUTE_RECORDED", updated, recorded_time=now,
                      actor=pipeline.actor)
         execution_outcome = outcome.execution.outcome

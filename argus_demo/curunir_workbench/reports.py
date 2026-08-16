@@ -54,12 +54,13 @@ class ReportValidationError(Exception):
         self.findings = findings
 
 
-def _sentence(section_id: str, data: Mapping[str, Any]) -> ReportSentence:
+def _sentence(report_id: str, section_id: str, data: Mapping[str, Any]) -> ReportSentence:
     if "text" not in data or "status" not in data:
         raise ValueError("a sentence requires text and status")
     text = data["text"]
     return ReportSentence(
-        sentence_id=data.get("sentence_id") or digest_id("sentence", section_id, text),
+        sentence_id=data.get("sentence_id")
+        or digest_id("sentence", report_id, section_id, text),
         text=text, status=data["status"],
         basis_refs=tuple(data.get("basis_refs", ())),
         assumption_ids=tuple(data.get("assumption_ids", ())),
@@ -69,15 +70,18 @@ def _sentence(section_id: str, data: Mapping[str, Any]) -> ReportSentence:
         asserts_independent=bool(data.get("asserts_independent", False)))
 
 
-def _sections(sections: Iterable[Mapping[str, Any]]) -> tuple[ReportSection, ...]:
+def _sections(report_id: str,
+              sections: Iterable[Mapping[str, Any]]) -> tuple[ReportSection, ...]:
     built = []
     for section in sections:
         if "kind" not in section or "title" not in section:
             raise ValueError("a section requires kind and title")
-        section_id = section.get("section_id") or digest_id("section", section["kind"], section["title"])
+        section_id = section.get("section_id") \
+            or digest_id("section", report_id, section["kind"], section["title"])
         built.append(ReportSection(
             section_id=section_id, kind=section["kind"], title=section["title"],
-            sentences=tuple(_sentence(section_id, s) for s in section.get("sentences", ())),
+            sentences=tuple(_sentence(report_id, section_id, s)
+                            for s in section.get("sentences", ())),
             option_ids=tuple(section.get("option_ids", ()))))
     return tuple(built)
 
@@ -89,7 +93,7 @@ def create_report(store: WorkbenchStore, *, actor: str, marking: Marking,
     report_id = digest_id("report", title, now)
     record = ReportRecord(
         report_id=report_id, version=1, title=title, question=question,
-        author=actor, sections=_sections(sections), status="DRAFT",
+        author=actor, sections=_sections(report_id, sections), status="DRAFT",
         based_on_state_token=state_token, recorded_time=now, marking=marking)
     store.append("WORKBENCH_REPORT_RECORDED", record, recorded_time=now, actor=actor)
     return record.to_record()
@@ -113,6 +117,7 @@ def _next_version(store: WorkbenchStore, current: Mapping[str, Any], *,
             f"report {current['report_id']} is at version {current['version']}, "
             f"you edited version {expected_version}")
     kept_sections = sections if sections is not None else _sections(
+        current["report_id"],
         [{**s, "sentences": list(s["sentences"])} for s in current["sections"]])
     record = ReportRecord(
         report_id=current["report_id"], version=current["version"] + 1,
@@ -155,7 +160,7 @@ def edit_report(store: WorkbenchStore, report_id: str, *, actor: str,
     record = _next_version(store, current, expected_version=expected_version,
                            actor=actor, now=now, status="DRAFT",
                            change_note=change_note or "edit",
-                           sections=_sections(sections), title=title,
+                           sections=_sections(report_id, sections), title=title,
                            question=question, state_token=state_token,
                            content_author=actor)
     if was_approved:
@@ -278,6 +283,12 @@ def validate_report(projection: MissionProjection, report: Mapping[str, Any]) ->
             # honest comparative sentence validates) — word-form
             # probabilities ("three in four") are a stated limitation
             sentence_forecasts = [r for f, r in resolved if f == "analytic_forecast"]
+            if len(sentence_forecasts) > 1:
+                finding("MULTI_FORECAST_NUMERIC_AMBIGUITY", sentence,
+                        "the sentence references several forecasts; quoted "
+                        "numbers are validated against the union of their "
+                        "authored versions and cannot be bound to a specific "
+                        "proposition", blocking=False)
             if sentence_forecasts:
                 authored: set[float] = set()
                 for record in sentence_forecasts:
@@ -303,6 +314,7 @@ def validate_report(projection: MissionProjection, report: Mapping[str, Any]) ->
                     if projection.get("workbench_report_disposition",
                                       d["disposition_id"]) is not None]
     return {"report_id": report["report_id"], "version": report["version"],
+            "open_dissent": open_dissent(projection, report["report_id"]),
             "prior_dispositions": [{"disposition": d["disposition"],
                                     "report_version": d["report_version"],
                                     "actor_id": d["actor_id"],
@@ -524,11 +536,20 @@ def export_package(projection: MissionProjection, store: WorkbenchStore,
                     or projection.get("fabric_manifestation", ref) \
                     or projection.get("analytic_forecast", ref) \
                     or projection.get("analytic_assumption", ref)
+    part_ids = {report_id}
+    for version in versions:
+        for section in version["sections"]:
+            part_ids.add(section["section_id"])
+            part_ids |= {x["sentence_id"] for x in section["sentences"]}
+    annotations = [a for a in projection.family("workbench_annotation")
+                   if a["target_id"] in part_ids
+                   or a.get("anchor_ref") in part_ids]
     return {"format": "curunir-workbench-report-export-v1",
             "state_token": projection.state_token,
             "report": current, "versions": versions,
             "dispositions": dispositions, "basis": basis,
-            "annotations": projection.annotations_for(report_id)}
+            "annotations": annotations,
+            "dissent": [a for a in annotations if a["kind"] == "DISSENT"]}
 
 
 def export_html(projection: MissionProjection, report: Mapping[str, Any]) -> str:
@@ -554,6 +575,22 @@ def export_html(projection: MissionProjection, report: Mapping[str, Any]) -> str
                 f"<p class='sentence s-{status.lower()}'>{_html.escape(sentence['text'])} "
                 f"<span class='tag'>[{status}]</span>"
                 f"<span class='refs'>{_html.escape(refs)}{note}</span></p>")
+    part_ids = {report["report_id"]}
+    for section in report["sections"]:
+        part_ids.add(section["section_id"])
+        part_ids |= {x["sentence_id"] for x in section["sentences"]}
+    dissent = [a for a in projection.family("workbench_annotation")
+               if a["kind"] == "DISSENT"
+               and (a["target_id"] in part_ids or a.get("anchor_ref") in part_ids)]
+    if report["status"] == "APPROVED_WITH_DISSENT" or dissent:
+        parts.append("<h2>Dissent</h2>")
+        if not dissent:
+            parts.append("<p class='meta'>approved with dissent recorded on a "
+                         "prior version — see the export package</p>")
+        for a in dissent:
+            parts.append(f"<p class='sentence s-unresolved'>"
+                         f"{_html.escape(a['author'])}: {_html.escape(a['text'])} "
+                         f"<span class='tag'>[DISSENT/{_html.escape(a['status'])}]</span></p>")
     body = "\n".join(parts)
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8">

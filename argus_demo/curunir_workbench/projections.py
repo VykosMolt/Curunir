@@ -158,11 +158,25 @@ class MissionProjection:
                    lambda e: e["record"])
         _op_hidden(self.base.evidence_requests.values(), "request_id",
                    lambda e: e["record"])
+        _op_hidden(self.base.sources.values(), "source_id")
+        _op_hidden(self.base.ingestions.values(), "ingestion_id")
         # base-view activities additionally suppress on hidden participants;
         # treat those as hidden for scrub purposes as well
         for record in self.base.activities:
             if record["activity_id"] not in self._visible_activity_ids:
                 hidden.add(record["activity_id"])
+        # relationships and association proposals suppressed because an
+        # ENDPOINT is hidden are hidden too — their ids name hidden structure
+        visible_relationship_ids = {r["relationship_id"]
+                                    for r in self.base_view["relationships"]}
+        for rid, entry in self.base.relationships.items():
+            if rid not in visible_relationship_ids:
+                hidden.add(rid)
+        visible_proposal_ids = {p["proposal_id"]
+                                for p in self.base_view["association_proposals"]}
+        for pid in self.base.association_proposals:
+            if pid not in visible_proposal_ids:
+                hidden.add(pid)
         for record_type, id_field in LATEST_FAMILIES.items():
             visible: dict[str, dict] = {}
             history: dict[str, list[dict]] = {}
@@ -200,10 +214,52 @@ class MissionProjection:
             "|".join(re.escape(h) + r"(?:@v\d+)?" for h in sorted(hidden, key=len,
                                                                   reverse=True))
         ) if hidden else None
+        # cluster ids: the union-find representative may itself be hidden;
+        # re-anchor each visible object's cluster on the smallest VISIBLE
+        # member so scrubbing cannot merge unrelated clusters under REDACTED
+        groups: dict[str, list[str]] = {}
+        for record in self.base_view["objects"]:
+            root = self.base.cluster_of.get(record["object_id"], record["object_id"])
+            groups.setdefault(root, []).append(record["object_id"])
+        visible_root = {root: min(members) for root, members in groups.items()}
+        roots_with_hidden = {root for obj, root in self.base.cluster_of.items()
+                             if obj in hidden}
+        for record in self.base_view["objects"]:
+            root = self.base.cluster_of.get(record["object_id"], record["object_id"])
+            record["cluster_id"] = visible_root[root]
+            if root in roots_with_hidden:
+                record["cluster_partially_hidden"] = True
         # the operational base view carries its own (object-level) redaction
         # but not the cross-plane hidden-id scrub — apply it here, once, so
         # every consumer of base_view serializes scrubbed state
         self.base_view = self._scrub(self.base_view)
+
+    def visible_id_set(self) -> set[str]:
+        """Every record id this context can see, across all planes — the
+        universe against which inbound references are validated. Hidden and
+        nonexistent ids are equally absent, so refusals built on this set
+        carry no existence signal."""
+        if not hasattr(self, "_visible_ids"):
+            ids: set[str] = set()
+            for family in self._current.values():
+                ids |= set(family)
+            for record_type, records in self._append.items():
+                id_field = APPEND_FAMILIES[record_type]
+                ids |= {r[id_field] for r in records}
+            view = self.base_view
+            ids |= {o["object_id"] for o in view["objects"]}
+            ids |= {r["relationship_id"] for r in view["relationships"]}
+            ids |= {a["activity_id"] for a in view["activities"]}
+            ids |= {a["alert_id"] for a in view["alerts"]}
+            ids |= {r["recommendation_id"] for r in view["recommendations"]}
+            ids |= {d["decision_id"] for d in view["decisions"]}
+            ids |= {a["action_id"] for a in view["analyst_actions"]}
+            ids |= {p["proposal_id"] for p in view["association_proposals"]}
+            ids |= {r["requirement_id"] for r in view["information_requirements"]}
+            ids |= {t["task_id"] for t in view["analyst_tasks"]}
+            ids |= {r["request_id"] for r in view["evidence_requests"]}
+            self._visible_ids = ids
+        return self._visible_ids
 
     # ---- redaction ---------------------------------------------------------
 

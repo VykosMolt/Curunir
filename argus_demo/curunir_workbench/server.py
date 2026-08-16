@@ -294,22 +294,26 @@ def create_app(mission_root: str | Path, actors_path: str | Path,
     class RequirementBody(BaseModel):
         question: str; priority: str = "MEDIUM"; mission_context: str
         rationale: str; affected_ids: list[str] = Field(default_factory=list)
+        compartments: list[str] = Field(default_factory=list)
 
     @app.post("/api/commands/requirements")
     def cmd_requirement(request: Request, body: RequirementBody):
         data = body.model_dump()
         data["affected_ids"] = tuple(data["affected_ids"])
+        data["compartments"] = tuple(data["compartments"])
         return run(request, commands.open_requirement, command_context(request), **data)
 
     class TaskBody(BaseModel):
         assigned_actor: str; task_type: str; required_action: str
         affected_ids: list[str] = Field(default_factory=list)
         due_time: str | None = None
+        compartments: list[str] = Field(default_factory=list)
 
     @app.post("/api/commands/tasks")
     def cmd_task(request: Request, body: TaskBody):
         data = body.model_dump()
         data["affected_ids"] = tuple(data["affected_ids"])
+        data["compartments"] = tuple(data["compartments"])
         return run(request, commands.assign_task, command_context(request), **data)
 
     class TransitionBody(BaseModel):
@@ -343,13 +347,15 @@ def create_app(mission_root: str | Path, actors_path: str | Path,
         statement: str; case_id: str
         assumptions: list[str] = Field(default_factory=list)
         unknowns: list[str] = Field(default_factory=list)
+        compartments: list[str] = Field(default_factory=list)
 
     @app.post("/api/commands/hypotheses")
     def cmd_hypothesis(request: Request, body: HypothesisBody):
         return run(request, commands.create_hypothesis, command_context(request),
                    statement=body.statement, case_id=body.case_id,
                    assumptions=tuple(body.assumptions),
-                   unknowns=tuple(body.unknowns))
+                   unknowns=tuple(body.unknowns),
+                   compartments=tuple(body.compartments))
 
     class AssessBody(BaseModel):
         expected_version: int; status: str; rationale: str
@@ -366,6 +372,7 @@ def create_app(mission_root: str | Path, actors_path: str | Path,
         resolution: dict[str, Any]
         domain: str
         assumption_ids: list[str] = Field(default_factory=list)
+        compartments: list[str] = Field(default_factory=list)
 
     @app.post("/api/commands/forecasts")
     def cmd_forecast(request: Request, body: ForecastBody):
@@ -375,7 +382,8 @@ def create_app(mission_root: str | Path, actors_path: str | Path,
                    probability_basis=body.probability_basis,
                    proposition_refs=tuple((k, v) for k, v in body.proposition_refs),
                    resolution=body.resolution, domain=body.domain,
-                   assumption_ids=tuple(body.assumption_ids))
+                   assumption_ids=tuple(body.assumption_ids),
+                   compartments=tuple(body.compartments))
 
     class MoveForecastBody(BaseModel):
         expected_version: int; probability: float
@@ -434,11 +442,13 @@ def create_app(mission_root: str | Path, actors_path: str | Path,
         source_id: str; operation: str; query_value: str
         cadence_seconds: int
         blind_spots: list[str] = Field(default_factory=list)
+        compartments: list[str] = Field(default_factory=list)
 
     @app.post("/api/commands/watches")
     def cmd_watch(request: Request, body: WatchBody):
         data = body.model_dump()
         data["blind_spots"] = tuple(data["blind_spots"])
+        data["compartments"] = tuple(data["compartments"])
         return run(request, commands.create_watch, command_context(request), **data)
 
     class WatchActiveBody(BaseModel):
@@ -454,20 +464,24 @@ def create_app(mission_root: str | Path, actors_path: str | Path,
     class SavedViewBody(BaseModel):
         title: str; view_kind: str
         definition: dict[str, Any] = Field(default_factory=dict)
+        compartments: list[str] = Field(default_factory=list)
 
     @app.post("/api/commands/saved-views")
     def cmd_saved_view(request: Request, body: SavedViewBody):
-        return run(request, commands.save_view, command_context(request),
-                   **body.model_dump())
+        data = body.model_dump()
+        data["compartments"] = tuple(data["compartments"])
+        return run(request, commands.save_view, command_context(request), **data)
 
     class ReportCreateBody(BaseModel):
         title: str; question: str
         sections: list[dict[str, Any]] = Field(default_factory=list)
+        compartments: list[str] = Field(default_factory=list)
 
     @app.post("/api/commands/reports")
     def cmd_report_create(request: Request, body: ReportCreateBody):
-        return run(request, commands.create_report, command_context(request),
-                   **body.model_dump())
+        data = body.model_dump()
+        data["compartments"] = tuple(data["compartments"])
+        return run(request, commands.create_report, command_context(request), **data)
 
     class ReportEditBody(BaseModel):
         expected_version: int

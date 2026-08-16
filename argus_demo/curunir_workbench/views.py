@@ -513,10 +513,20 @@ def review_queue(projection: MissionProjection) -> dict[str, Any]:
         content = record.get("content", {}) or {}
         detail = "; ".join(f"{k}={str(v)[:60]}" for k, v in sorted(content.items())
                            if k != "target_kind")[:300]
+        target_kind = content.get("target_kind", "")
+        subject_id = ""
+        if target_kind:
+            try:
+                from curunir_analytic.substrate import CANDIDATE_BINDING_KEYS
+                for key in CANDIDATE_BINDING_KEYS.get(target_kind, ()):
+                    if content.get(key):
+                        subject_id = str(content[key]); break
+            except ImportError:
+                pass
         items.append({"queue": "MODEL_PROPOSAL", "kind": record.get("proposal_type", ""),
                       "id": record["proposal_id"],
-                      "subject_kind": content.get("target_kind", ""),
-                      "subject_id": record.get("inference_id", ""),
+                      "subject_kind": target_kind,
+                      "subject_id": subject_id,
                       "detail": detail,
                       "status": "OPEN" if status == "PROPOSED" else status,
                       "evidence_refs": (), "resolution_note": action.get("note", "") if action else "",

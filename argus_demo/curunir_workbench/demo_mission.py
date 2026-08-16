@@ -35,16 +35,39 @@ from curunir_workbench.auth import write_registry
 from curunir_workbench.server import create_app
 from curunir_workbench.store import WorkbenchStore
 
-JAN = {"token": "demo-token-jan", "actor_id": "jan", "actor_kind": "HUMAN",
+import secrets as _secrets
+
+JAN = {"actor_id": "jan", "actor_kind": "HUMAN",
        "roles": ["ANALYST", "SUPERVISOR"], "compartments": ["SPECIAL"],
        "releasability": ["PUBLIC"], "organisation": "curunir-demo"}
-REVIEWER = {"token": "demo-token-reviewer", "actor_id": "reviewer",
+REVIEWER = {"actor_id": "reviewer",
             "actor_kind": "HUMAN", "roles": ["ANALYST", "SUPERVISOR"],
             "compartments": ["SPECIAL"], "releasability": ["PUBLIC"],
             "organisation": "curunir-demo"}
-RESTRICTED_ANALYST = {"token": "demo-token-b", "actor_id": "analyst-b",
-                      "actor_kind": "HUMAN", "roles": ["ANALYST"],
+RESTRICTED_ANALYST = {"actor_id": "analyst-b", "actor_kind": "HUMAN",
+                      "roles": ["ANALYST"],
                       "releasability": ["PUBLIC"], "organisation": "curunir-demo"}
+
+
+def _ensure_actors(actors_path: Path) -> None:
+    """Create the demo registry with FRESH random tokens on first run; never
+    overwrite an existing registry — reuse its tokens by actor id."""
+    import json as _json
+    entries = [JAN, REVIEWER, RESTRICTED_ANALYST]
+    if actors_path.exists():
+        known = {e["actor_id"]: e["token"]
+                 for e in _json.loads(actors_path.read_text())["actors"]}
+        missing = [e["actor_id"] for e in entries if e["actor_id"] not in known]
+        if missing:
+            raise SystemExit(f"existing actor registry lacks demo actors "
+                             f"{missing}; refusing to overwrite {actors_path}")
+        for entry in entries:
+            entry["token"] = known[entry["actor_id"]]
+        return
+    for entry in entries:
+        entry["token"] = _secrets.token_urlsafe(16)
+    write_registry(actors_path, entries)
+    actors_path.chmod(0o600)
 
 
 def _now() -> str:
@@ -293,7 +316,7 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
     root = Path(args.root)
     actors = root / "actors.json"
-    write_registry(actors, [JAN, REVIEWER, RESTRICTED_ANALYST])
+    _ensure_actors(actors)
     step = Step()
 
     port = _free_port()

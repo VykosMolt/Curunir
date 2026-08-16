@@ -15,7 +15,7 @@ from __future__ import annotations
 from typing import Any, Mapping
 
 from argus.source_intelligence.models import digest_id
-from curunir_operational.access import Marking
+from curunir_operational.access import Marking, marking_from_record
 
 from .contracts import DiscriminatingObservation, HypothesisRecord
 from .store import SemanticStore
@@ -63,7 +63,10 @@ def _reappend(store: SemanticStore, hypothesis: Mapping[str, Any], updates: dict
     merged = {**{k: v for k, v in hypothesis.items() if k != "record_type"}, **updates}
     merged["history"] = tuple(hypothesis["history"]) + (history_note,)
     merged["recorded_time"] = now
-    merged["marking"] = marking
+    # a re-append NEVER re-classifies: the hypothesis keeps its own marking
+    # (the caller's marking governs only records the caller newly creates)
+    merged["marking"] = marking_from_record(hypothesis["marking"]) \
+        if isinstance(hypothesis.get("marking"), dict) else hypothesis["marking"]
     merged["version"] = store.next_family_version("hypothesis", "hypothesis_id",
                                                   hypothesis["hypothesis_id"])
     for key in ("assumptions", "unknowns", "supporting_claim_ids", "contradicting_claim_ids",

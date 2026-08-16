@@ -721,9 +721,11 @@ export async function reviewView(main) {
       queue.items.length ? queue.items.map((item) => h("div", { class: "card" },
         h("div", {}, badge(item.queue), badge(item.kind), badge(item.status)),
         h("div", {}, clip(item.detail, 200)),
-        h("div", { class: "faint" }, "subject: ",
-          refLink(item.subject_kind, item.subject_id, clip(item.subject_id, 40)),
-          ` · ${fmtTime(item.recorded_time)}`),
+        h("div", { class: "faint" },
+          item.subject_kind && item.subject_id
+            ? ["subject: ", refLink(item.subject_kind, item.subject_id, clip(item.subject_id, 40)), " · "]
+            : null,
+          fmtTime(item.recorded_time)),
         (item.evidence_refs || []).length ? h("div", { class: "faint" }, "evidence: ",
           item.evidence_refs.map((e) => h("span", {}, clip(e, 28), " "))) : null,
         item.resolution_note ? h("div", { class: "faint" }, `resolution: ${item.resolution_note}`) : null,

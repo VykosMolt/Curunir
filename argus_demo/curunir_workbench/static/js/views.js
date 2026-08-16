@@ -542,19 +542,27 @@ export async function evidenceView(main, params, id) {
         ["prior manifestation", m.prior_manifestation_id
           ? refLink("fabric_manifestation", m.prior_manifestation_id) : ""],
       ]),
-      fieldAnchors.length ? [h("h2", {}, "Exact field anchors",
-        d.payload && d.payload.unavailable
-          ? h("span", { class: "faint" }, " — payload failed custody verification; values below are as recorded at extraction, not re-verified")
-          : null),
-        table({ columns: [
-          { label: "field path", render: (a) => h("span", { class: "mono" }, a.field_path) },
-          { label: "value (recorded at extraction)", render: (a) =>
-              h("span", { class: d.payload && d.payload.unavailable ? "mono faint" : "mono" },
-                clip(a.exact_value, 60)) },
-          { label: "observation", render: (a) => h("span", {}, a.attribute, " ",
-              refLink("semantic_observation", a.observation_id, "→")) },
-          { label: "mapping", render: (a) => badge(a.mapping_status) }],
-          rows: fieldAnchors })] : null,
+      fieldAnchors.length ? [h("h2", {}, "Exact field anchors"),
+        (() => {
+          const bySha = {};
+          for (const np of d.normalized_payloads || []) bySha[np.sha256] = np;
+          const unverified = (a) => {
+            const np = bySha[a.normalized_sha256];
+            return !np || np.unavailable;
+          };
+          return table({ columns: [
+            { label: "field path", render: (a) => h("span", { class: "mono" }, a.field_path) },
+            { label: "value (recorded at extraction)", render: (a) =>
+                h("span", { class: unverified(a) ? "mono faint" : "mono",
+                            title: unverified(a)
+                              ? "the payload this anchor addresses failed custody verification; value shown as recorded at extraction"
+                              : "verified against the anchored payload" },
+                  clip(a.exact_value, 60), unverified(a) ? " ⚠ unverified" : "") },
+            { label: "observation", render: (a) => h("span", {}, a.attribute, " ",
+                refLink("semantic_observation", a.observation_id, "→")) },
+            { label: "mapping", render: (a) => badge(a.mapping_status) }],
+            rows: fieldAnchors });
+        })()] : null,
       h("h2", {}, "Native payload", d.payload ? h("span", { class: "faint" },
         ` (${d.payload.bytes ?? "?"} bytes${d.payload.truncated ? ", truncated view" : ""})`) : null),
       // span offsets are exact only within their normalized payload — the

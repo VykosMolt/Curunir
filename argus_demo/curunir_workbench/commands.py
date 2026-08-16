@@ -47,6 +47,59 @@ class CommandError(ValueError):
     pass
 
 
+import re as _re
+
+# digest-shaped record ids ("prefix-hex"); evgroup- names dependence
+# families, which are arithmetic groupings rather than records
+_ID_TOKEN_RE = _re.compile(r"\b(?!evgroup-)[a-z][a-z-]{1,32}-[0-9a-f]{12,64}\b")
+
+
+def _validate_inbound(projection: MissionProjection, *,
+                      refs: tuple = (), texts: tuple = ()) -> None:
+    """Uniform inbound validation: every reference, and every id-shaped
+    token inside free text, must resolve in the CALLER's own view. Hidden
+    and nonexistent ids fail identically, so the refusal carries no
+    existence signal — and a client echoing REDACTED (or probing for
+    compartments) is refused instead of laundering damage into the record."""
+    known = projection.visible_id_set()
+    bad: list[str] = []
+    for ref in refs:
+        value = str(ref)
+        if not value:
+            continue
+        if value == "REDACTED" or (_ID_TOKEN_RE.fullmatch(value)
+                                   and value not in known):
+            bad.append(value)
+    for text in texts:
+        for token in _ID_TOKEN_RE.findall(str(text or "")):
+            if token not in known:
+                bad.append(token)
+        if "REDACTED" in str(text or ""):
+            bad.append("REDACTED")
+    if bad:
+        raise CommandError(
+            "payload references identifiers that do not resolve in your "
+            f"view: {sorted(set(bad))[:4]} — cite records you can open, and "
+            "never re-submit redacted placeholders")
+
+
+def marked(ctx: "CommandContext", compartments: tuple[str, ...] = ()) -> Marking:
+    """The write marking for a NEW record: the server default, optionally
+    raised into compartments the actor actually holds. The floor check in
+    require_visible_marking still applies; an actor can never write into a
+    compartment it does not hold."""
+    if not compartments:
+        return ctx.marking
+    missing = set(compartments) - set(ctx.context.compartments)
+    if missing:
+        raise PermissionError("cannot write into compartments you do not hold")
+    base = ctx.marking.to_record()
+    return Marking(owning_authority=base["owning_authority"],
+                   compartments=tuple(compartments),
+                   releasability=tuple(base["releasability"]),
+                   min_role=base["min_role"], caveats=tuple(base["caveats"]))
+
+
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -93,8 +146,18 @@ def annotate(ctx: CommandContext, *, target_kind: str, target_id: str,
              kind: str, text: str, reply_to: str = "",
              anchor_ref: str = "") -> dict:
     ctx.require_visible_marking()
+    projection = ctx.projection()
+    _validate_inbound(projection, refs=(anchor_ref,), texts=(text,))
+    # the annotation inherits its TARGET's marking: discussion of
+    # compartmented state is compartmented, never PUBLIC-by-default
+    target_marking = annotations_module.target_marking(projection, target_kind,
+                                                       target_id)
+    marking = marking_from_record(target_marking) \
+        if isinstance(target_marking, dict) else (target_marking or ctx.marking)
+    if not can_view(marking, ctx.context):
+        raise PermissionError("cannot annotate outside your own access")
     return annotations_module.create_annotation(
-        ctx.store, ctx.projection(), actor=ctx.actor, marking=ctx.marking,
+        ctx.store, projection, actor=ctx.actor, marking=marking,
         now=ctx.now_fn(), target_kind=target_kind, target_id=target_id,
         kind=kind, text=text, reply_to=reply_to, anchor_ref=anchor_ref)
 
@@ -119,7 +182,11 @@ def open_requirement(ctx: CommandContext, *, question: str, priority: str,
                      required_evidence_type: str = "OPEN_SOURCE",
                      owning_role: str = "ANALYST", closure_criteria: str = "",
                      due_time: str | None = None,
-                     affected_ids: tuple[str, ...] = ()) -> dict:
+                     affected_ids: tuple[str, ...] = (),
+                     compartments: tuple[str, ...] = ()) -> dict:
+    _validate_inbound(ctx.projection(), refs=affected_ids,
+                      texts=(question, rationale))
+    write_marking = marked(ctx, compartments)
     requirement_id = digest_id("req", question, mission_context)
     existing = None
     for record in ctx.store.records_of("information_requirement"):
@@ -140,21 +207,24 @@ def open_requirement(ctx: CommandContext, *, question: str, priority: str,
         closure_criteria=closure_criteria or "answered with cited evidence",
         due_time=due_time, recorded_time=ctx.now_fn(),
         marking=marking_from_record(existing["marking"]) if existing is not None
-        else ctx.marking, actor=ctx.actor)
+        else write_marking, actor=ctx.actor)
     return result
 
 
 def assign_task(ctx: CommandContext, *, assigned_actor: str, task_type: str,
                 required_action: str, affected_ids: tuple[str, ...] = (),
                 assigned_role: str = "ANALYST", due_time: str | None = None,
-                depends_on: tuple[str, ...] = ()) -> dict:
+                depends_on: tuple[str, ...] = (),
+                compartments: tuple[str, ...] = ()) -> dict:
+    _validate_inbound(ctx.projection(), refs=affected_ids + depends_on,
+                      texts=(required_action,))
     workflow = MissionWorkflow(ctx.store)
     return workflow.assign_task(
         assigned_role=assigned_role, assigned_actor=assigned_actor,
         task_type=task_type, affected_ids=affected_ids,
         required_action=required_action, due_time=due_time,
         depends_on=depends_on, recorded_time=ctx.now_fn(),
-        marking=ctx.marking, actor=ctx.actor)
+        marking=marked(ctx, compartments), actor=ctx.actor)
 
 
 def transition_workflow(ctx: CommandContext, *, subject_kind: str, subject_id: str,
@@ -167,10 +237,14 @@ def transition_workflow(ctx: CommandContext, *, subject_kind: str, subject_id: s
         raise CommandError(f"unknown workflow subject kind: {subject_kind}")
     id_field = {"requirement": "requirement_id", "analyst_task": "task_id",
                 "evidence_request": "request_id"}[subject_kind]
-    visible = ctx.projection().base_view[view_key]
+    projection = ctx.projection()
+    visible = projection.base_view[view_key]
     if not any(r[id_field] == subject_id for r in visible):
         # invisible and nonexistent are the same refusal
         raise NotFound(f"unknown {subject_kind}: {subject_id}")
+    # "answering requires evidence" must mean evidence that RESOLVES:
+    # a transition cannot be closed on fabricated or invisible references
+    _validate_inbound(projection, refs=evidence_refs, texts=(note,))
     workflow = MissionWorkflow(ctx.store)
     return workflow.transition(
         subject_kind, subject_id, to_status, actor_id=ctx.actor,
@@ -237,11 +311,13 @@ def decide_recommendation(ctx: CommandContext, recommendation_id: str, *,
 
 def create_hypothesis(ctx: CommandContext, *, statement: str, case_id: str,
                       assumptions: tuple[str, ...] = (),
-                      unknowns: tuple[str, ...] = ()) -> dict:
+                      unknowns: tuple[str, ...] = (),
+                      compartments: tuple[str, ...] = ()) -> dict:
+    _validate_inbound(ctx.projection(), texts=(statement,) + assumptions + unknowns)
     return record_hypothesis(ctx.store, statement=statement, case_id=case_id,
                              assumptions=assumptions, unknowns=unknowns,
                              analyst_or_provider=ctx.actor, now=ctx.now_fn(),
-                             actor=ctx.actor, marking=ctx.marking)
+                             actor=ctx.actor, marking=marked(ctx, compartments))
 
 
 def assess_hypothesis(ctx: CommandContext, hypothesis_id: str, *,
@@ -291,16 +367,24 @@ def author_forecast(ctx: CommandContext, *, question: str, outcome_semantics: st
                     horizon_time: str, probability: float, probability_basis: str,
                     proposition_refs: tuple[tuple[str, str], ...],
                     resolution: Mapping[str, Any], domain: str,
-                    assumption_ids: tuple[str, ...] = ()) -> dict:
+                    assumption_ids: tuple[str, ...] = (),
+                    compartments: tuple[str, ...] = ()) -> dict:
     """An authored probability: the workbench offers no machine-derived
     numbers and no recalculation. Provenance is the human analyst."""
     if ctx.actor_kind != "HUMAN":
         raise PermissionError("a forecast probability is authored by a human "
                               "(or enters as a gated model candidate, not here)")
+    projection = ctx.projection()
+    _validate_inbound(projection,
+                      refs=assumption_ids + tuple(r[1] for r in proposition_refs),
+                      texts=(question, outcome_semantics, probability_basis))
+    forecast_marking = marked(ctx, compartments)
     rule = resolution if isinstance(resolution, ResolutionRule) else ResolutionRule(
         **{k: (tuple(v) if isinstance(v, list) else v)
            for k, v in resolution.items() if k != "record_type"})
-    return create_forecast(ctx.analytic(), question=question,
+    analytic_ctx = ctx.analytic()
+    analytic_ctx.marking = forecast_marking
+    return create_forecast(analytic_ctx, question=question,
                            outcome_semantics=outcome_semantics,
                            proposition_refs=proposition_refs,
                            horizon_time=horizon_time, resolution=rule,
@@ -315,7 +399,10 @@ def move_forecast(ctx: CommandContext, forecast_id: str, *, expected_version: in
                   evidence_refs: tuple[str, ...] = ()) -> dict:
     if ctx.actor_kind != "HUMAN":
         raise PermissionError("a probability movement is authored by a human")
-    current = ctx.projection().get("analytic_forecast", forecast_id)
+    projection = ctx.projection()
+    _validate_inbound(projection, refs=evidence_refs,
+                      texts=(probability_basis, change_reason))
+    current = projection.get("analytic_forecast", forecast_id)
     if current is None:
         raise NotFound(f"unknown forecast: {forecast_id}")
     if current["version"] != expected_version:
@@ -338,8 +425,10 @@ def resolve_forecast(ctx: CommandContext, forecast_id: str, *, outcome: str,
                      rationale: str, evidence_refs: tuple[str, ...]) -> dict:
     if ctx.actor_kind != "HUMAN":
         raise PermissionError("human forecast resolution requires a human actor")
-    if ctx.projection().get("analytic_forecast", forecast_id) is None:
+    projection = ctx.projection()
+    if projection.get("analytic_forecast", forecast_id) is None:
         raise NotFound(f"unknown forecast: {forecast_id}")
+    _validate_inbound(projection, refs=evidence_refs, texts=(rationale,))
     return resolve_forecast_human(ctx.analytic(), forecast_id, outcome=outcome,
                                   evidence_refs=evidence_refs, note=rationale,
                                   actor_id=ctx.actor, actor_kind=ctx.actor_kind)
@@ -403,8 +492,11 @@ def assign_route(ctx: CommandContext, route_id: str, *, assigned_actor: str) -> 
 def create_watch(ctx: CommandContext, *, need_id: str, target_kind: str,
                  target_ref: str, source_id: str, operation: str,
                  query_value: str, cadence_seconds: int,
-                 blind_spots: tuple[str, ...] = ()) -> dict:
+                 blind_spots: tuple[str, ...] = (),
+                 compartments: tuple[str, ...] = ()) -> dict:
     from curunir_fabric.contracts import WatchDefinition
+    _validate_inbound(ctx.projection(), refs=(need_id,) if need_id else (),
+                      texts=(target_ref, query_value) + tuple(blind_spots))
     now = ctx.now_fn()
     watch_id = digest_id("watch", need_id, source_id, operation, query_value)
     raw = ctx.store.latest_by_id("fabric_watch", "watch_id").get(watch_id)
@@ -420,7 +512,7 @@ def create_watch(ctx: CommandContext, *, need_id: str, target_kind: str,
         need_id=need_id, target_kind=target_kind, target_ref=target_ref,
         source_id=source_id, operation=operation, query_value=query_value,
         cadence_seconds=cadence_seconds, active=True, blind_spots=blind_spots,
-        created_by=ctx.actor, created_time=now, marking=ctx.marking)
+        created_by=ctx.actor, created_time=now, marking=marked(ctx, compartments))
     register_watch(ctx.store, definition, actor=ctx.actor)
     return definition.to_record()
 
@@ -454,18 +546,23 @@ def set_watch_active(ctx: CommandContext, watch_id: str, *, active: bool,
 
 
 def save_view(ctx: CommandContext, *, title: str, view_kind: str,
-              definition: Mapping[str, Any]) -> dict:
+              definition: Mapping[str, Any],
+              compartments: tuple[str, ...] = ()) -> dict:
     """Persist an investigation layout (filters/focus/window). Presentation
     state only — never analytical truth."""
+    import json as _json
     from .contracts import SavedViewRecord
     ctx.require_visible_marking()
+    _validate_inbound(ctx.projection(),
+                      texts=(title, _json.dumps(definition, default=str)))
     now = ctx.now_fn()
     view_id = digest_id("savedview", ctx.actor, view_kind, title)
     existing = ctx.store.latest_by_id("workbench_saved_view", "view_id").get(view_id)
     record = SavedViewRecord(
         view_id=view_id, title=title, author=ctx.actor, view_kind=view_kind,
         definition=dict(definition), recorded_time=now,
-        marking=marking_from_record(existing["marking"]) if existing else ctx.marking,
+        marking=marking_from_record(existing["marking"]) if existing
+        else marked(ctx, compartments),
         version=(existing["version"] + 1) if existing else 1)
     try:
         ctx.store.append("WORKBENCH_SAVED_VIEW_RECORDED", record,
@@ -477,12 +574,30 @@ def save_view(ctx: CommandContext, *, title: str, view_kind: str,
 
 # ---- reports -----------------------------------------------------------------
 
+def _validate_sections(projection: MissionProjection,
+                       sections: list[Mapping[str, Any]]) -> None:
+    refs: list[str] = []
+    texts: list[str] = []
+    for section in sections:
+        texts.append(str(section.get("title", "")))
+        for sentence in section.get("sentences", ()):
+            texts += [str(sentence.get("text", "")),
+                      str(sentence.get("inference_note", "")),
+                      str(sentence.get("unresolved_reason", ""))]
+            refs += list(sentence.get("basis_refs", ()))
+            refs += list(sentence.get("assumption_ids", ()))
+        refs += list(section.get("option_ids", ()))
+    _validate_inbound(projection, refs=tuple(refs), texts=tuple(texts))
+
+
 def create_report(ctx: CommandContext, *, title: str, question: str,
-                  sections: list[Mapping[str, Any]]) -> dict:
+                  sections: list[Mapping[str, Any]],
+                  compartments: tuple[str, ...] = ()) -> dict:
     projection = ctx.projection()
+    _validate_sections(projection, sections)
     return reports_module.create_report(
-        ctx.store, actor=ctx.actor, marking=ctx.marking, now=ctx.now_fn(),
-        title=title, question=question, sections=sections,
+        ctx.store, actor=ctx.actor, marking=marked(ctx, compartments),
+        now=ctx.now_fn(), title=title, question=question, sections=sections,
         state_token=projection.state_token)
 
 
@@ -492,6 +607,7 @@ def edit_report(ctx: CommandContext, report_id: str, *, expected_version: int,
     projection = ctx.projection()
     if projection.get("workbench_report", report_id) is None:
         raise NotFound(f"unknown report: {report_id}")
+    _validate_sections(projection, sections)
     try:
         return reports_module.edit_report(
             ctx.store, report_id, actor=ctx.actor, actor_kind=ctx.actor_kind,

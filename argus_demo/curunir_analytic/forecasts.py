@@ -20,6 +20,7 @@ import re
 from typing import Any, Iterable, Mapping
 
 from argus.source_intelligence.models import digest_id
+from curunir_operational.access import marking_from_record
 from curunir_operational.canonical import parse_time
 from curunir_semantic.contracts import ReviewItem
 from curunir_semantic.worldmodel import world_object_id
@@ -155,7 +156,9 @@ def _reappend(ctx: AnalyticContext, forecast: Mapping[str, Any],
     merged["change_reason"] = change_reason
     merged["history"] = tuple(forecast["history"]) + (history_note,)
     merged["recorded_time"] = ctx.now_fn()
-    merged["marking"] = ctx.marking
+    # a re-append NEVER re-classifies: the forecast keeps its own marking
+    merged["marking"] = marking_from_record(forecast["marking"]) \
+        if isinstance(forecast.get("marking"), dict) else forecast["marking"]
     for key in ("assumption_ids", "indicator_ids", "resolution_evidence_refs",
                 "history"):
         merged[key] = tuple(merged[key])
