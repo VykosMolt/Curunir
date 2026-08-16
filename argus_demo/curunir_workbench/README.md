@@ -112,6 +112,47 @@ it is NOT production PKI/credential rotation — that is the V6.7 security
 tranche. "Signatures" on dispositions are the authenticated actor identity
 recorded in the hash-chained log.
 
+### Marking derivation (how a new/derived record is classified)
+
+Read-side filtering (the projection scrub) is only half the model; the other
+half is that a record must be *written* at a marking no less restrictive than
+anything it is about. Two rules, applied at the command boundary:
+
+* **New record** → `_reference_marking`: its marking is the high-water-mark
+  (`access.most_restrictive`) of the author's declared marking and the
+  markings of every reference it cites. A forecast citing a compartmented
+  assumption, a report whose sentence rests on a compartmented claim, a watch
+  on a compartmented object, a requirement/task naming compartmented affected
+  state — each is itself compartmented. The author must be cleared for the
+  result (floor check), else the write is refused.
+* **Re-append / fold / transition on an existing subject** →
+  `_guard_reference_floor`: the subject keeps its own marking (a re-append
+  never re-classifies), so a cited reference more restricted than that marking
+  is refused rather than silently under-classified.
+
+Records *derived* from a subject inherit that subject's marking through the
+same context: `ctx.analytic(marking)` / `ctx.pipeline(marking)` stamp every
+companion write (transitions, warnings, review items, discriminator updates,
+acquired evidence) with the subject's marking. The semantic pipeline derives
+each manifestation's understanding from that manifestation's own marking, and
+the cross-scheme identity sweep marks an equivalence proposal (and its review
+item) with the join of both endpoints' markings.
+
+`most_restrictive` fails closed rather than emit a marking that would
+downgrade an input (org-locked/releasability-collapse and cross-authority
+joins raise). The invariant this whole layer defends —
+*after any command touching a compartmented subject, no newly-appended record
+of any family is visible to an uncleared context* — is asserted directly by
+`tests/test_workbench_review_repairs_4.py::test_no_command_declassifies_a_special_subject`,
+so a regression in any single derivation site fails a test rather than leaking.
+
+This model was hardened across six adversarial review rounds. What remains is
+V6.7-scoped and documented as such: an adversarial insider pasting a guessable
+compartmented id into free text (a bounded existence oracle for mnemonic ids;
+production ids are digest-shaped and symmetric), multi-authority /
+split-releasability MLS join algebra, and provider/scheduler paths not
+reachable from the workbench command surface.
+
 ## Restart / replay
 
 All state derives from the event log; a restarted process reconstructs

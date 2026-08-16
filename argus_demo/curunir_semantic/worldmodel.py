@@ -269,9 +269,17 @@ def _integrate_entity(ctx: IntegrationContext, document: Mapping[str, Any], subj
         if all(o["observation_id"] in seen_assertions for o in observations):
             result["objects"].append({"object_id": object_id, "unchanged": True})
             return object_id
+    # the new version carries the prior version's attributes and labels
+    # forward, so it inherits the prior version's marking joined with this
+    # document's — a compartmented entity's other-names/attributes are never
+    # re-materialized into a lower-marked version by a later, lower run
+    write_marking = ctx.marking
     if current is not None:
         attributes = {**current.get("attributes", {}), **attributes}
         labels |= set(current.get("labels", ()))
+        if isinstance(current.get("marking"), dict):
+            write_marking = most_restrictive([ctx.marking,
+                                              marking_from_record(current["marking"])])
 
     valid_from, source_time, precision = _valid_times(document, observations)
     external_refs = tuple(
@@ -293,7 +301,7 @@ def _integrate_entity(ctx: IntegrationContext, document: Mapping[str, Any], subj
         attributes=attributes,
         quality={"review_state": "UNREVIEWED", "source_reliability": "UNKNOWN",
                  "identity_confidence": "UNKNOWN"},
-        epistemic_state="EXTRACTED", marking=ctx.marking,
+        epistemic_state="EXTRACTED", marking=write_marking,
         provenance=_provenance(ctx, observations),
     )
     store.append("OBJECT_VERSION_APPENDED", version, recorded_time=now, actor=ctx.actor)
@@ -308,9 +316,19 @@ def _integrate_entity(ctx: IntegrationContext, document: Mapping[str, Any], subj
         if scheme_name == scheme and identifier == value:
             continue
         other_id = world_object_id(f"{scheme_name}:{identifier}")
-        if other_id != object_id and _current_object(store, other_id) is not None:
+        other = _current_object(store, other_id)
+        if other_id != object_id and other is not None:
+            # the equivalence proposal (and its review item) reveals that two
+            # objects are the same — mark it with the join of both endpoints,
+            # mirroring propose_cross_scheme_associations; the in-line path
+            # must not leak on a lower-marked route that names a compartmented
+            # object's identifier
+            pair_marking = most_restrictive(
+                [write_marking]
+                + ([marking_from_record(other["marking"])]
+                   if isinstance(other.get("marking"), dict) else []))
             proposal = engine.evaluate(object_id, other_id, recorded_time=ctx.now_fn(),
-                                       actor=ctx.actor, marking=ctx.marking,
+                                       actor=ctx.actor, marking=pair_marking,
                                        temporal_window_hours=24 * 3650,
                                        auto_accept=False)
             _queue_identity_ambiguity(ctx, proposal, observation)
