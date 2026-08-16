@@ -126,6 +126,20 @@ def most_restrictive(markings: list[Marking]) -> Marking:
     caveats: tuple[str, ...] = ()
     for record in records:
         caveats += tuple(record.get("caveats", ()))
+    authorities = {record["owning_authority"] for record in records}
+    # When releasability is empty a marking is org-locked: can_view falls back
+    # to context.organisation == owning_authority. A single owning_authority
+    # cannot express "viewable only by members of BOTH auth-A and auth-B", so
+    # an org-locked join across differing authorities would DOWNGRADE one
+    # input (a viewer of the chosen authority could read state owned by the
+    # other). No single Marking is a safe join there — fail closed rather than
+    # declassify. Same-authority joins (the mission's own case) are exact.
+    if not releasability and len(authorities) > 1:
+        raise ValueError(
+            "cannot form a safe join across differing owning authorities with "
+            f"no shared releasability: {sorted(authorities)} — an org-locked "
+            "record derived from multiple authorities has no single-marking "
+            "representation; classify it explicitly")
     return Marking(owning_authority=records[0]["owning_authority"],
                    compartments=tuple(sorted(compartments)),
                    releasability=releasability, min_role=min_role,

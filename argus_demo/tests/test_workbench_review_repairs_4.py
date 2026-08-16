@@ -145,6 +145,30 @@ def test_no_command_declassifies_a_special_subject(mission):
     assert "compartmented" not in blob
 
 
+def test_most_restrictive_never_downgrades():
+    """The join must be viewable only by a context that can view EVERY input;
+    a differing-authority org-locked join has no safe single-marking form and
+    fails closed rather than declassifying."""
+    ctx_a = AccessContext("c", "u", "HUMAN", ("ANALYST",),
+                          compartments=("X",), releasability=("PUBLIC",))
+    a = Marking("mission", ("X",), ("PUBLIC",))
+    b = Marking("mission", (), ("PUBLIC",))
+    join = most_restrictive([a, b])
+    # a context that can view the join can view both inputs
+    for probe in (ctx_a, AccessContext("c2", "u2", "HUMAN", ("ANALYST",),
+                                        releasability=("PUBLIC",))):
+        if can_view(join, probe):
+            assert can_view(a, probe) and can_view(b, probe)
+    # differing owning authorities, both org-locked -> no safe join
+    with pytest.raises(ValueError):
+        most_restrictive([Marking("auth-a", (), ()), Marking("auth-b", (), ())])
+    # compartment union: needs BOTH compartments
+    both = most_restrictive([Marking("m", ("X",), ("PUBLIC",)),
+                             Marking("m", ("Y",), ("PUBLIC",))])
+    assert set(both.compartments) == {"X", "Y"}
+    assert not can_view(both, ctx_a)  # ctx_a lacks Y
+
+
 def test_decide_recommendation_gated_and_marked(mission):
     """H6: a recommendation the actor cannot see is neither decidable nor an
     existence oracle."""
