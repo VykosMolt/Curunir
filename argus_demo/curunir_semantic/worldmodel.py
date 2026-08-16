@@ -599,6 +599,12 @@ def _ensure_claim_standing(ctx: IntegrationContext, claim_id: str, version: int,
         return
     prior_state = store.claim_state(claim_id)
     from .contracts import ClaimStateRecord, ReviewItem
+    # standing records are ABOUT the claim; they inherit the claim's own
+    # marking joined with this integration's — a state/review record naming a
+    # compartmented claim's value/standing is never lower-marked
+    _claim = store.current_claims().get(claim_id)
+    standing_marking = most_restrictive([ctx.marking, marking_from_record(_claim["marking"])]) \
+        if _claim and isinstance(_claim.get("marking"), dict) else ctx.marking
     if prior_state in ("STALE", "SUPERSEDED"):
         now = ctx.now_fn()
         reset = ClaimStateRecord(
@@ -608,7 +614,7 @@ def _ensure_claim_standing(ctx: IntegrationContext, claim_id: str, version: int,
             caused_by=observation_id,
             superseded_by=f"{claim_id}@v{version}",
             actor_id=ctx.actor, actor_kind="SERVICE",
-            recorded_time=now, marking=ctx.marking)
+            recorded_time=now, marking=standing_marking)
         store.append("SEMANTIC_CLAIM_STATE_RECORDED", reset,
                      recorded_time=reset.recorded_time, actor=ctx.actor)
     elif prior_state != "CURRENT":
@@ -623,7 +629,7 @@ def _ensure_claim_standing(ctx: IntegrationContext, claim_id: str, version: int,
                        f"not machine-reset and needs review",
                 evidence_refs=(observation_id,),
                 status="OPEN", resolution_note="",
-                recorded_time=ctx.now_fn(), marking=ctx.marking)
+                recorded_time=ctx.now_fn(), marking=standing_marking)
             store.append("REVIEW_ITEM_RECORDED", item,
                          recorded_time=item.recorded_time, actor=ctx.actor)
 
@@ -640,13 +646,18 @@ def _record_claim_conflict(ctx: IntegrationContext, current_claim: Mapping[str, 
     reason = (f"independent source {observation['source_id']} reports "
               f"{observation['value'][:120]!r} against current "
               f"{current_claim['object_or_value'][:120]!r}")
+    # the DISPUTED state and CONTRADICTED item embed the compartmented claim's
+    # value verbatim — they inherit the claim's marking joined with this
+    # integration's, never a lower context default
+    conflict_marking = most_restrictive([ctx.marking, marking_from_record(current_claim["marking"])]) \
+        if isinstance(current_claim.get("marking"), dict) else ctx.marking
     if store.claim_state(claim_id) != "DISPUTED":
         state = ClaimStateRecord(
             state_id=digest_id("clstate", claim_id, "DISPUTED", now),
             claim_id=claim_id, state="DISPUTED", reason=reason,
             caused_by=observation["observation_id"], superseded_by="",
             actor_id=ctx.actor, actor_kind="SERVICE",
-            recorded_time=now, marking=ctx.marking)
+            recorded_time=now, marking=conflict_marking)
         store.append("SEMANTIC_CLAIM_STATE_RECORDED", state, recorded_time=now, actor=ctx.actor)
     item_id = digest_id("review", claim_id, observation["observation_id"])
     if not any(r["item_id"] == item_id for r in store.records_of("review_item")):
@@ -654,7 +665,7 @@ def _record_claim_conflict(ctx: IntegrationContext, current_claim: Mapping[str, 
             item_id=item_id, kind="CONTRADICTED", subject_kind="semantic_claim",
             subject_id=claim_id, detail=reason,
             evidence_refs=(observation["observation_id"],) + tuple(current_claim["observation_ids"][:5]),
-            status="OPEN", resolution_note="", recorded_time=now, marking=ctx.marking)
+            status="OPEN", resolution_note="", recorded_time=now, marking=conflict_marking)
         store.append("REVIEW_ITEM_RECORDED", item, recorded_time=now, actor=ctx.actor)
     result.setdefault("conflicts", []).append({"claim_id": claim_id,
                                                "observation_id": observation["observation_id"]})
