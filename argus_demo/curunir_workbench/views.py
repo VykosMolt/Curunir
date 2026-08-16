@@ -48,6 +48,7 @@ def entity_list(projection: MissionProjection) -> list[dict]:
             "history_count": record.get("history_count", 1),
             "freshness": record.get("freshness", {}).get("state", "UNKNOWN"),
             "cluster_id": record.get("cluster_id", record["object_id"]),
+            "cluster_partially_hidden": bool(record.get("cluster_partially_hidden")),
             "has_geometry": bool(record.get("geometry")),
         })
     return rows
@@ -327,6 +328,7 @@ def graph(projection: MissionProjection, *, focus: str | None = None,
         "label": (o.get("labels") or [o["object_id"]])[0],
         "epistemic_state": o["epistemic_state"],
         "cluster_id": o.get("cluster_id", o["object_id"]),
+        "cluster_partially_hidden": bool(o.get("cluster_partially_hidden")),
     } for o in objects.values()]
     return {"nodes": sorted(nodes, key=lambda n: n["object_id"]),
             "edges": sorted(edges, key=lambda e: e["relationship_id"]),

@@ -77,31 +77,42 @@ def resolve_annotation(store: WorkbenchStore, annotation_id: str, *, actor: str,
     return record.to_record()
 
 
+# operational base-view families: target kind -> (view key, id field)
+_BASE_VIEW_TARGETS = {
+    "relationship": ("relationships", "relationship_id"),
+    "alert": ("alerts", "alert_id"),
+    "recommendation": ("recommendations", "recommendation_id"),
+    "decision": ("decisions", "decision_id"),
+    "information_requirement": ("information_requirements", "requirement_id"),
+    "analyst_task": ("analyst_tasks", "task_id"),
+}
+
+
 def target_marking(projection: MissionProjection, target_kind: str,
                    target_id: str):
     """The marking of the record an annotation binds to, or None when the
-    target family is unmarked (registry metadata) or unresolvable."""
+    target family is unmarked (registry metadata) or unresolvable. Resolution
+    is by the target's declared KIND, never by an id search across families."""
     if target_kind == "object":
         record = projection.object_current(target_id)
         return record.get("marking") if record else None
-    for key, id_field in (("relationships", "relationship_id"),
-                          ("alerts", "alert_id"),
-                          ("recommendations", "recommendation_id"),
-                          ("decisions", "decision_id"),
-                          ("information_requirements", "requirement_id"),
-                          ("analyst_tasks", "task_id")):
-        if target_kind in (key[:-1], id_field[:-3], "information_requirement",
-                           "analyst_task", "alert", "recommendation",
-                           "decision", "relationship"):
-            for record in projection.base_view.get(key, []):
-                if record.get(id_field) == target_id:
-                    return record.get("marking")
+    if target_kind in _BASE_VIEW_TARGETS:
+        key, id_field = _BASE_VIEW_TARGETS[target_kind]
+        for record in projection.base_view.get(key, []):
+            if record.get(id_field) == target_id:
+                return record.get("marking")
+        return None
     if target_kind == "report_sentence":
         for report in projection.family("workbench_report"):
             for section in report["sections"]:
                 if any(x["sentence_id"] == target_id for x in section["sentences"]):
                     return report.get("marking")
         return None
+    if target_kind == "evidence_anchor":
+        # an anchor is embedded in an observation; it inherits the marking of
+        # the manifestation it addresses (target_id is that manifestation id)
+        manifestation = projection.get("fabric_manifestation", target_id)
+        return manifestation.get("marking") if manifestation else None
     try:
         record = projection.get(target_kind, target_id)
     except KeyError:
@@ -134,9 +145,9 @@ def _target_visible(projection: MissionProjection, target_kind: str,
                     return True
         return False
     if target_kind == "evidence_anchor":
-        # anchors are embedded in observations; visible if any visible
-        # observation carries this anchor's manifestation+offsets identity
-        return any(a.get("anchor_id") == target_id or a.get("manifestation_id") == target_id
+        # an anchor is addressed by the manifestation it belongs to; visible
+        # iff a visible observation carries an anchor into that manifestation
+        return any(a.get("manifestation_id") == target_id
                    for o in projection.family("semantic_observation")
                    for a in o.get("anchors", ()))
     try:

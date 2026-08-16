@@ -209,11 +209,22 @@ class MissionProjection:
             self._append[record_type] = visible_records
         self.hidden_ids = hidden
         # one scrub pattern for the whole projection: any occurrence of a
-        # hidden id (optionally with an @vN suffix) anywhere in a string
+        # hidden id (optionally with an @vN suffix) anywhere in a string.
+        # Persisted details across the planes embed TRUNCATED ids (id[:16],
+        # id[:18], id[:24] — e.g. "claim-1a2b…=STALE"); those prefixes are a
+        # correlatable identifier, so each hidden id contributes its full form
+        # and those prefix lengths. Sorted longest-first so the full id (and
+        # the longest prefix) always wins the match.
+        needles: set[str] = set()
+        for h in hidden:
+            needles.add(h)
+            for cut in (24, 18, 16):
+                if len(h) > cut:
+                    needles.add(h[:cut])
         self._scrub_re = re.compile(
-            "|".join(re.escape(h) + r"(?:@v\d+)?" for h in sorted(hidden, key=len,
-                                                                  reverse=True))
-        ) if hidden else None
+            "|".join(re.escape(n) + r"(?:@v\d+)?"
+                     for n in sorted(needles, key=len, reverse=True))
+        ) if needles else None
         # cluster ids: the union-find representative may itself be hidden;
         # re-anchor each visible object's cluster on the smallest VISIBLE
         # member so scrubbing cannot merge unrelated clusters under REDACTED
@@ -233,6 +244,45 @@ class MissionProjection:
         # but not the cross-plane hidden-id scrub — apply it here, once, so
         # every consumer of base_view serializes scrubbed state
         self.base_view = self._scrub(self.base_view)
+
+    def marking_of(self, record_id: str) -> dict | None:
+        """The marking of any VISIBLE record with this id, across every plane
+        — used to derive the classification a new record must inherit from a
+        free-form reference. None when the id is not visible (a caller can
+        only anchor to state it can see; inbound validation enforces that)."""
+        for record_type in LATEST_FAMILIES:
+            record = self._current[record_type].get(record_id)
+            if record is not None:
+                return record.get("marking")
+        for record_type, id_field in APPEND_FAMILIES.items():
+            for record in self._append[record_type]:
+                if record[id_field] == record_id:
+                    return record.get("marking")
+        for record in self.base_view["objects"]:
+            if record["object_id"] == record_id:
+                return record.get("marking")
+        for key, id_field in (("relationships", "relationship_id"),
+                              ("activities", "activity_id"),
+                              ("alerts", "alert_id"),
+                              ("recommendations", "recommendation_id"),
+                              ("decisions", "decision_id"),
+                              ("analyst_actions", "action_id"),
+                              ("association_proposals", "proposal_id"),
+                              ("information_requirements", "requirement_id"),
+                              ("analyst_tasks", "task_id"),
+                              ("evidence_requests", "request_id")):
+            for record in self.base_view.get(key, []):
+                if record.get(id_field) == record_id:
+                    return record.get("marking")
+        # report sections/sentences inherit their report's marking
+        for report in self._current["workbench_report"].values():
+            if record_id == report["report_id"]:
+                return report.get("marking")
+            for section in report["sections"]:
+                if section["section_id"] == record_id \
+                        or any(s["sentence_id"] == record_id for s in section["sentences"]):
+                    return report.get("marking")
+        return None
 
     def visible_id_set(self) -> set[str]:
         """Every record id this context can see, across all planes — the
@@ -258,6 +308,17 @@ class MissionProjection:
             ids |= {r["requirement_id"] for r in view["information_requirements"]}
             ids |= {t["task_id"] for t in view["analyst_tasks"]}
             ids |= {r["request_id"] for r in view["evidence_requests"]}
+            # report sections/sentences are citable anchors the caller owns
+            for report in self._current["workbench_report"].values():
+                for section in report["sections"]:
+                    ids.add(section["section_id"])
+                    ids |= {s["sentence_id"] for s in section["sentences"]}
+            # inference ids and evidence-anchor refs the caller can resolve
+            for observation in self._append["semantic_observation"]:
+                ids |= {a.get("manifestation_id") for a in observation.get("anchors", ())
+                        if a.get("manifestation_id")}
+                if observation.get("inference_id"):
+                    ids.add(observation["inference_id"])
             self._visible_ids = ids
         return self._visible_ids
 

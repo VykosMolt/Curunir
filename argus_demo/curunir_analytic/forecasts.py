@@ -658,7 +658,10 @@ def _close_review_item(ctx: AnalyticContext, item_id: str, note: str) -> None:
         evidence_refs=tuple(open_item["evidence_refs"]),
         status="RESOLVED", resolution_note=note[:280],
         version=store.next_family_version("review_item", "item_id", item_id),
-        recorded_time=ctx.now_fn(), marking=ctx.marking)
+        recorded_time=ctx.now_fn(),
+        # a re-append NEVER re-classifies: the review item keeps its marking
+        marking=marking_from_record(open_item["marking"])
+        if isinstance(open_item.get("marking"), dict) else open_item["marking"])
     store.append("REVIEW_ITEM_RECORDED", resolved,
                  recorded_time=resolved.recorded_time, actor=ctx.actor)
 

@@ -220,6 +220,10 @@ export async function entitiesView(main) {
           { label: "epistemic", render: (e) => badge(e.epistemic_state) },
           { label: "freshness", render: (e) => badge(e.freshness) },
           { label: "versions", key: "history_count" },
+          { label: "identity", render: (e) => e.cluster_partially_hidden
+              ? h("span", { class: "badge unknown",
+                            title: "this entity's identity cluster includes objects you cannot view" },
+                  "linkage partly hidden") : "" },
           { label: "geo", render: (e) => e.has_geometry ? "◈" : "" },
         ],
         rows: res.entities,

@@ -213,7 +213,8 @@ export function graphSvg(data, { width = 860, height = 520, onNode } = {}) {
       String(n.label).slice(0, 22)));
     g.append(svg("text", { y: 3.5, "text-anchor": "middle", class: "lbl-dim" },
       n.object_type.slice(0, 3)));
-    g.append(svg("title", {}, `${n.label}\n${n.object_type} [${n.epistemic_state}]`));
+    g.append(svg("title", {}, `${n.label}\n${n.object_type} [${n.epistemic_state}]` +
+      (n.cluster_partially_hidden ? "\nidentity linkage partly hidden in this context" : "")));
     if (onNode) {
       g.addEventListener("click", () => onNode(n));
       g.addEventListener("keydown", (e) => { if (e.key === "Enter") onNode(n); });

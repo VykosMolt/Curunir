@@ -71,6 +71,18 @@ class ActorRegistry:
 
 
 def write_registry(path: str | Path, actors: list[dict]) -> None:
-    Path(path).write_text(json.dumps(
-        {"format": "curunir-workbench-actors-v1", "actors": actors},
-        indent=1, sort_keys=True), encoding="utf-8")
+    """Write the bearer-token registry atomically at mode 0600 — the tokens
+    never exist at umask-default permissions, even momentarily."""
+    import os
+    path = Path(path)
+    content = json.dumps({"format": "curunir-workbench-actors-v1", "actors": actors},
+                         indent=1, sort_keys=True)
+    tmp = path.with_name(f".{path.name}.tmp")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(content)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
+    os.replace(tmp, path)  # atomic; the destination is 0600 from creation

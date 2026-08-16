@@ -93,3 +93,40 @@ def can_view(marking: Marking | Mapping[str, Any] | None, context: AccessContext
 
 def visible(records: list[dict[str, Any]], context: AccessContext, marking_key: str = "marking") -> list[dict[str, Any]]:
     return [r for r in records if can_view(r.get(marking_key), context)]
+
+
+def most_restrictive(markings: list[Marking]) -> Marking:
+    """The marking a record derived from several subjects must carry: it may
+    be viewed only by a context that could view every input. Compartments
+    union (needs all), releasability intersects (fewer options), min_role
+    takes the maximum. A record so marked can never be less restricted than
+    any subject it is about — the high-water mark that stops write-down."""
+    markings = [m for m in markings if m is not None]
+    if not markings:
+        raise ValueError("most_restrictive requires at least one marking")
+    records = [m.to_record() if isinstance(m, Marking) else dict(m) for m in markings]
+    compartments: set[str] = set()
+    releasabilities: list[set[str]] = []
+    for record in records:
+        compartments |= set(record.get("compartments", ()))
+        releasabilities.append(set(record.get("releasability", ())))
+    # intersection across those that declare releasability; a marking with no
+    # releasability is owning-authority-only (strictly more restrictive) and
+    # therefore collapses the shared set to empty
+    declared = [r for r in releasabilities if r]
+    if len(declared) < len(releasabilities):
+        releasability: tuple[str, ...] = ()
+    elif declared:
+        shared = set.intersection(*declared)
+        releasability = tuple(sorted(shared))
+    else:
+        releasability = ()
+    min_role = max((record.get("min_role", "OBSERVER") for record in records),
+                   key=lambda role: ROLE_RANK.get(role, 0))
+    caveats: tuple[str, ...] = ()
+    for record in records:
+        caveats += tuple(record.get("caveats", ()))
+    return Marking(owning_authority=records[0]["owning_authority"],
+                   compartments=tuple(sorted(compartments)),
+                   releasability=releasability, min_role=min_role,
+                   caveats=tuple(dict.fromkeys(caveats)))

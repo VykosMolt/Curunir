@@ -295,7 +295,9 @@ def update_discriminator(store: SemanticStore, discriminator: Mapping[str, Any],
     for key in ("hypothesis_ids", "claim_ids", "source_family_hints", "basis_groups_at_pose"):
         merged[key] = tuple(merged.get(key, ()))
     merged["recorded_time"] = now
-    merged["marking"] = marking
+    # a re-append NEVER re-classifies: the discriminator keeps its own marking
+    merged["marking"] = marking_from_record(discriminator["marking"]) \
+        if isinstance(discriminator.get("marking"), dict) else discriminator["marking"]
     merged["version"] = store.next_family_version(
         "discriminator", "discriminator_id", discriminator["discriminator_id"])
     record = DiscriminatingObservation(**merged)

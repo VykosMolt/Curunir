@@ -24,7 +24,7 @@ from curunir_fabric.executor import ExecutionContext, RateGate
 from curunir_fabric.registry import load_registry
 from curunir_fabric.watch import register_watch, retire_watch
 from curunir_operational.access import (AccessContext, Marking, can_view,
-                                        marking_from_record)
+                                        marking_from_record, most_restrictive)
 from curunir_operational.missions import MissionWorkflow
 from curunir_operational.workflow import WorkflowEngine
 from curunir_semantic.collection import assign_human_route, execute_route
@@ -51,31 +51,46 @@ import re as _re
 
 # digest-shaped record ids ("prefix-hex"); evgroup- names dependence
 # families, which are arithmetic groupings rather than records
-_ID_TOKEN_RE = _re.compile(r"\b(?!evgroup-)[a-z][a-z-]{1,32}-[0-9a-f]{12,64}\b")
+_ID_TOKEN_RE = _re.compile(r"(?!evgroup-)[a-z][a-z-]{1,32}-[0-9a-f]{12,64}")
+# a broad tokenizer for free text: any id-shaped run we then test for membership
+_FREE_TOKEN_RE = _re.compile(r"[A-Za-z][A-Za-z0-9_-]{5,}")
 
 
 def _validate_inbound(projection: MissionProjection, *,
                       refs: tuple = (), texts: tuple = ()) -> None:
-    """Uniform inbound validation: every reference, and every id-shaped
-    token inside free text, must resolve in the CALLER's own view. Hidden
-    and nonexistent ids fail identically, so the refusal carries no
-    existence signal — and a client echoing REDACTED (or probing for
-    compartments) is refused instead of laundering damage into the record."""
+    """Uniform inbound validation.
+
+    Reference fields are structured id lists: every one must resolve in the
+    CALLER's own view — hidden and nonexistent are rejected identically, so
+    the refusal carries no existence signal, no hidden id can be laundered
+    into a record, and a client echoing REDACTED is refused rather than
+    corrupting the record's real reference.
+
+    Free text is scanned for (a) any of the caller's OWN hidden ids
+    (shape-independent, from the exact hidden set — this is what a probe or
+    a copy-paste of restricted state would carry) and (b) digest-shaped
+    tokens that do not resolve. Word-form and non-digest nonexistent tokens
+    are not id-detectable in prose; that residual free-text existence oracle
+    is a stated V6.6 limitation, not a structured-reference one."""
     known = projection.visible_id_set()
+    hidden = projection.hidden_ids
     bad: list[str] = []
     for ref in refs:
         value = str(ref)
         if not value:
             continue
-        if value == "REDACTED" or (_ID_TOKEN_RE.fullmatch(value)
-                                   and value not in known):
+        if value == "REDACTED" or value not in known:
             bad.append(value)
     for text in texts:
-        for token in _ID_TOKEN_RE.findall(str(text or "")):
-            if token not in known:
-                bad.append(token)
-        if "REDACTED" in str(text or ""):
+        text = str(text or "")
+        if "REDACTED" in text:
             bad.append("REDACTED")
+        for token in _FREE_TOKEN_RE.findall(text):
+            base = token.split("@v")[0]
+            if base in hidden:
+                bad.append(base)
+            elif _ID_TOKEN_RE.fullmatch(base) and base not in known:
+                bad.append(base)
     if bad:
         raise CommandError(
             "payload references identifiers that do not resolve in your "
@@ -83,11 +98,23 @@ def _validate_inbound(projection: MissionProjection, *,
             "never re-submit redacted placeholders")
 
 
+def _soft_reject(projection: MissionProjection, values: tuple) -> None:
+    """For loose / external-identifier fields: don't require resolution, but
+    never let a hidden id or a REDACTED echo be laundered into the record."""
+    hidden = projection.hidden_ids
+    bad = [str(v) for v in values
+           if v and (str(v) == "REDACTED" or str(v).split("@v")[0] in hidden)]
+    if bad:
+        raise CommandError(
+            f"payload carries identifiers you cannot resolve: {sorted(set(bad))[:4]}")
+
+
 def marked(ctx: "CommandContext", compartments: tuple[str, ...] = ()) -> Marking:
     """The write marking for a NEW record: the server default, optionally
-    raised into compartments the actor actually holds. The floor check in
-    require_visible_marking still applies; an actor can never write into a
-    compartment it does not hold."""
+    raised into compartments the actor actually holds. This function itself
+    enforces the floor — it raises if the actor does not hold every declared
+    compartment, so a record can never be written into access the author
+    lacks."""
     if not compartments:
         return ctx.marking
     missing = set(compartments) - set(ctx.context.compartments)
@@ -102,6 +129,13 @@ def marked(ctx: "CommandContext", compartments: tuple[str, ...] = ()) -> Marking
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _record_marking(record: Mapping[str, Any]) -> Marking:
+    """The marking a record derived from `record` must inherit — a derived
+    record is never less restricted than the subject it is about."""
+    return marking_from_record(record["marking"]) \
+        if isinstance(record.get("marking"), dict) else record["marking"]
 
 
 @dataclass
@@ -124,13 +158,19 @@ class CommandContext:
     def projection(self) -> MissionProjection:
         return MissionProjection(self.store, self.context)
 
-    def analytic(self) -> AnalyticContext:
+    def analytic(self, marking: Marking | None = None) -> AnalyticContext:
+        # every record written through this context — the primary record AND
+        # its companions (transitions, review items, warnings) — is stamped
+        # with `marking`. When operating on an existing subject the caller
+        # passes the SUBJECT's marking so a derived record can never be less
+        # restricted than the state it is about; `self.marking` (the actor's
+        # PUBLIC default) is used only for genuinely new top-level records.
         return AnalyticContext(store=self.store, actor=self.actor,
-                               marking=self.marking, now_fn=self.now_fn)
+                               marking=marking or self.marking, now_fn=self.now_fn)
 
-    def pipeline(self) -> SemanticPipeline:
+    def pipeline(self, marking: Marking | None = None) -> SemanticPipeline:
         return SemanticPipeline(store=self.store, custody_root=self.root / "custody",
-                                actor=self.actor, marking=self.marking,
+                                actor=self.actor, marking=marking or self.marking,
                                 now_fn=self.now_fn)
 
     def require_visible_marking(self) -> None:
@@ -148,12 +188,18 @@ def annotate(ctx: CommandContext, *, target_kind: str, target_id: str,
     ctx.require_visible_marking()
     projection = ctx.projection()
     _validate_inbound(projection, refs=(anchor_ref,), texts=(text,))
-    # the annotation inherits its TARGET's marking: discussion of
-    # compartmented state is compartmented, never PUBLIC-by-default
-    target_marking = annotations_module.target_marking(projection, target_kind,
-                                                       target_id)
-    marking = marking_from_record(target_marking) \
-        if isinstance(target_marking, dict) else (target_marking or ctx.marking)
+    # the annotation inherits the most restrictive of its TARGET's and its
+    # ANCHOR's markings: discussion of compartmented state is compartmented,
+    # through EITHER reference field, never PUBLIC-by-default
+    subject_markings = []
+    tgt = annotations_module.target_marking(projection, target_kind, target_id)
+    if isinstance(tgt, dict):
+        subject_markings.append(marking_from_record(tgt))
+    if anchor_ref:
+        anchor = projection.marking_of(anchor_ref)
+        if isinstance(anchor, dict):
+            subject_markings.append(marking_from_record(anchor))
+    marking = most_restrictive(subject_markings) if subject_markings else ctx.marking
     if not can_view(marking, ctx.context):
         raise PermissionError("cannot annotate outside your own access")
     return annotations_module.create_annotation(
@@ -164,8 +210,10 @@ def annotate(ctx: CommandContext, *, target_kind: str, target_id: str,
 
 def resolve_annotation(ctx: CommandContext, annotation_id: str, *,
                        expected_version: int, status: str, note: str) -> dict:
-    if ctx.projection().get("workbench_annotation", annotation_id) is None:
+    projection = ctx.projection()
+    if projection.get("workbench_annotation", annotation_id) is None:
         raise NotFound(f"unknown annotation: {annotation_id}")
+    _validate_inbound(projection, texts=(note,))
     try:
         return annotations_module.resolve_annotation(
             ctx.store, annotation_id, actor=ctx.actor, marking=ctx.marking,
@@ -185,7 +233,7 @@ def open_requirement(ctx: CommandContext, *, question: str, priority: str,
                      affected_ids: tuple[str, ...] = (),
                      compartments: tuple[str, ...] = ()) -> dict:
     _validate_inbound(ctx.projection(), refs=affected_ids,
-                      texts=(question, rationale))
+                      texts=(question, rationale, mission_context, closure_criteria))
     write_marking = marked(ctx, compartments)
     requirement_id = digest_id("req", question, mission_context)
     existing = None
@@ -239,17 +287,20 @@ def transition_workflow(ctx: CommandContext, *, subject_kind: str, subject_id: s
                 "evidence_request": "request_id"}[subject_kind]
     projection = ctx.projection()
     visible = projection.base_view[view_key]
-    if not any(r[id_field] == subject_id for r in visible):
+    subject = next((r for r in visible if r[id_field] == subject_id), None)
+    if subject is None:
         # invisible and nonexistent are the same refusal
         raise NotFound(f"unknown {subject_kind}: {subject_id}")
     # "answering requires evidence" must mean evidence that RESOLVES:
     # a transition cannot be closed on fabricated or invisible references
     _validate_inbound(projection, refs=evidence_refs, texts=(note,))
     workflow = MissionWorkflow(ctx.store)
+    # the transition inherits its subject's marking — it can never be less
+    # restricted than the requirement/task it moves
     return workflow.transition(
         subject_kind, subject_id, to_status, actor_id=ctx.actor,
         actor_kind=ctx.actor_kind, evidence_refs=evidence_refs, note=note,
-        recorded_time=ctx.now_fn(), marking=ctx.marking)
+        recorded_time=ctx.now_fn(), marking=_record_marking(subject))
 
 
 # ---- review ------------------------------------------------------------------
@@ -272,6 +323,7 @@ def resolve_review_item(ctx: CommandContext, item_id: str, *,
     if current["version"] != expected_version:
         raise Conflict(f"review item is at version {current['version']}, "
                        f"you saw {expected_version}")
+    _validate_inbound(projection, texts=(note,))
     raw = ctx.store.latest_by_id("review_item", "item_id")[item_id]
     record = ReviewItem(
         item_id=item_id, kind=raw["kind"], subject_kind=raw["subject_kind"],
@@ -294,17 +346,28 @@ def resolve_model_proposal(ctx: CommandContext, proposal_id: str, *,
     latest = ctx.store.latest_by_id("analytical_proposal", "proposal_id").get(proposal_id)
     if latest is None or not can_view(latest.get("marking"), ctx.context):
         raise NotFound(f"unknown analytical proposal: {proposal_id}")
-    return resolve_candidate(ctx.analytic(), proposal_id, accept=accept,
-                             actor_id=ctx.actor, actor_kind=ctx.actor_kind,
-                             note=note)
+    # the resolution and every companion record inherit the proposal's marking
+    return resolve_candidate(ctx.analytic(_record_marking(latest)), proposal_id,
+                             accept=accept, actor_id=ctx.actor,
+                             actor_kind=ctx.actor_kind, note=note)
 
 
 def decide_recommendation(ctx: CommandContext, recommendation_id: str, *,
                           state: str, rationale: str) -> dict:
+    # visibility gate: a recommendation the actor cannot see is neither
+    # decidable nor an existence oracle (unknown and forbidden are identical)
+    recommendation = None
+    for record in ctx.store.records_of("recommendation"):
+        if record["recommendation_id"] == recommendation_id:
+            recommendation = record
+    if recommendation is None or not can_view(recommendation.get("marking"), ctx.context):
+        raise NotFound(f"unknown recommendation: {recommendation_id}")
+    _validate_inbound(ctx.projection(), texts=(rationale,))
     engine = WorkflowEngine(ctx.store)
+    # the decision inherits the recommendation's marking
     return engine.decide(recommendation_id, context=ctx.context, state=state,
                          rationale=rationale, recorded_time=ctx.now_fn(),
-                         marking=ctx.marking)
+                         marking=_record_marking(recommendation))
 
 
 # ---- hypotheses --------------------------------------------------------------
@@ -313,7 +376,8 @@ def create_hypothesis(ctx: CommandContext, *, statement: str, case_id: str,
                       assumptions: tuple[str, ...] = (),
                       unknowns: tuple[str, ...] = (),
                       compartments: tuple[str, ...] = ()) -> dict:
-    _validate_inbound(ctx.projection(), texts=(statement,) + assumptions + unknowns)
+    _validate_inbound(ctx.projection(),
+                      texts=(statement, case_id) + assumptions + unknowns)
     return record_hypothesis(ctx.store, statement=statement, case_id=case_id,
                              assumptions=assumptions, unknowns=unknowns,
                              analyst_or_provider=ctx.actor, now=ctx.now_fn(),
@@ -332,8 +396,10 @@ def assess_hypothesis(ctx: CommandContext, hypothesis_id: str, *,
         raise CommandError(f"invalid hypothesis status: {status}")
     if not rationale.strip():
         raise CommandError("an assessment requires its rationale")
-    if ctx.projection().get("hypothesis", hypothesis_id) is None:
+    projection = ctx.projection()
+    if projection.get("hypothesis", hypothesis_id) is None:
         raise NotFound(f"unknown hypothesis: {hypothesis_id}")
+    _validate_inbound(projection, texts=(rationale,))
     raw = ctx.store.current_hypotheses()[hypothesis_id]
     if raw["version"] != expected_version:
         raise Conflict(f"hypothesis is at version {raw['version']}, "
@@ -408,8 +474,10 @@ def move_forecast(ctx: CommandContext, forecast_id: str, *, expected_version: in
     if current["version"] != expected_version:
         raise Conflict(f"forecast is at version {current['version']}, "
                        f"you saw {expected_version}")
+    # the movement and its recorded transition inherit the forecast's marking
+    forecast_marking = _record_marking(ctx.store.current_forecasts()[forecast_id])
     try:
-        return update_probability(ctx.analytic(), forecast_id,
+        return update_probability(ctx.analytic(forecast_marking), forecast_id,
                                   probability=probability,
                                   reason=f"{change_reason} — {probability_basis}".strip(" —"),
                                   evidence_refs=evidence_refs,
@@ -429,9 +497,11 @@ def resolve_forecast(ctx: CommandContext, forecast_id: str, *, outcome: str,
     if projection.get("analytic_forecast", forecast_id) is None:
         raise NotFound(f"unknown forecast: {forecast_id}")
     _validate_inbound(projection, refs=evidence_refs, texts=(rationale,))
-    return resolve_forecast_human(ctx.analytic(), forecast_id, outcome=outcome,
-                                  evidence_refs=evidence_refs, note=rationale,
-                                  actor_id=ctx.actor, actor_kind=ctx.actor_kind)
+    forecast_marking = _record_marking(ctx.store.current_forecasts()[forecast_id])
+    return resolve_forecast_human(ctx.analytic(forecast_marking), forecast_id,
+                                  outcome=outcome, evidence_refs=evidence_refs,
+                                  note=rationale, actor_id=ctx.actor,
+                                  actor_kind=ctx.actor_kind)
 
 
 def link_hypothesis_claim(ctx: CommandContext, hypothesis_id: str, *,
@@ -442,9 +512,13 @@ def link_hypothesis_claim(ctx: CommandContext, hypothesis_id: str, *,
         raise NotFound(f"unknown hypothesis: {hypothesis_id}")
     if projection.get("semantic_claim", claim_id) is None:
         raise NotFound(f"unknown claim: {claim_id}")
+    _validate_inbound(projection, texts=(rationale,))
+    # the hypothesis re-append and any review item it queues inherit the
+    # hypothesis's own marking
+    hyp_marking = _record_marking(ctx.store.current_hypotheses()[hypothesis_id])
     return link_claim(ctx.store, hypothesis_id, claim_id, stance,
                       rationale=rationale, now=ctx.now_fn(), actor=ctx.actor,
-                      marking=ctx.marking)
+                      marking=hyp_marking)
 
 
 def project_forecast_warning(ctx: CommandContext, forecast_id: str, *,
@@ -457,7 +531,13 @@ def project_forecast_warning(ctx: CommandContext, forecast_id: str, *,
         raise NotFound(f"unknown forecast: {forecast_id}")
     if projection.get("mission_objective", objective_id) is None:
         raise NotFound(f"unknown objective: {objective_id}")
-    return project_warning(ctx.analytic(), forecast_id=forecast_id,
+    # a warning discloses its forecast's probability/band/tier — it inherits
+    # the most restrictive of the forecast's and objective's markings so it
+    # can never be less protected than either
+    forecast_marking = _record_marking(ctx.store.current_forecasts()[forecast_id])
+    objective_marking = _record_marking(ctx.store.current_objectives()[objective_id])
+    warning_marking = most_restrictive([forecast_marking, objective_marking])
+    return project_warning(ctx.analytic(warning_marking), forecast_id=forecast_id,
                            objective_id=objective_id)
 
 
@@ -472,7 +552,12 @@ def launch_route(ctx: CommandContext, route_id: str, *,
     if projection.get("collection_route", route_id) is None:
         raise NotFound(f"unknown collection route: {route_id}")
     route = ctx.store.latest_by_id("collection_route", "route_id")[route_id]
-    pipeline = ctx.pipeline()
+    # every record this launch writes — the route re-append, the discriminator
+    # update, review items, AND the acquired evidence — inherits the route's
+    # marking. A compartmented tasking never lands PUBLIC records; open-source
+    # evidence acquired in service of it is over-classified to the route's
+    # marking (the safe direction), never under-classified.
+    pipeline = ctx.pipeline(_record_marking(route))
     registry = load_registry(ctx.store)
     return execute_route(pipeline, registry, route, transports=transports)
 
@@ -484,7 +569,7 @@ def assign_route(ctx: CommandContext, route_id: str, *, assigned_actor: str) -> 
     route = ctx.store.latest_by_id("collection_route", "route_id")[route_id]
     return assign_human_route(ctx.store, route, assigned_actor=assigned_actor,
                               now=ctx.now_fn(), actor=ctx.actor,
-                              marking=ctx.marking)
+                              marking=_record_marking(route))
 
 
 # ---- watches -----------------------------------------------------------------
@@ -495,8 +580,12 @@ def create_watch(ctx: CommandContext, *, need_id: str, target_kind: str,
                  blind_spots: tuple[str, ...] = (),
                  compartments: tuple[str, ...] = ()) -> dict:
     from curunir_fabric.contracts import WatchDefinition
-    _validate_inbound(ctx.projection(), refs=(need_id,) if need_id else (),
-                      texts=(target_ref, query_value) + tuple(blind_spots))
+    # need_id is a loose association (a fabric need id or absent); target_ref
+    # and query_value are EXTERNAL identifiers (an LEI, a URL, a phrase), not
+    # internal record ids — none is strict-validated. Only the free-text
+    # blind-spot notes and REDACTED/hidden leakage are checked.
+    _soft_reject(ctx.projection(), (need_id,))
+    _validate_inbound(ctx.projection(), texts=tuple(blind_spots))
     now = ctx.now_fn()
     watch_id = digest_id("watch", need_id, source_id, operation, query_value)
     raw = ctx.store.latest_by_id("fabric_watch", "watch_id").get(watch_id)
@@ -594,6 +683,7 @@ def create_report(ctx: CommandContext, *, title: str, question: str,
                   sections: list[Mapping[str, Any]],
                   compartments: tuple[str, ...] = ()) -> dict:
     projection = ctx.projection()
+    _validate_inbound(projection, texts=(title, question))
     _validate_sections(projection, sections)
     return reports_module.create_report(
         ctx.store, actor=ctx.actor, marking=marked(ctx, compartments),
@@ -607,6 +697,7 @@ def edit_report(ctx: CommandContext, report_id: str, *, expected_version: int,
     projection = ctx.projection()
     if projection.get("workbench_report", report_id) is None:
         raise NotFound(f"unknown report: {report_id}")
+    _validate_inbound(projection, texts=tuple(t for t in (title, question, change_note) if t))
     _validate_sections(projection, sections)
     try:
         return reports_module.edit_report(
@@ -638,6 +729,7 @@ def approve_report(ctx: CommandContext, report_id: str, *, expected_version: int
     projection = ctx.projection()
     if projection.get("workbench_report", report_id) is None:
         raise NotFound(f"unknown report: {report_id}")
+    _validate_inbound(projection, texts=(note,))
     try:
         return reports_module.approve_report(
             ctx.store, projection, report_id, actor=ctx.actor,
@@ -653,6 +745,7 @@ def reject_report(ctx: CommandContext, report_id: str, *, expected_version: int,
     projection = ctx.projection()
     if projection.get("workbench_report", report_id) is None:
         raise NotFound(f"unknown report: {report_id}")
+    _validate_inbound(projection, texts=(note,))
     try:
         return reports_module.reject_report(
             ctx.store, report_id, actor=ctx.actor, actor_kind=ctx.actor_kind,

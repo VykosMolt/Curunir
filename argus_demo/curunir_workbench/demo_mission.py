@@ -66,8 +66,9 @@ def _ensure_actors(actors_path: Path) -> None:
         return
     for entry in entries:
         entry["token"] = _secrets.token_urlsafe(16)
+    # write_registry creates the file at mode 0600 atomically — no world-
+    # readable window for the freshly generated bearer tokens
     write_registry(actors_path, entries)
-    actors_path.chmod(0o600)
 
 
 def _now() -> str:
