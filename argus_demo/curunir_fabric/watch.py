@@ -147,6 +147,14 @@ def _diff_changes(watch: dict, run_id: str, previous: dict | None,
 
 
 def run_watch(ctx: ExecutionContext, watch: dict, *, scheduled_time: str) -> WatchRun:
+    # a watch run — its acquired manifestations, change observations and the
+    # run record — inherits the WATCH's marking, not the scheduler's: a
+    # compartmented watch never produces lower-marked evidence
+    import dataclasses
+    from curunir_operational.access import marking_from_record
+    watch_marking = marking_from_record(watch["marking"]) \
+        if isinstance(watch.get("marking"), dict) else watch["marking"]
+    ctx = dataclasses.replace(ctx, marking=watch_marking)
     started = ctx.now_fn()
     previous = last_run(ctx.store, watch["watch_id"])
     outcome = execute_single(ctx, query=_watch_query(watch), source_id=watch["source_id"],

@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from argus.source_intelligence.models import digest_id
-from curunir_operational.access import Marking
+from curunir_operational.access import Marking, marking_from_record, most_restrictive
 from curunir_operational.workflow import WorkflowEngine
 
 from .changes import explain_change, interpret_change
@@ -38,9 +38,9 @@ class SemanticPipeline:
         owning_authority="curunir-semantic", releasability=("PUBLIC",)))
     now_fn: Callable[[], str] = _utc_now
 
-    def context(self) -> IntegrationContext:
+    def context(self, marking=None) -> IntegrationContext:
         return IntegrationContext(store=self.store, actor=self.actor,
-                                  marking=self.marking, now_fn=self.now_fn)
+                                  marking=marking or self.marking, now_fn=self.now_fn)
 
     # ---- understanding ---------------------------------------------------
 
@@ -48,9 +48,11 @@ class SemanticPipeline:
         return digest_id("review-processing", manifestation_id)
 
     def _record_processing_failure(self, manifestation_id: str, stage: str,
-                                   error: Exception) -> None:
+                                   error: Exception, marking=None) -> None:
         """A pipeline failure is durable state, never a silently dropped
-        exception: the manifestation stays queued for retry until resolved."""
+        exception: the manifestation stays queued for retry until resolved.
+        The failure item is ABOUT the manifestation, so it inherits the
+        manifestation's marking, never a lower pipeline default."""
         from .contracts import ReviewItem
         item_id = self._failure_item_id(manifestation_id)
         detail = f"{stage} failed: {type(error).__name__}: {str(error)[:300]}"
@@ -63,7 +65,7 @@ class SemanticPipeline:
             detail=detail,
             evidence_refs=(manifestation_id,), status="OPEN", resolution_note="",
             version=self.store.next_family_version("review_item", "item_id", item_id),
-            recorded_time=self.now_fn(), marking=self.marking)
+            recorded_time=self.now_fn(), marking=marking or self.marking)
         self.store.append("REVIEW_ITEM_RECORDED", item, recorded_time=item.recorded_time,
                           actor=self.actor)
 
@@ -79,9 +81,20 @@ class SemanticPipeline:
             detail=latest["detail"], evidence_refs=tuple(latest["evidence_refs"]),
             status="RESOLVED", resolution_note="reprocessed successfully",
             version=self.store.next_family_version("review_item", "item_id", item_id),
-            recorded_time=self.now_fn(), marking=self.marking)
+            recorded_time=self.now_fn(),
+            # a re-append never re-classifies: keep the item's own marking
+            marking=marking_from_record(latest["marking"])
+            if isinstance(latest.get("marking"), dict) else latest["marking"])
         self.store.append("REVIEW_ITEM_RECORDED", resolved,
                           recorded_time=resolved.recorded_time, actor=self.actor)
+
+    def _item_marking(self, manifestation: dict):
+        """The marking derived state of a manifestation inherits: the join of
+        the pipeline's marking and the manifestation's own."""
+        own = manifestation.get("marking")
+        if not isinstance(own, dict):
+            return self.marking
+        return most_restrictive([self.marking, marking_from_record(own)])
 
     def process_manifestation(self, manifestation: dict) -> dict[str, Any]:
         """Normalize, extract and integrate one manifestation (idempotent).
@@ -90,26 +103,32 @@ class SemanticPipeline:
         partially written manifestation is retried, not skipped as done."""
         manifestation_id = manifestation["manifestation_id"]
         now = self.now_fn()
+        # the manifestation's understanding (document, observations, claims,
+        # world objects) inherits the manifestation's OWN marking joined with
+        # the pipeline's — a SPECIAL manifestation processed during a lower
+        # pipeline run (a retry, a batch, a differently-marked route) is never
+        # materialized into lower-marked derived state.
+        item_marking = self._item_marking(manifestation)
         try:
             document = normalize_manifestation(
                 self.store, manifestation, self.custody_root,
-                now=now, actor=self.actor, marking=self.marking)
+                now=now, actor=self.actor, marking=item_marking)
         except NormalizationError as error:
-            self._record_processing_failure(manifestation_id, "normalization", error)
+            self._record_processing_failure(manifestation_id, "normalization", error, item_marking)
             return {"manifestation_id": manifestation_id,
                     "status": "NORMALIZATION_FAILED", "error": str(error)}
         except Exception as error:
             # custody/IO failures are the same failure class: durable, retried
-            self._record_processing_failure(manifestation_id, "normalization", error)
+            self._record_processing_failure(manifestation_id, "normalization", error, item_marking)
             return {"manifestation_id": manifestation_id,
                     "status": "PROCESSING_FAILED", "error": f"{type(error).__name__}: {error}"}
         try:
             observations = extract_observations(self.store, document, now=self.now_fn(),
-                                                actor=self.actor, marking=self.marking)
-            ctx = self.context()
+                                                actor=self.actor, marking=item_marking)
+            ctx = self.context(item_marking)
             integration = integrate_document(ctx, document)
         except Exception as error:
-            self._record_processing_failure(manifestation_id, "understanding", error)
+            self._record_processing_failure(manifestation_id, "understanding", error, item_marking)
             return {"manifestation_id": manifestation_id,
                     "status": "PROCESSING_FAILED", "error": f"{type(error).__name__}: {error}"}
         self._resolve_processing_failure(manifestation_id)

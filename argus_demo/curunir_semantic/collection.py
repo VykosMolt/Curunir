@@ -250,7 +250,10 @@ def _queue_coverage_gap(store: SemanticStore, discriminator: Mapping[str, Any],
         detail=f"no registered source family can independently answer: "
                f"{discriminator['question'][:200]} ({len(routes)} routes, all scored 0)",
         evidence_refs=tuple(r["route_id"] for r in routes[:5]),
-        status="OPEN", resolution_note="", recorded_time=now, marking=marking)
+        status="OPEN", resolution_note="", recorded_time=now,
+        # the gap is ABOUT the discriminator — inherit its marking
+        marking=marking_from_record(discriminator["marking"])
+        if isinstance(discriminator.get("marking"), dict) else discriminator["marking"])
     store.append("REVIEW_ITEM_RECORDED", item, recorded_time=now, actor=actor)
 
 
@@ -411,7 +414,11 @@ def _route_accounting(pipeline: SemanticPipeline, route: Mapping[str, Any],
                        f"other families remains open.",
                 evidence_refs=(route_execution_id or route["route_id"],),
                 status="OPEN", resolution_note="",
-                recorded_time=pipeline.now_fn(), marking=pipeline.marking)
+                recorded_time=pipeline.now_fn(),
+                # the item is ABOUT the discriminator — inherit its marking
+                marking=marking_from_record(discriminator["marking"])
+                if isinstance(discriminator.get("marking"), dict)
+                else discriminator["marking"])
             store.append("REVIEW_ITEM_RECORDED", item, recorded_time=item.recorded_time,
                          actor=pipeline.actor)
     if discriminator:
@@ -433,7 +440,11 @@ def _route_accounting(pipeline: SemanticPipeline, route: Mapping[str, Any],
             evidence_refs=tuple(open_failure["evidence_refs"]),
             status="RESOLVED", resolution_note="route accounting completed",
             version=store.next_family_version("review_item", "item_id", failure_id),
-            recorded_time=pipeline.now_fn(), marking=pipeline.marking)
+            recorded_time=pipeline.now_fn(),
+            # a re-append never re-classifies: keep the failure item's marking
+            marking=marking_from_record(open_failure["marking"])
+            if isinstance(open_failure.get("marking"), dict)
+            else open_failure["marking"])
         store.append("REVIEW_ITEM_RECORDED", resolved,
                      recorded_time=resolved.recorded_time, actor=pipeline.actor)
     return {"route_id": route["route_id"],

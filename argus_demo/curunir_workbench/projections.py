@@ -213,14 +213,21 @@ class MissionProjection:
         # Persisted details across the planes embed TRUNCATED ids (id[:16],
         # id[:18], id[:24] — e.g. "claim-1a2b…=STALE"); those prefixes are a
         # correlatable identifier, so each hidden id contributes its full form
-        # and those prefix lengths. Sorted longest-first so the full id (and
-        # the longest prefix) always wins the match.
+        # and those prefix lengths — BUT a prefix is added only when it is not
+        # also a prefix of some VISIBLE id (family prefixes like
+        # "review-expected-" are shared by siblings; scrubbing them would
+        # corrupt a cleared user's own visible ids). Sorted longest-first so
+        # the full id and the longest safe prefix always win the match.
+        visible_ids = self.visible_id_set()
         needles: set[str] = set()
         for h in hidden:
             needles.add(h)
             for cut in (24, 18, 16):
-                if len(h) > cut:
-                    needles.add(h[:cut])
+                if len(h) <= cut:
+                    continue
+                prefix = h[:cut]
+                if not any(vid.startswith(prefix) for vid in visible_ids):
+                    needles.add(prefix)
         self._scrub_re = re.compile(
             "|".join(re.escape(n) + r"(?:@v\d+)?"
                      for n in sorted(needles, key=len, reverse=True))

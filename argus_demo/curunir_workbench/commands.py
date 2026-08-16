@@ -67,11 +67,16 @@ def _validate_inbound(projection: MissionProjection, *,
     corrupting the record's real reference.
 
     Free text is scanned for (a) any of the caller's OWN hidden ids
-    (shape-independent, from the exact hidden set — this is what a probe or
-    a copy-paste of restricted state would carry) and (b) digest-shaped
-    tokens that do not resolve. Word-form and non-digest nonexistent tokens
-    are not id-detectable in prose; that residual free-text existence oracle
-    is a stated V6.6 limitation, not a structured-reference one."""
+    (shape-independent, from the exact hidden set — a probe or a paste of
+    restricted state carries these) and (b) digest-shaped tokens that do not
+    resolve. RESIDUAL, stated honestly: a NON-digest, nonexistent id-shaped
+    token in prose is not rejected (we cannot distinguish it from an ordinary
+    hyphenated word), while a non-digest HIDDEN id is. For an id whose form
+    an analyst can guess (a mnemonic object id), that asymmetry is a narrow
+    free-text existence oracle. Production ids are digest-shaped, where the
+    two branches are symmetric; the residual is bounded to guessable-mnemonic
+    ids and is a V6.6 limitation, not a structured-reference one (reference
+    FIELDS are airtight: hidden and nonexistent are rejected identically)."""
     known = projection.visible_id_set()
     hidden = projection.hidden_ids
     bad: list[str] = []
@@ -85,8 +90,14 @@ def _validate_inbound(projection: MissionProjection, *,
         text = str(text or "")
         if "REDACTED" in text:
             bad.append("REDACTED")
-        for token in _FREE_TOKEN_RE.findall(text):
-            base = token.split("@v")[0]
+        for match in _FREE_TOKEN_RE.finditer(text):
+            # a token whose preceding char is '/' or '.' is a URL path or
+            # dotted-host segment (reg.example/lookup/lei-0123…), not a record
+            # id — analysts paste registry/archive links into notes and prose
+            prev = text[match.start() - 1] if match.start() > 0 else " "
+            if prev in "/.":
+                continue
+            base = match.group(0).split("@v")[0]
             if base in hidden:
                 bad.append(base)
             elif _ID_TOKEN_RE.fullmatch(base) and base not in known:
@@ -138,6 +149,49 @@ def _record_marking(record: Mapping[str, Any]) -> Marking:
         if isinstance(record.get("marking"), dict) else record["marking"]
 
 
+def _reference_marking(ctx: "CommandContext", projection: MissionProjection, *,
+                       refs: tuple, compartments: tuple[str, ...] = ()) -> Marking:
+    """The write marking for a NEW record that CITES existing state: the
+    high-water-mark of the actor's declared marking and every reference it
+    carries. A record is never less restricted than anything it is about —
+    a report/requirement/task/view whose prose or fields reference a
+    compartmented subject is itself compartmented. The actor must be cleared
+    for the result (`marked` already enforces the compartment floor; this
+    also refuses a join above the actor's own access)."""
+    markings = [marked(ctx, compartments)]
+    for ref in refs:
+        if not ref:
+            continue
+        found = projection.marking_of(str(ref))
+        if isinstance(found, dict):
+            markings.append(marking_from_record(found))
+    result = most_restrictive(markings)
+    if not can_view(result, ctx.context):
+        raise PermissionError(
+            "this record references state above your access; it cannot be "
+            "written at a classification you cannot yourself view")
+    return result
+
+
+def _definition_refs(definition: Mapping[str, Any]) -> tuple:
+    """Every string value nested in a saved-view definition — candidate
+    object/record references whose marking the view must inherit."""
+    out: list[str] = []
+
+    def walk(value):
+        if isinstance(value, str):
+            out.append(value)
+        elif isinstance(value, Mapping):
+            for v in value.values():
+                walk(v)
+        elif isinstance(value, (list, tuple)):
+            for v in value:
+                walk(v)
+
+    walk(definition)
+    return tuple(out)
+
+
 @dataclass
 class CommandContext:
     """One authenticated actor operating one mission root."""
@@ -187,7 +241,7 @@ def annotate(ctx: CommandContext, *, target_kind: str, target_id: str,
              anchor_ref: str = "") -> dict:
     ctx.require_visible_marking()
     projection = ctx.projection()
-    _validate_inbound(projection, refs=(anchor_ref,), texts=(text,))
+    _validate_inbound(projection, refs=(anchor_ref, reply_to), texts=(text,))
     # the annotation inherits the most restrictive of its TARGET's and its
     # ANCHOR's markings: discussion of compartmented state is compartmented,
     # through EITHER reference field, never PUBLIC-by-default
@@ -232,9 +286,12 @@ def open_requirement(ctx: CommandContext, *, question: str, priority: str,
                      due_time: str | None = None,
                      affected_ids: tuple[str, ...] = (),
                      compartments: tuple[str, ...] = ()) -> dict:
-    _validate_inbound(ctx.projection(), refs=affected_ids,
+    projection = ctx.projection()
+    _validate_inbound(projection, refs=affected_ids,
                       texts=(question, rationale, mission_context, closure_criteria))
-    write_marking = marked(ctx, compartments)
+    # a requirement citing compartmented affected state is itself compartmented
+    write_marking = _reference_marking(ctx, projection, refs=affected_ids,
+                                       compartments=compartments)
     requirement_id = digest_id("req", question, mission_context)
     existing = None
     for record in ctx.store.records_of("information_requirement"):
@@ -264,15 +321,19 @@ def assign_task(ctx: CommandContext, *, assigned_actor: str, task_type: str,
                 assigned_role: str = "ANALYST", due_time: str | None = None,
                 depends_on: tuple[str, ...] = (),
                 compartments: tuple[str, ...] = ()) -> dict:
-    _validate_inbound(ctx.projection(), refs=affected_ids + depends_on,
+    projection = ctx.projection()
+    _validate_inbound(projection, refs=affected_ids + depends_on,
                       texts=(required_action,))
+    write_marking = _reference_marking(ctx, projection,
+                                       refs=affected_ids + depends_on,
+                                       compartments=compartments)
     workflow = MissionWorkflow(ctx.store)
     return workflow.assign_task(
         assigned_role=assigned_role, assigned_actor=assigned_actor,
         task_type=task_type, affected_ids=affected_ids,
         required_action=required_action, due_time=due_time,
         depends_on=depends_on, recorded_time=ctx.now_fn(),
-        marking=marked(ctx, compartments), actor=ctx.actor)
+        marking=write_marking, actor=ctx.actor)
 
 
 def transition_workflow(ctx: CommandContext, *, subject_kind: str, subject_id: str,
@@ -537,6 +598,13 @@ def project_forecast_warning(ctx: CommandContext, forecast_id: str, *,
     forecast_marking = _record_marking(ctx.store.current_forecasts()[forecast_id])
     objective_marking = _record_marking(ctx.store.current_objectives()[objective_id])
     warning_marking = most_restrictive([forecast_marking, objective_marking])
+    if not can_view(warning_marking, ctx.context):
+        # the join of a forecast and objective the actor can each view may be
+        # above the actor's own access (split releasability); refuse rather
+        # than strand an un-viewable warning
+        raise PermissionError(
+            "the warning would be classified above your own access; you "
+            "cannot project this forecast onto this objective")
     return project_warning(ctx.analytic(warning_marking), forecast_id=forecast_id,
                            objective_id=objective_id)
 
@@ -584,7 +652,7 @@ def create_watch(ctx: CommandContext, *, need_id: str, target_kind: str,
     # and query_value are EXTERNAL identifiers (an LEI, a URL, a phrase), not
     # internal record ids — none is strict-validated. Only the free-text
     # blind-spot notes and REDACTED/hidden leakage are checked.
-    _soft_reject(ctx.projection(), (need_id,))
+    _soft_reject(ctx.projection(), (need_id, target_ref, query_value))
     _validate_inbound(ctx.projection(), texts=tuple(blind_spots))
     now = ctx.now_fn()
     watch_id = digest_id("watch", need_id, source_id, operation, query_value)
@@ -642,16 +710,22 @@ def save_view(ctx: CommandContext, *, title: str, view_kind: str,
     import json as _json
     from .contracts import SavedViewRecord
     ctx.require_visible_marking()
-    _validate_inbound(ctx.projection(),
+    projection = ctx.projection()
+    _validate_inbound(projection,
                       texts=(title, _json.dumps(definition, default=str)))
     now = ctx.now_fn()
     view_id = digest_id("savedview", ctx.actor, view_kind, title)
     existing = ctx.store.latest_by_id("workbench_saved_view", "view_id").get(view_id)
+    # a saved view whose focus/filters name compartmented objects is
+    # compartmented (its definition embeds those ids)
+    write_marking = _reference_marking(ctx, projection,
+                                       refs=_definition_refs(definition),
+                                       compartments=compartments)
     record = SavedViewRecord(
         view_id=view_id, title=title, author=ctx.actor, view_kind=view_kind,
         definition=dict(definition), recorded_time=now,
         marking=marking_from_record(existing["marking"]) if existing
-        else marked(ctx, compartments),
+        else write_marking,
         version=(existing["version"] + 1) if existing else 1)
     try:
         ctx.store.append("WORKBENCH_SAVED_VIEW_RECORDED", record,
@@ -663,9 +737,18 @@ def save_view(ctx: CommandContext, *, title: str, view_kind: str,
 
 # ---- reports -----------------------------------------------------------------
 
+def _section_refs(sections: list[Mapping[str, Any]]) -> tuple:
+    refs: list[str] = []
+    for section in sections:
+        for sentence in section.get("sentences", ()):
+            refs += list(sentence.get("basis_refs", ()))
+            refs += list(sentence.get("assumption_ids", ()))
+        refs += list(section.get("option_ids", ()))
+    return tuple(refs)
+
+
 def _validate_sections(projection: MissionProjection,
                        sections: list[Mapping[str, Any]]) -> None:
-    refs: list[str] = []
     texts: list[str] = []
     for section in sections:
         texts.append(str(section.get("title", "")))
@@ -673,10 +756,7 @@ def _validate_sections(projection: MissionProjection,
             texts += [str(sentence.get("text", "")),
                       str(sentence.get("inference_note", "")),
                       str(sentence.get("unresolved_reason", ""))]
-            refs += list(sentence.get("basis_refs", ()))
-            refs += list(sentence.get("assumption_ids", ()))
-        refs += list(section.get("option_ids", ()))
-    _validate_inbound(projection, refs=tuple(refs), texts=tuple(texts))
+    _validate_inbound(projection, refs=_section_refs(sections), texts=tuple(texts))
 
 
 def create_report(ctx: CommandContext, *, title: str, question: str,
@@ -685,8 +765,12 @@ def create_report(ctx: CommandContext, *, title: str, question: str,
     projection = ctx.projection()
     _validate_inbound(projection, texts=(title, question))
     _validate_sections(projection, sections)
+    # a report that cites compartmented basis is itself compartmented
+    write_marking = _reference_marking(ctx, projection,
+                                       refs=_section_refs(sections),
+                                       compartments=compartments)
     return reports_module.create_report(
-        ctx.store, actor=ctx.actor, marking=marked(ctx, compartments),
+        ctx.store, actor=ctx.actor, marking=write_marking,
         now=ctx.now_fn(), title=title, question=question, sections=sections,
         state_token=projection.state_token)
 
@@ -695,10 +779,20 @@ def edit_report(ctx: CommandContext, report_id: str, *, expected_version: int,
                 sections: list[Mapping[str, Any]], title: str | None = None,
                 question: str | None = None, change_note: str = "") -> dict:
     projection = ctx.projection()
-    if projection.get("workbench_report", report_id) is None:
+    current = projection.get("workbench_report", report_id)
+    if current is None:
         raise NotFound(f"unknown report: {report_id}")
     _validate_inbound(projection, texts=tuple(t for t in (title, question, change_note) if t))
     _validate_sections(projection, sections)
+    # an edit re-append preserves the report's own marking (never re-classifies),
+    # so it must not introduce a reference MORE restricted than the report can
+    # hold — that prose would sit in an under-classified record. Refuse it.
+    report_marking = _record_marking(current)
+    ref_marking = _reference_marking(ctx, projection, refs=_section_refs(sections))
+    if most_restrictive([report_marking, ref_marking]).to_record() != report_marking.to_record():
+        raise CommandError(
+            "the edit cites state more restricted than this report; create a "
+            "report at that classification instead of adding it here")
     try:
         return reports_module.edit_report(
             ctx.store, report_id, actor=ctx.actor, actor_kind=ctx.actor_kind,

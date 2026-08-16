@@ -179,7 +179,11 @@ def _queue_stale_basis(ctx: IntegrationContext, hypothesis: Mapping[str, Any],
         subject_id=hypothesis["hypothesis_id"],
         detail=f"supporting basis degraded ({states}); status now {hypothesis['status']}",
         evidence_refs=degraded_ids, status="OPEN", resolution_note="",
-        recorded_time=now, marking=ctx.marking)
+        recorded_time=now,
+        # the item is ABOUT the hypothesis — it inherits the hypothesis's
+        # marking, never the (possibly lower) refresh context's marking
+        marking=marking_from_record(hypothesis["marking"])
+        if isinstance(hypothesis.get("marking"), dict) else hypothesis["marking"])
     store.append("REVIEW_ITEM_RECORDED", item, recorded_time=now, actor=ctx.actor)
 
 

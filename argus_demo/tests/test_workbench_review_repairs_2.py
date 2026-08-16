@@ -70,11 +70,14 @@ def test_requirement_fold_neither_discloses_nor_declassifies(mission):
 
 
 def test_base_view_is_scrubbed_of_hidden_ids(mission):
-    """Round-2 C2: a PUBLIC requirement whose refs/rationale name hidden
-    analytic state serializes scrubbed through base_view and overview."""
+    """Round-2 C2 + round-5 C3: base_view is scrubbed of hidden ids, AND a
+    requirement that CITES a compartmented assumption is itself compartmented
+    (round 5) — a strictly stronger guarantee than scrubbing a PUBLIC record."""
     ctx, seeded, cc = mission
     secret_assumption = seeded["secret_assumption_id"]
-    public = commands.open_requirement(
+    # round 5: the requirement inherits the assumption's SPECIAL marking, so
+    # analyst-b never sees the requirement at all
+    special = commands.open_requirement(
         cc(CTX_A), question="Does the dependency assumption hold?",
         priority="MEDIUM", mission_context="acme-mission",
         rationale=f"tests {secret_assumption}",
@@ -82,9 +85,20 @@ def test_base_view_is_scrubbed_of_hidden_ids(mission):
     view_b = MissionProjection(ctx.store, CTX_B)
     blob = json.dumps(view_b.base_view) + json.dumps(view_b.overview())
     assert secret_assumption not in blob
-    mine = next(r for r in view_b.base_view["information_requirements"]
-                if r["requirement_id"] == public["requirement_id"])
-    assert "REDACTED" in mine["rationale"]
+    assert not any(r["requirement_id"] == special["requirement_id"]
+                   for r in view_b.base_view["information_requirements"])
+    # the base-view SCRUB itself still holds for a genuinely PUBLIC record
+    # that references hidden state through a non-marking-bearing field
+    from curunir_semantic.contracts import ReviewItem
+    item = ReviewItem(item_id="ri-bv", kind="STALE_BASIS", subject_kind="object",
+                      subject_id=seeded["status_claim"]["claim_id"],
+                      detail=f"rests on {secret_assumption}", evidence_refs=(),
+                      status="OPEN", resolution_note="", recorded_time=ctx.now_fn(),
+                      marking=MARK, version=1)
+    ctx.store.append("REVIEW_ITEM_RECORDED", item, recorded_time=item.recorded_time,
+                     actor="analyst-a")
+    served = MissionProjection(ctx.store, CTX_B).get("review_item", "ri-bv")
+    assert secret_assumption not in json.dumps(served) and "REDACTED" in served["detail"]
 
 
 def test_workflow_transition_requires_visibility(mission):

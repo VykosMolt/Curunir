@@ -127,19 +127,22 @@ def most_restrictive(markings: list[Marking]) -> Marking:
     for record in records:
         caveats += tuple(record.get("caveats", ()))
     authorities = {record["owning_authority"] for record in records}
-    # When releasability is empty a marking is org-locked: can_view falls back
-    # to context.organisation == owning_authority. A single owning_authority
-    # cannot express "viewable only by members of BOTH auth-A and auth-B", so
-    # an org-locked join across differing authorities would DOWNGRADE one
-    # input (a viewer of the chosen authority could read state owned by the
-    # other). No single Marking is a safe join there — fail closed rather than
-    # declassify. Same-authority joins (the mission's own case) are exact.
-    if not releasability and len(authorities) > 1:
+    # An empty-releasability marking is ORG-LOCKED: can_view falls back to
+    # context.organisation == owning_authority — a DIFFERENT visibility axis
+    # than releasability, not a stricter point on the same one. If the join
+    # collapses to org-locked while any input DECLARED releasability, the
+    # result is viewable by an org member who could NOT view that releasable
+    # input (releasable markings ignore organisation), a write-down. And a
+    # single owning_authority cannot express "viewable only by members of
+    # both auth-A and auth-B". No single Marking is a safe join in either
+    # case — fail closed rather than declassify. Same-authority, same-axis
+    # joins (the mission's own case) are exact.
+    any_releasable = any(r for r in releasabilities)
+    if not releasability and (len(authorities) > 1 or any_releasable):
         raise ValueError(
-            "cannot form a safe join across differing owning authorities with "
-            f"no shared releasability: {sorted(authorities)} — an org-locked "
-            "record derived from multiple authorities has no single-marking "
-            "representation; classify it explicitly")
+            "cannot form a safe single-marking join: the result would be "
+            f"org-locked ({sorted(authorities)}) while an input was releasable "
+            "or spanned authorities — classify the derived record explicitly")
     return Marking(owning_authority=records[0]["owning_authority"],
                    compartments=tuple(sorted(compartments)),
                    releasability=releasability, min_role=min_role,

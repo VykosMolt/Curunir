@@ -22,6 +22,7 @@ from __future__ import annotations
 from typing import Any, Mapping
 
 from argus.source_intelligence.models import digest_id
+from curunir_operational.access import marking_from_record
 from curunir_operational.canonical import parse_time
 
 from .contracts import WARNING_TIERS, WarningRecord
@@ -251,7 +252,10 @@ def project_warning(ctx: AnalyticContext, *, forecast_id: str,
     merged["history"] = tuple(existing["history"]) + (f"{transition}:"
                                                       f"{derived['tier']}",)
     merged["recorded_time"] = now
-    merged["marking"] = ctx.marking
+    # a re-append never re-classifies: keep the warning's own marking (the
+    # high-water mark of the forecast/objective it was first projected from)
+    merged["marking"] = marking_from_record(existing["marking"]) \
+        if isinstance(existing.get("marking"), dict) else existing["marking"]
     merged["impact_path_ids"] = tuple(merged["impact_path_ids"])
     merged["component_basis"] = tuple(tuple(pair)
                                       for pair in merged["component_basis"])

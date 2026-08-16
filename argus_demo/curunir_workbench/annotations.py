@@ -30,7 +30,10 @@ def create_annotation(store: WorkbenchStore, projection: MissionProjection, *,
     or imaginary state is refused (unknown and forbidden indistinguishable)."""
     if not _target_visible(projection, target_kind, target_id):
         raise NotFound(f"unknown target: {target_kind}/{target_id}")
-    if reply_to and store.current_annotations().get(reply_to) is None:
+    if reply_to and projection.get("workbench_annotation", reply_to) is None:
+        # gate on the AUTHOR's view: replying into a thread they cannot see is
+        # refused identically to a nonexistent parent (no existence oracle,
+        # no writing into a compartmented discussion)
         raise NotFound(f"unknown parent annotation: {reply_to}")
     record = AnnotationRecord(
         annotation_id=digest_id("annotation", actor, target_kind, target_id, now, text[:64]),
