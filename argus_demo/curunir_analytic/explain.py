@@ -73,7 +73,15 @@ def explain_object(store: AnalyticStore, kind: str, object_id: str) -> dict[str,
                                     "coverage_notes": ()}
     what = record.get("title") or record.get("statement") \
         or record.get("summary") or record.get("description") \
+        or record.get("question") \
         or f"{kind} {object_id[:24]}"
+    if kind == "analytic_forecast":
+        what = (f"p={record['probability']:.2f} that: {record['question']} "
+                f"(horizon {record['horizon_time'][:19]})")
+    if kind == "strategic_warning":
+        what = (f"{record['tier']} warning ({record['tier_rule_id']}): forecast "
+                f"{record['forecast_id'][:24]} threatens objective "
+                f"{record['objective_id'][:24]}")
     transitions = store.transitions_for(object_id)
     inferential = []
     if kind == "impact_path":
@@ -90,9 +98,24 @@ def explain_object(store: AnalyticStore, kind: str, object_id: str) -> dict[str,
                                    "ANALYST_ASSESSMENT"):
         inferential.append(f"the object itself is {record['authority']}, "
                            f"not a direct observation")
+    if kind == "analytic_forecast":
+        inferential.append(f"the probability was authored by {record['author']} "
+                           f"({record['provenance_kind']}): "
+                           f"{record['probability_basis'][:160]}")
+    if kind == "strategic_warning":
+        for component, why in record["component_basis"]:
+            inferential.append(f"{component}: {why[:140]}")
     uncertainty = []
     if record.get("uncertainty_note"):
         uncertainty.append(record["uncertainty_note"])
+    if kind == "analytic_forecast" and record.get("status") == "UPDATE_REQUIRED":
+        uncertainty.append("UPDATE_REQUIRED: the probability is an unreviewed "
+                           "number over changed evidence")
+    if kind == "strategic_warning" \
+            and record.get("evidence_confidence") in ("NONE", "WEAK"):
+        uncertainty.append(f"warning evidence confidence is "
+                           f"{record['evidence_confidence']}: the tier rule caps "
+                           f"escalation accordingly")
     if basis.get("degraded_claim_count"):
         uncertainty.append(f"{basis['degraded_claim_count']} supporting claim(s) "
                            f"no longer CURRENT")

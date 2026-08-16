@@ -2,12 +2,16 @@
 discriminating observations and information requirements through the
 EXISTING active-collection machinery — no parallel planner.
 
-The four uncertainty patterns this module recognizes:
+The uncertainty patterns this module recognizes:
 
   theme important but single-origin      → seek an independent source family
   narrative origin unresolved            → seek earlier/historical manifestations
   inferred interest without public stand → seek a primary statement
   impact path resting on weak edges      → seek evidence discriminating the edge
+  forecast single-family or coverage-blocked → seek independent corroboration,
+                                           or search exactly the declared sources
+  absence indicator needing its coverage → look where the thing would appear,
+                                           before (or after) its deadline
 
 Each becomes a typed DiscriminatingObservation (idempotent) plus a mission
 information requirement; the existing EIV planner ranks routes with the
@@ -151,6 +155,93 @@ def analytic_collection_needs(store: AnalyticStore) -> list[dict[str, Any]]:
             desired_subject=anchor_claim["subject_ref"],
             desired_attribute=anchor_claim["predicate"],
             independence_required=True))
+
+    open_gaps = [item for item in store.open_review_items()
+                 if item["kind"] == "COVERAGE_GAP"]
+
+    for forecast in store.current_forecasts().values():
+        if forecast["status"] not in ("OPEN", "UPDATE_REQUIRED",
+                                      "HORIZON_PASSED"):
+            continue
+        rule = forecast["resolution"]
+        coverage_blocked = any(item["subject_id"] == forecast["forecast_id"]
+                               for item in open_gaps)
+        single_family = len(forecast["basis"]["origin_families"]) <= 1
+        if not coverage_blocked and not single_family:
+            continue
+        anchor_claim = None
+        for claim_id in forecast["basis"]["supporting_claim_ids"]:
+            anchor_claim = _claim(store, claim_id)
+            if anchor_claim:
+                break
+        if rule["kind"] == "CLAIM_PREDICATE":
+            desired_subject = rule["claim_subject_ref"]
+            desired_attribute = rule["claim_attribute"]
+            desired_type = "ENTITY_ATTRIBUTE"
+        elif anchor_claim is not None:
+            desired_subject = anchor_claim["subject_ref"]
+            desired_attribute = anchor_claim["predicate"]
+            desired_type = "STATEMENT"
+        else:
+            # a non-claim-predicate forecast with no resolvable supporting
+            # claim gives the discriminator nothing typed to bind to — the
+            # skip is deliberate and mirrors the indicator loop below
+            continue
+        if coverage_blocked:
+            question = (f"Resolution of the forecast "
+                        f"{forecast['question'][:100]!r} is coverage-blocked: "
+                        f"the sources its rule declares "
+                        f"({', '.join(rule['absence_required_source_ids'])}) "
+                        f"have not been successfully searched since the "
+                        f"horizon. Silence means nothing until they are.")
+        else:
+            question = (f"Does any independent source family bear on the "
+                        f"forecast {forecast['question'][:100]!r}? Its entire "
+                        f"basis descends from "
+                        f"{'one origin family' if forecast['basis']['origin_families'] else 'no evidence at all'}.")
+        needs.append(_need(
+            "analytic_forecast", forecast["forecast_id"], question,
+            claim_ids=tuple(forecast["basis"]["supporting_claim_ids"]),
+            desired_type=desired_type, desired_subject=desired_subject,
+            desired_attribute=desired_attribute,
+            independence_required=not coverage_blocked))
+
+    from .contracts import FORECAST_TERMINAL_STATUSES
+    forecasts = store.current_forecasts()
+    for indicator in store.current_indicators().values():
+        blocked = indicator["status"] == "COVERAGE_BLOCKED"
+        watching_absence = indicator["status"] == "ARMED" \
+            and indicator["kind"] == "ABSENCE"
+        if not blocked and not watching_absence:
+            continue
+        if all(forecasts.get(fid) is None
+               or forecasts[fid]["status"] in FORECAST_TERMINAL_STATUSES
+               for fid in indicator["forecast_ids"]):
+            continue  # a dead question does not drive collection
+        required = ", ".join(indicator["coverage_required_source_ids"]) \
+            or f"{indicator['coverage_min_successful_sources']} source(s)"
+        watched_claims = tuple(dict.fromkeys(
+            claim_id
+            for forecast_id in indicator["forecast_ids"]
+            for claim_id in store.current_forecasts()
+            .get(forecast_id, {"basis": {"supporting_claim_ids": ()}})
+            ["basis"]["supporting_claim_ids"]))
+        if not watched_claims:
+            continue  # nothing typed to bind the discriminator to
+        needs.append(_need(
+            "forecast_indicator", indicator["indicator_id"],
+            (f"The absence indicator {indicator['description'][:120]!r} "
+             + ("passed its deadline without its declared coverage"
+                if blocked else
+                f"needs its declared coverage ({required}) searched before "
+                f"its deadline {indicator['deadline'][:19]}")
+             + ": absence only means something where someone looked."),
+            claim_ids=watched_claims,
+            desired_type=indicator["desired_observation_type"]
+            or "ENTITY_ATTRIBUTE",
+            desired_subject=indicator["desired_subject_ref"],
+            desired_attribute=indicator["desired_attribute"],
+            independence_required=False))
 
     return needs
 

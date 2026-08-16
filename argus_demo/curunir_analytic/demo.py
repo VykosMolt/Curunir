@@ -18,6 +18,11 @@ Phase 3  COLLECT  (fresh process): analytical uncertainty → discriminator →
 Phase 4  REPLAY   (fresh process): export → import → identical analytical
          views, chain verification, anchor recovery from replayed payloads
          alone, and proof that no model provider was invoked anywhere.
+Phase 6  FORECAST (fresh process, live network): analyst forecasts over the
+         real registry claims — machine TRUE resolution against standing
+         evidence, the coverage gate refusing FALSE-from-silence until a
+         real post-horizon search lands, a pre-authorized indicator, a
+         named-rule warning projection, and the calibration scoreboard.
 
 Every phase-1/3 retrieval is a real network request. Nothing is mocked, and
 nothing pretends: where the acquired evidence cannot answer a question, the
@@ -456,6 +461,214 @@ def phase_5(root: Path) -> dict:
     }
 
 
+# ---- phase 6: forecasting and strategic warning (live) ---------------------
+
+
+def phase_6(root: Path, operator: str) -> dict:
+    """Live forecast lifecycle over the real Apple evidence:
+
+    * an analyst forecast machine-resolves TRUE against the real GLEIF claim;
+    * a second forecast reaches its horizon and shows the coverage gate —
+      a live search executed BEFORE the horizon cannot prove absence AT the
+      horizon, so resolution blocks until a real post-horizon search lands;
+    * a warning projects the open forecast onto the phase-2 objective through
+      the named tier rule, and resolves when the question settles;
+    * the calibration scoreboard scores exactly what resolved and reports
+      exactly what it could not score.
+    """
+    import time as _time
+
+    from .calibration import scoreboard
+    from .contracts import IndicatorEffect, ResolutionRule
+    from .forecasts import (create_forecast, refresh_forecast,
+                            try_machine_resolution)
+    from .indicators import arm_indicator
+    from .warning import project_warning, refresh_warnings
+
+    pipeline, ctx = _stores(root)
+    store = ctx.store
+    fabric = _fabric(root, store)
+    subject = f"LEI:{SUBJECT_LEI}"
+    registration_claim = next(
+        (c for c in store.current_claims().values()
+         if c["subject_ref"] == subject
+         and c["predicate"] == "registration_status"), None)
+    if registration_claim is None:
+        return {"error": "run phases 1-2 first: no registration_status claim"}
+    observed_value = registration_claim["object_or_value"]
+    objective_id = next((o["objective_id"]
+                         for o in store.current_objectives().values()
+                         if o["mission_context"] == MISSION), "")
+
+    # forecast A: settles TRUE (early, pre-horizon) against the standing
+    # real claim — a machine-resolution demonstration. The scoreboard
+    # excludes it from aggregates (resolved_by_prior_evidence): its answer
+    # was on the record when it was authored, and the demo says so
+    from datetime import timedelta as _timedelta
+    horizon_a = (datetime.now(timezone.utc) + _timedelta(hours=1)).isoformat()
+    forecast_a = create_forecast(
+        ctx,
+        question=f"Will GLEIF registration_status for {SUBJECT_NAME} read "
+                 f"{observed_value} at or before the horizon?",
+        outcome_semantics=f"TRUE iff a CURRENT registration_status claim "
+                          f"reads {observed_value!r} at or before the horizon",
+        proposition_refs=(("claim", registration_claim["claim_id"]),),
+        horizon_time=horizon_a,
+        resolution=ResolutionRule(
+            kind="CLAIM_PREDICATE",
+            criteria=f"GLEIF registration_status reads {observed_value}",
+            claim_subject_ref=subject, claim_attribute="registration_status",
+            expected_value=observed_value,
+            absence_min_successful_sources=1,
+            absence_required_source_ids=("gleif",)),
+        probability=0.92,
+        probability_basis="the registry record was ISSUED at acquisition and "
+                          "large-issuer lapses inside a day are rare",
+        author=operator, domain="corporate-registry",
+        supporting_claim_ids=[registration_claim["claim_id"]])
+
+    # forecast B: a lapse that will NOT be observed — the honest FALSE path
+    from datetime import timedelta
+    horizon_b = (datetime.now(timezone.utc)
+                 + timedelta(seconds=20)).isoformat()
+    forecast_b = create_forecast(
+        ctx,
+        question=f"Will GLEIF registration_status for {SUBJECT_NAME} read "
+                 f"LAPSED by {horizon_b[:19]}?",
+        outcome_semantics="TRUE iff a CURRENT registration_status claim reads "
+                          "'LAPSED' at or before the horizon",
+        proposition_refs=(("claim", registration_claim["claim_id"]),),
+        horizon_time=horizon_b,
+        resolution=ResolutionRule(
+            kind="CLAIM_PREDICATE",
+            criteria="GLEIF registration_status reads LAPSED",
+            claim_subject_ref=subject, claim_attribute="registration_status",
+            expected_value="LAPSED",
+            absence_min_successful_sources=1,
+            absence_required_source_ids=("gleif",)),
+        probability=0.03,
+        probability_basis="no lapse signal in the acquired record; the "
+                          "renewal is not due within the horizon",
+        author=operator, domain="corporate-registry",
+        supporting_claim_ids=[registration_claim["claim_id"]])
+
+    # a pre-authorized indicator: the analyst's conditional judgment on record
+    indicator = arm_indicator(
+        ctx, description=f"GLEIF registration_status for {SUBJECT_NAME} "
+                         f"reads LAPSED",
+        forecast_ids=(forecast_b["forecast_id"],),
+        kind="PRESENCE", direction="SUPPORTS",
+        desired_observation_type="ENTITY_ATTRIBUTE",
+        desired_subject_ref=subject, desired_attribute="registration_status",
+        expected_value="LAPSED",
+        effect=IndicatorEffect(mode="APPLY_PROBABILITY",
+                               target_probability=0.85,
+                               rationale="an observed lapse mostly settles "
+                                         "the lapse question",
+                               authorized_by=operator,
+                               authorized_kind="HUMAN"))
+
+    # the warning projects the open lapse forecast onto the mission objective
+    warning = None
+    if objective_id:
+        warning = project_warning(ctx, forecast_id=forecast_b["forecast_id"],
+                                  objective_id=objective_id)
+
+    # A resolves TRUE against the real claim, machine act with real evidence
+    resolved_a = try_machine_resolution(ctx, forecast_a["forecast_id"])
+
+    # a LIVE search BEFORE B's horizon: real work that cannot prove absence
+    pre = execute_single(fabric, query=_query(
+        forecast_b["forecast_id"], "IDENTIFIER", SUBJECT_LEI, "LOOKUP", "gleif",
+        "pre-horizon search: demonstrates it cannot satisfy the coverage gate"),
+        source_id="gleif")
+    pipeline.process_new_evidence()
+
+    # wait out the horizon, then show the coverage gate holding
+    _time.sleep(max(0.0, (datetime.fromisoformat(horizon_b)
+                          - datetime.now(timezone.utc)).total_seconds()) + 1.0)
+    blocked = refresh_forecast(ctx, forecast_b["forecast_id"],
+                               caused_by="phase-6-horizon")
+    coverage_gap_open = any(
+        item["kind"] == "COVERAGE_GAP"
+        and item["subject_id"] == forecast_b["forecast_id"]
+        for item in store.open_review_items())
+    needs = [n for n in analytic_collection_needs(store)
+             if n["source_id"] == forecast_b["forecast_id"]]
+
+    # a LIVE post-horizon search: only now can silence mean anything
+    post = execute_single(fabric, query=_query(
+        forecast_b["forecast_id"], "IDENTIFIER", SUBJECT_LEI, "LOOKUP", "gleif",
+        "post-horizon search satisfying the declared absence coverage"),
+        source_id="gleif")
+    pipeline.process_new_evidence()
+    resolved_b = try_machine_resolution(ctx, forecast_b["forecast_id"])
+
+    propagate_semantic_changes(ctx)
+    warning_final = store.current_warnings().get(
+        warning["warning_id"]) if warning else None
+    board = scoreboard(store)
+    explanation = explain_object(store, "analytic_forecast",
+                                 forecast_b["forecast_id"])
+    return {
+        "forecast_a": {
+            "question": forecast_a["question"],
+            "authored_probability": forecast_a["probability"],
+            "status": resolved_a["status"],
+            "resolver_kind": resolved_a["resolver_kind"],
+            "resolution_evidence": list(resolved_a["resolution_evidence_refs"]),
+        },
+        "forecast_b": {
+            "question": forecast_b["question"],
+            "authored_probability": forecast_b["probability"],
+            "status_at_horizon": blocked["status"],
+            "coverage_gap_was_open": coverage_gap_open,
+            "collection_needs_raised": [n["question"][:140] for n in needs],
+            "pre_horizon_search": f"{pre.execution.outcome} "
+                                  f"(completed {pre.execution.completed_time[:19]}"
+                                  f" < horizon: cannot prove absence)",
+            "post_horizon_search": post.execution.outcome,
+            "final_status": resolved_b["status"],
+            "resolution_evidence": list(resolved_b["resolution_evidence_refs"]),
+        },
+        "indicator": {
+            "description": indicator["description"],
+            "status": store.current_indicators()[
+                indicator["indicator_id"]]["status"],
+            "note": "never fired: no lapse was observed, so the "
+                    "pre-authorized effect stayed unexecuted; once the "
+                    "watched question settled the indicator expired",
+        },
+        "warning": {
+            "raised_tier": warning["tier"] if warning else None,
+            "components": {k: warning[k] for k in
+                           ("probability_band", "consequence", "time_pressure",
+                            "evidence_confidence")} if warning else None,
+            "tier_rule": warning["tier_rule_id"] if warning else None,
+            "final_status": warning_final["status"] if warning_final else None,
+        },
+        "calibration": {
+            "scored": board["coverage"]["scored"],
+            "authored_after_horizon": board["coverage"]["authored_after_horizon"],
+            "resolved_by_prior_evidence":
+                board["coverage"]["resolved_by_prior_evidence"],
+            "unscored_by_status": board["coverage"]["unscored_by_status"],
+            "overall": board["overall"],
+            "occupied_buckets": [b for b in board["buckets"] if b["count"]],
+            "note": "forecast A demonstrates machine resolution against "
+                    "standing evidence; the scoreboard excludes it from "
+                    "aggregates for exactly that reason — its answer was on "
+                    "the record when it was authored",
+        },
+        "forecast_b_explained": {
+            "WHAT": explanation["WHAT"],
+            "UNCERTAINTY": explanation["UNCERTAINTY"][:4],
+        },
+        "chain_valid": store.verify_chain()["valid"],
+        "model_provider_invocations": len(store.records_of("inference")),
+    }
+
+
 # ---- phase 4: replay ------------------------------------------------------
 
 
@@ -479,6 +692,9 @@ def phase_4(root: Path) -> dict:
             "objectives": s.current_objectives(),
             "assumptions": s.current_assumptions(),
             "paths": s.current_impact_paths(),
+            "forecasts": s.current_forecasts(),
+            "indicators": s.current_indicators(),
+            "warnings": s.current_warnings(),
             "transitions": len(s.records_of("analytic_transition")),
         }
 
@@ -518,7 +734,8 @@ def phase_4(root: Path) -> dict:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--root", required=True)
-    parser.add_argument("--phase", type=int, choices=(1, 2, 3, 4, 5), required=True)
+    parser.add_argument("--phase", type=int, choices=(1, 2, 3, 4, 5, 6),
+                        required=True)
     parser.add_argument("--operator", default="demo-operator")
     args = parser.parse_args(argv)
     root = Path(args.root)
@@ -531,6 +748,8 @@ def main(argv: list[str] | None = None) -> int:
         result = phase_3(root, args.operator)
     elif args.phase == 5:
         result = phase_5(root)
+    elif args.phase == 6:
+        result = phase_6(root, args.operator)
     else:
         result = phase_4(root)
     print(json.dumps(result, indent=2, ensure_ascii=False, default=str))

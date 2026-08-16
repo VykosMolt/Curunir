@@ -16,6 +16,9 @@ propositions/entities/events/relations (curunir_semantic)
 → impact and exposure          (impact.py)
 → historical analogues         (analogues.py)
 → hypotheses / uncertainty     (reused from curunir_semantic)
+→ forecasts and indicators     (forecasts.py, indicators.py)
+→ calibration scoring          (calibration.py)
+→ strategic warning            (warning.py)
 → discriminating collection    (collect.py → existing EIV planner)
 → new evidence → updated analysis (propagate.py)
 ```
@@ -31,12 +34,16 @@ propositions/entities/events/relations (curunir_semantic)
 | `stakeholders` | contextual assessments, position/interest discipline, typed influence, deterministic discovery |
 | `impact` | objectives, assumptions, connected typed paths, uncertainty propagation, response options |
 | `analogues` | evidence-bound episodes, structural retrieval, transfer risks |
+| `forecasts` | authored-probability forecast lifecycle, typed resolution, coverage-gated absence |
+| `indicators` | armed observation patterns, pre-authorized effects, coverage-gated ABSENCE |
+| `calibration` | pure scoring: Brier/log, reliability buckets, ECE, honest coverage |
+| `warning` | named-rule tier projection of forecast × objective × impact |
 | `propagate` | semantic change → affected analytics → transitions/alerts, incrementally |
 | `collect` | analytical uncertainty → discriminators → mission requirements (existing machinery) |
 | `providers` | attributed model-assist boundary; honestly UNAVAILABLE when unconfigured |
 | `explain` | eight-section structured explanation for any analytical object |
 | `cli` | inspection commands (`themes`, `explain KIND ID`, `dependents --claim`, …) |
-| `demo` | five-phase live exercise over real public evidence |
+| `demo` | six-phase live exercise over real public evidence |
 
 ## What each object IS
 
@@ -138,9 +145,10 @@ propagation instead of duplicating it.
 
 ## Analytics drive collection
 
-`collect.analytic_collection_needs(store)` recognizes four uncertainty
+`collect.analytic_collection_needs(store)` recognizes the uncertainty
 patterns (single-family theme; unresolved narrative origin; inferred
-interest without a primary statement; weak impact edge) and
+interest without a primary statement; weak impact edge; single-family or
+coverage-blocked forecast; absence indicator awaiting its coverage) and
 `open_analytic_requirements` turns them into discriminators + mission
 information requirements through the EXISTING active-collection machinery —
 the EIV planner's dependence arithmetic then scores a same-family route at
@@ -162,6 +170,55 @@ as SUPPORTED_INFERENCE. With no provider configured the capability reports
 acts are the always-working path. There is no keyword-rule fake NLP
 anywhere.
 
+## Forecasting and strategic warning
+
+Forecasts are typed, resolvable propositions — never vibes:
+
+* **A probability is authored, never machine-derived** (contract-enforced):
+  an analyst act, or a human-accepted model candidate through the standard
+  gate. Every number carries its `probability_basis`, strictly inside (0,1).
+* **Movement is append-only**: 0.35 → 0.62 is a new version with its
+  reason, actor and evidence; re-creation with a different number is
+  refused. The full history is scoreable later.
+* **Typed resolution** (`ResolutionRule`): CLAIM_PREDICATE and
+  EVENT_OCCURRED resolve by machine as recorded SERVICE acts over the
+  evidence that settled the question; HUMAN_JUDGMENT resolves only by a
+  recorded human act. TRUE may resolve early on matching CURRENT evidence;
+  **FALSE never comes from silence** — post-horizon FALSE requires either
+  claim evidence fresher than the horizon or the rule's declared coverage
+  actually achieved by successful post-horizon fabric executions. Otherwise
+  the forecast waits at HORIZON_PASSED with a COVERAGE_GAP on record, and
+  the gap becomes a collection need.
+* **Indicators** (`indicators.py`): PRESENCE fires only on evidence
+  recorded after arming (what made the question worth watching is not its
+  answer); ABSENCE fires only at its deadline with declared coverage
+  achieved, is defeated (RETIRED) if the watched thing occurs, and blocks
+  (COVERAGE_BLOCKED) otherwise. A firing executes exactly the effect a
+  human pre-authorized at arming time — `APPLY_PROBABILITY` is the
+  analyst's own recorded conditional judgment; `REVIEW_ONLY` flags
+  UPDATE_REQUIRED and queues review. A SERVICE actor can never move a
+  probability on its own authority, and never to any number other than the
+  pre-authorized target.
+* **Calibration** (`calibration.py`): pure functions over the log — Brier,
+  log score, reliability buckets (empty buckets reported), ECE, per
+  author/domain/horizon-band breakdowns. Scoring uses the probability that
+  actually stood before resolution; hindsight leakage raises. Coverage is
+  part of the answer: every scoreboard reports what it could not score.
+* **Strategic warning** (`warning.py`): a deterministic projection of
+  (forecast × objective × impact paths) into a tier via a NAMED rule
+  (`curunir-warning-tier-v1`) over typed components — probability band,
+  objective priority, time pressure, evidence confidence from origin
+  families. The contract refuses a warning without its rule id and
+  component basis. Imminence bumps one tier; NONE/WEAK evidence caps at
+  PRIORITY — an unsupported number cannot drive CRITICAL alone.
+  Re-projection appends only on change (ESCALATED / DOWNGRADED /
+  COMPONENT_CHANGED), and a settled forecast resolves its warnings.
+
+The propagation pass (`propagate.py`) runs the whole plane on every call:
+new evidence fires indicators, refreshers flag degraded bases (the machine
+never moves the number), warnings re-derive, and escalations raise
+dedup-keyed mission alerts. Quiet passes append nothing.
+
 ## Replay
 
 The layer is pure event-log state: a fresh `AnalyticStore(root)` (or
@@ -178,6 +235,7 @@ cd argus_demo
 .venv/bin/python -m curunir_analytic.demo --root /tmp/analytic-demo --phase 2 --operator you
 .venv/bin/python -m curunir_analytic.demo --root /tmp/analytic-demo --phase 3 --operator you
 .venv/bin/python -m curunir_analytic.demo --root /tmp/analytic-demo --phase 5   # analogue
+.venv/bin/python -m curunir_analytic.demo --root /tmp/analytic-demo --phase 6 --operator you  # forecasting (live)
 .venv/bin/python -m curunir_analytic.demo --root /tmp/analytic-demo --phase 4   # replay
 # inspection
 .venv/bin/python -m curunir_analytic.cli --root /tmp/analytic-demo themes
@@ -188,7 +246,9 @@ cd argus_demo
 
 ## Deferred
 
-Forecasting/calibration/strategic warning (V6.5), the analyst workbench GUI
-(V6.6), report/dossier generation (structured projections exist; rendering
-does not), and mission-package impact taxonomies (core carries only the
-propagation machinery).
+The analyst workbench GUI (V6.6), report/dossier generation (structured
+projections exist; rendering does not), EVENT_OCCURRED machine resolution
+against activity records (the rule kind is typed and validated; the matcher
+ships when a real activity-producing exercise needs it), and
+mission-package impact taxonomies (core carries only the propagation
+machinery).

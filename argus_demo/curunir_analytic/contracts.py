@@ -48,7 +48,8 @@ PROVENANCE_KINDS = ("RULE", "MODEL", "ANALYST")
 ANALYTIC_KINDS = ("analytic_theme", "analytic_narrative", "narrative_variant",
                   "propagation_edge", "stakeholder_assessment", "influence_assertion",
                   "mission_objective", "analytic_assumption", "impact_path",
-                  "response_option", "historical_episode", "historical_analogue")
+                  "response_option", "historical_episode", "historical_analogue",
+                  "analytic_forecast", "forecast_indicator", "strategic_warning")
 
 THEME_STATUSES = ("EMERGING", "ACTIVE", "CONTESTED", "DECLINING", "STALE",
                   "RESOLVED", "MERGED", "SPLIT")
@@ -130,6 +131,14 @@ TRANSITION_TYPES = {
     "historical_episode": ("RECORDED", "REVISED", "EVIDENCE_UPDATED",
                            "EVIDENCE_DEGRADED"),
     "historical_analogue": ("RETRIEVED", "REVISED", "REJECTED", "EVIDENCE_DEGRADED"),
+    "analytic_forecast": ("CREATED", "PROBABILITY_UPDATED", "UPDATE_REQUIRED",
+                          "INDICATOR_FIRED", "BASIS_DEGRADED", "HORIZON_PASSED",
+                          "RESOLVED_TRUE", "RESOLVED_FALSE", "RESOLVED_VOID",
+                          "WITHDRAWN", "EVIDENCE_UPDATED"),
+    "forecast_indicator": ("ARMED", "FIRED", "COVERAGE_BLOCKED",
+                           "EXPIRED_UNFIRED", "RETIRED"),
+    "strategic_warning": ("RAISED", "ESCALATED", "DOWNGRADED", "COMPONENT_CHANGED",
+                          "RESOLVED", "WITHDRAWN"),
 }
 
 
@@ -841,3 +850,338 @@ class HistoricalAnalogue(Record):
             raise ValueError("an analogy is never a direct observation")
         if self.version > 1 and not self.change_reason:
             raise ValueError("an analogue version beyond 1 requires its change reason")
+
+
+# ---- forecasting / strategic warning --------------------------------------
+
+FORECAST_STATUSES = ("OPEN", "UPDATE_REQUIRED", "HORIZON_PASSED",
+                     "RESOLVED_TRUE", "RESOLVED_FALSE", "RESOLVED_VOID",
+                     "WITHDRAWN")
+FORECAST_TERMINAL_STATUSES = ("RESOLVED_TRUE", "RESOLVED_FALSE",
+                              "RESOLVED_VOID", "WITHDRAWN")
+RESOLUTION_RULE_KINDS = ("CLAIM_PREDICATE", "EVENT_OCCURRED", "HUMAN_JUDGMENT")
+
+INDICATOR_KINDS = ("PRESENCE", "ABSENCE")
+INDICATOR_DIRECTIONS = ("SUPPORTS", "UNDERMINES")
+INDICATOR_STATUSES = ("ARMED", "FIRED", "COVERAGE_BLOCKED", "EXPIRED_UNFIRED",
+                      "RETIRED")
+INDICATOR_EFFECT_MODES = ("REVIEW_ONLY", "APPLY_PROBABILITY")
+
+WARNING_TIERS = ("ROUTINE", "ATTENTION", "PRIORITY", "CRITICAL")
+WARNING_STATUSES = ("ACTIVE", "ESCALATED", "DOWNGRADED", "RESOLVED", "WITHDRAWN")
+PROBABILITY_BANDS = ("REMOTE", "POSSIBLE", "LIKELY", "VERY_LIKELY")
+TIME_PRESSURES = ("DISTANT", "NEAR", "CLOSE", "IMMINENT", "PASSED")
+EVIDENCE_CONFIDENCES = ("NONE", "WEAK", "MODERATE", "STRONG")
+
+
+@dataclass(frozen=True)
+class ResolutionRule(Record):
+    """How a forecast resolves. Machine resolution exists only for typed,
+    evidence-checkable rules; everything else is a recorded human judgment.
+    A FALSE-by-absence verdict additionally requires the coverage the rule
+    declares — "we did not see it" is not "it did not happen" unless the
+    places it would appear were actually looked at."""
+    RECORD_TYPE = "resolution_rule"
+    kind: str
+    criteria: str  # the humanly-stated resolution criterion, always required
+    # CLAIM_PREDICATE: the claim whose value settles the question
+    claim_subject_ref: str = ""
+    claim_attribute: str = ""
+    expected_value: str = ""
+    # EVENT_OCCURRED: an activity of this type on this subject settles TRUE
+    event_activity_type: str = ""
+    event_subject_ref: str = ""
+    # coverage demanded before an absence may resolve FALSE
+    absence_min_successful_sources: int = 1
+    absence_required_source_ids: tuple[str, ...] = ()
+    resolver_role: str = "ANALYST"
+
+    def __post_init__(self):
+        _member(self.kind, RESOLUTION_RULE_KINDS, "resolution rule kind")
+        if not self.criteria:
+            raise ValueError("a resolution rule requires its stated criteria")
+        if self.kind == "CLAIM_PREDICATE" and not (
+                self.claim_subject_ref and self.claim_attribute
+                and self.expected_value):
+            raise ValueError("a claim-predicate rule requires subject, attribute "
+                             "and the value that settles TRUE")
+        if self.kind == "EVENT_OCCURRED" and not (
+                self.event_activity_type and self.event_subject_ref):
+            raise ValueError("an event rule requires the activity type and subject")
+        if self.absence_min_successful_sources < 1:
+            raise ValueError("absence coverage requires at least one source")
+        if self.kind != "HUMAN_JUDGMENT":
+            # these kinds can resolve FALSE by absence — coverage that names
+            # no source would be satisfied by any unrelated search anywhere,
+            # making "we looked" meaningless
+            if not self.absence_required_source_ids:
+                raise ValueError("a machine-resolvable rule must NAME the "
+                                 "sources whose successful search constitutes "
+                                 "absence coverage")
+            if self.absence_min_successful_sources \
+                    > len(self.absence_required_source_ids):
+                raise ValueError("absence coverage cannot demand more sources "
+                                 "than it names: the minimum counts only "
+                                 "declared sources")
+
+
+@dataclass(frozen=True)
+class ForecastRecord(Record):
+    """A forecast is a first-class epistemic object: an exact proposition,
+    explicit outcome semantics, a horizon, a typed resolution rule, a
+    probability with its authored basis, and an append-only update history.
+
+    The invariants that keep it honest:
+      * a probability is NEVER observed or derived — it is an authored
+        judgment (analyst, or a human-accepted model candidate), so
+        provenance is ANALYST or MODEL and authority is inferential;
+      * p is strictly inside (0,1): certainty is not a forecast;
+      * changing a probability is a NEW VERSION with its reason and the
+        evidence that moved it — 0.35 is never overwritten by 0.62;
+      * a resolved forecast carries its resolution evidence and resolver;
+        RESOLVED_TRUE/FALSE without evidence is unconstructible.
+    """
+    RECORD_TYPE = "analytic_forecast"
+    forecast_id: str; version: int
+    question: str            # the exact proposition being forecast
+    outcome_semantics: str   # what counts as TRUE, unambiguously
+    proposition_refs: tuple[tuple[str, str], ...]  # (kind, id) world/analytic refs
+    horizon_time: str
+    resolution: ResolutionRule
+    probability: float
+    probability_basis: str   # the authored rationale for THIS number
+    basis: BasisSummary      # evidence bearing on the question (claims)
+    assumption_ids: tuple[str, ...]
+    indicator_ids: tuple[str, ...]
+    author: str              # analyst id or model id — calibration groups on it
+    domain: str              # calibration grouping, e.g. "corporate-registry"
+    status: str; authority: str
+    provenance_kind: str; inference_id: str; proposal_id: str
+    outcome: str             # "" until resolved; then TRUE/FALSE/VOID
+    resolved_time: str       # "" until resolved
+    resolution_evidence_refs: tuple[str, ...]
+    resolver_id: str; resolver_kind: str
+    change_reason: str
+    history: tuple[str, ...]
+    recorded_time: str; marking: Marking
+
+    def __post_init__(self):
+        _member(self.status, FORECAST_STATUSES, "forecast status")
+        _member(self.authority, AUTHORITY_LEVELS, "authority")
+        require_aware(self.recorded_time); require_aware(self.horizon_time)
+        if self.version < 1:
+            raise ValueError("forecast versions start at 1")
+        if not self.question or not self.outcome_semantics:
+            raise ValueError("a forecast requires its exact question and outcome "
+                             "semantics")
+        if not self.proposition_refs:
+            raise ValueError("a forecast must reference the world-model or "
+                             "analytical state it is about")
+        if not (0.0 < self.probability < 1.0):
+            raise ValueError("a forecast probability lies strictly inside (0,1): "
+                             "certainty is a resolution, not a forecast")
+        if not self.probability_basis:
+            raise ValueError("a probability without its authored basis is a "
+                             "number, not a judgment")
+        if self.provenance_kind not in ("ANALYST", "MODEL"):
+            raise ValueError("a probability is authored, never machine-derived: "
+                             "provenance is ANALYST or a gated MODEL candidate")
+        if self.authority not in ("ANALYST_ASSESSMENT", "SUPPORTED_INFERENCE"):
+            raise ValueError("a probability is never observed or derived")
+        _require_model_inference(self.provenance_kind, self.inference_id,
+                                 authority=self.authority,
+                                 proposal_id=self.proposal_id)
+        if self.version > 1 and not self.change_reason:
+            raise ValueError("a forecast version beyond 1 requires the reason "
+                             "it moved")
+        if self.status in ("RESOLVED_TRUE", "RESOLVED_FALSE"):
+            if not self.resolution_evidence_refs:
+                raise ValueError("a TRUE/FALSE resolution requires the evidence "
+                                 "that settled it")
+            if not self.resolver_id or not self.resolved_time:
+                raise ValueError("a resolution requires its resolver and time")
+            if self.outcome not in ("TRUE", "FALSE"):
+                raise ValueError("a resolved forecast states its outcome")
+        if self.status == "RESOLVED_VOID" and not self.resolver_id:
+            raise ValueError("voiding a forecast is a recorded act")
+        if self.status not in FORECAST_TERMINAL_STATUSES and self.outcome:
+            raise ValueError("an unresolved forecast carries no outcome")
+
+
+@dataclass(frozen=True)
+class IndicatorEffect(Record):
+    """What an indicator firing is pre-authorized to do to its forecasts.
+    APPLY_PROBABILITY is a HUMAN pre-commitment — an analyst's own
+    conditional judgment executing later — never a machine's invention:
+    it requires the authorizing human and a target inside (0,1)."""
+    RECORD_TYPE = "indicator_effect"
+    mode: str
+    target_probability: float | None = None
+    rationale: str = ""
+    authorized_by: str = ""
+    authorized_kind: str = ""
+
+    def __post_init__(self):
+        _member(self.mode, INDICATOR_EFFECT_MODES, "indicator effect mode")
+        if self.mode == "APPLY_PROBABILITY":
+            if self.target_probability is None \
+                    or not (0.0 < self.target_probability < 1.0):
+                raise ValueError("a pre-authorized update requires a target "
+                                 "probability inside (0,1)")
+            if not self.authorized_by or self.authorized_kind != "HUMAN":
+                raise ValueError("only a human can pre-authorize an automatic "
+                                 "probability update; the machine executes the "
+                                 "human's recorded conditional judgment")
+            if not self.rationale:
+                raise ValueError("a pre-authorized update states its rationale")
+
+
+@dataclass(frozen=True)
+class IndicatorRecord(Record):
+    """An observation pattern that would move a forecast. PRESENCE fires on
+    matching evidence; ABSENCE fires only when its deadline passes AND the
+    declared coverage was actually achieved — "we did not see it" moves
+    nothing when the sources that would show it were never searched."""
+    RECORD_TYPE = "forecast_indicator"
+    indicator_id: str; version: int
+    forecast_ids: tuple[str, ...]
+    description: str
+    kind: str; direction: str
+    desired_observation_type: str
+    desired_subject_ref: str
+    desired_attribute: str
+    expected_value: str      # "" = any new/changed observation matches
+    effect: IndicatorEffect
+    # ABSENCE only:
+    deadline: str            # "" for PRESENCE
+    coverage_min_successful_sources: int
+    coverage_required_source_ids: tuple[str, ...]
+    status: str
+    armed_time: str
+    fired_time: str
+    fired_evidence_refs: tuple[str, ...]
+    provenance_kind: str; inference_id: str; proposal_id: str
+    change_reason: str
+    history: tuple[str, ...]
+    recorded_time: str; marking: Marking
+
+    def __post_init__(self):
+        _member(self.kind, INDICATOR_KINDS, "indicator kind")
+        _member(self.direction, INDICATOR_DIRECTIONS, "indicator direction")
+        _member(self.status, INDICATOR_STATUSES, "indicator status")
+        if self.desired_observation_type:
+            # a typo here would silently never match — the indicator would sit
+            # ARMED forever looking like honest waiting
+            from curunir_semantic.contracts import OBSERVATION_TYPES
+            _member(self.desired_observation_type, OBSERVATION_TYPES,
+                    "observation type")
+        require_aware(self.recorded_time); require_aware(self.armed_time)
+        _require_model_inference(self.provenance_kind, self.inference_id,
+                                 proposal_id=self.proposal_id)
+        if self.version < 1:
+            raise ValueError("indicator versions start at 1")
+        if not self.forecast_ids:
+            raise ValueError("an indicator exists to move forecasts: it names them")
+        if not self.description:
+            raise ValueError("an indicator states what it watches for")
+        if self.kind == "PRESENCE" \
+                and not (self.desired_subject_ref or self.desired_attribute):
+            raise ValueError("a presence indicator must constrain its subject "
+                             "or attribute: an unconstrained pattern would "
+                             "fire on any observation about anything")
+        if self.effect.mode == "APPLY_PROBABILITY" \
+                and not self.desired_subject_ref:
+            raise ValueError("an indicator that executes a probability move "
+                             "must name its subject: an attribute-only pattern "
+                             "would move the number on any entity's matching "
+                             "observation")
+        if self.kind == "ABSENCE":
+            if not self.deadline:
+                raise ValueError("an absence indicator requires its deadline")
+            require_aware(self.deadline)
+            if self.coverage_min_successful_sources < 1:
+                raise ValueError("an absence indicator requires declared coverage: "
+                                 "otherwise silence is unfalsifiable")
+            if not self.coverage_required_source_ids:
+                raise ValueError("an absence indicator must NAME the sources "
+                                 "whose successful search constitutes coverage: "
+                                 "an unnamed minimum is satisfied by unrelated "
+                                 "noise")
+            if self.coverage_min_successful_sources \
+                    > len(self.coverage_required_source_ids):
+                raise ValueError("absence coverage cannot demand more sources "
+                                 "than it names")
+        if self.status == "FIRED":
+            if self.kind == "PRESENCE" and not self.fired_evidence_refs:
+                raise ValueError("a fired presence indicator carries the evidence "
+                                 "that fired it")
+            if not self.fired_time:
+                raise ValueError("a fired indicator records when")
+        if self.version > 1 and not self.change_reason:
+            raise ValueError("an indicator version beyond 1 requires its change "
+                             "reason")
+
+
+@dataclass(frozen=True)
+class WarningRecord(Record):
+    """Strategic warning as a PROJECTION over a forecast and the impact
+    state it threatens — never an independent alert classifier. The tier is
+    bound to a named derivation rule over typed components (probability
+    band, consequence, time pressure, evidence confidence): a tier the rule
+    table does not produce is unconstructible, and every component carries
+    its basis."""
+    RECORD_TYPE = "strategic_warning"
+    warning_id: str; version: int
+    mission_context: str
+    objective_id: str
+    forecast_id: str
+    impact_path_ids: tuple[str, ...]
+    probability_band: str
+    consequence: str          # objective priority: LOW/MEDIUM/HIGH/CRITICAL
+    time_pressure: str
+    evidence_confidence: str
+    tier: str
+    tier_rule_id: str         # the named rule that produced the tier
+    component_basis: tuple[tuple[str, str], ...]  # (component, why)
+    status: str
+    change_reason: str
+    history: tuple[str, ...]
+    recorded_time: str; marking: Marking
+
+    def __post_init__(self):
+        _member(self.probability_band, PROBABILITY_BANDS, "probability band")
+        _member(self.consequence, OBJECTIVE_PRIORITIES, "consequence")
+        _member(self.time_pressure, TIME_PRESSURES, "time pressure")
+        _member(self.evidence_confidence, EVIDENCE_CONFIDENCES,
+                "evidence confidence")
+        _member(self.tier, WARNING_TIERS, "warning tier")
+        _member(self.status, WARNING_STATUSES, "warning status")
+        require_aware(self.recorded_time)
+        if self.version < 1:
+            raise ValueError("warning versions start at 1")
+        if not self.objective_id or not self.forecast_id:
+            raise ValueError("a warning projects a forecast onto an objective: "
+                             "it requires both")
+        if not self.tier_rule_id:
+            raise ValueError("a warning tier is produced by a named rule, "
+                             "never asserted freely")
+        # naming the rule is not enough — the record must actually satisfy it:
+        # a tier the rule table does not produce is unconstructible
+        from .warning import TIER_RULE_V1, derive_tier
+        if self.tier_rule_id != TIER_RULE_V1:
+            raise ValueError(f"unknown warning tier rule "
+                             f"{self.tier_rule_id!r}: only a rule the engine "
+                             "implements can have produced a tier")
+        expected_tier, _ = derive_tier(self.probability_band, self.consequence,
+                                       self.time_pressure,
+                                       self.evidence_confidence)
+        if self.tier != expected_tier:
+            raise ValueError(
+                f"tier {self.tier} is not what {self.tier_rule_id} yields for "
+                f"({self.probability_band}, {self.consequence}, "
+                f"{self.time_pressure}, {self.evidence_confidence}): "
+                f"the rule produces {expected_tier}")
+        if not self.component_basis:
+            raise ValueError("every warning component states its basis")
+        if self.version > 1 and not self.change_reason:
+            raise ValueError("a warning version beyond 1 requires its change reason")

@@ -23,6 +23,7 @@ from curunir_semantic.hypotheses import refresh_hypotheses_for_claims
 from curunir_semantic.worldmodel import IntegrationContext
 
 from .basis import DEGRADED_CLAIM_STATES
+from .forecasts import refresh_forecast
 from .impact import mark_objective_exposed, question_assumption, refresh_path
 from .narratives import refresh_narrative
 from .stakeholders import refresh_assessment
@@ -47,6 +48,9 @@ _ALERTABLE = {
     ("response_option", "EVIDENCE_DEGRADED"),
     ("historical_episode", "EVIDENCE_DEGRADED"),
     ("historical_analogue", "EVIDENCE_DEGRADED"),
+    ("analytic_forecast", "BASIS_DEGRADED"),
+    ("analytic_forecast", "RESOLVED_TRUE"), ("analytic_forecast", "RESOLVED_FALSE"),
+    ("strategic_warning", "ESCALATED"),
 }
 
 _REFRESHERS = {
@@ -86,6 +90,8 @@ def _refresh_one(ctx: AnalyticContext, kind: str, object_id: str,
         return _REFRESHERS[kind](ctx, object_id, caused_by=caused_by)
     if kind == "stakeholder_assessment":
         return refresh_assessment(ctx, object_id, caused_by=caused_by)
+    if kind == "analytic_forecast":
+        return refresh_forecast(ctx, object_id, caused_by=caused_by)
     if kind == "impact_path":
         return refresh_path(ctx, object_id, caused_by=caused_by)
     if kind == "influence_assertion":
@@ -228,7 +234,64 @@ def propagate_semantic_changes(ctx: AnalyticContext, *,
             "changeset": "identity-caveats",
             "assessments_refreshed": [a["assessment_id"] for a in caveats],
         })
+    # the forecast plane runs a full pass every propagation: new evidence can
+    # fire indicators (which execute pre-authorized effects), and any moved
+    # probability, basis or clock re-derives the standing warnings. Every step
+    # is idempotent, so a quiet pass appends nothing.
+    from .indicators import check_indicators
+    from .warning import refresh_warnings
+    transitions_before = len(store.records_of("analytic_transition"))
+    check_indicators(ctx)
+    for forecast in sorted(store.current_forecasts().values(),
+                           key=lambda f: f["forecast_id"]):
+        # HORIZON_PASSED is included: a coverage-blocked forecast is WAITING
+        # for executions that produce no semantic change, so only this pass
+        # can notice the coverage arriving and complete the resolution
+        if forecast["status"] in ("OPEN", "UPDATE_REQUIRED", "HORIZON_PASSED"):
+            refresh_forecast(ctx, forecast["forecast_id"],
+                             caused_by="propagate")
+    refresh_warnings(ctx)
+    plane_transitions = store.records_of("analytic_transition")[transitions_before:]
+    if plane_transitions:
+        outcomes.append({
+            "changeset": "forecast-plane",
+            "transitions": [(t["subject_kind"], t["transition_type"])
+                            for t in plane_transitions],
+            "alerts": _raise_forecast_plane_alerts(ctx, plane_transitions)
+            if raise_alerts else [],
+        })
     return outcomes
+
+
+def _raise_forecast_plane_alerts(ctx: AnalyticContext,
+                                 transitions: list[Mapping[str, Any]]) -> list[str]:
+    """Alerts for forecast-plane movement not attributable to a single
+    semantic change: warning escalations and degraded forecast bases.
+    Dedup-keyed by transition, so a re-run raises nothing twice."""
+    engine = WorkflowEngine(ctx.store)
+    raised = []
+    for transition in transitions:
+        key = (transition["subject_kind"], transition["transition_type"])
+        if key not in _ALERTABLE:
+            continue
+        alert_id, created = engine.raise_alert({
+            "rule_id": "forecast-plane", "rule_version": "0.1",
+            "trigger": (f"{transition['transition_type']} on "
+                        f"{transition['subject_kind']} "
+                        f"{transition['subject_id'][:20]}: "
+                        f"{transition['detail'][:400]}"),
+            "affected_ids": (transition["subject_id"],),
+            "evidence_refs": tuple(transition.get("evidence_refs", ()))
+            or (transition["transition_id"],),
+            "severity": "HIGH"
+            if transition["transition_type"] == "ESCALATED" else "WARNING",
+            "severity_rationale": f"forecast-plane "
+                                  f"{transition['transition_type']}",
+            "dedup_key": digest_id("analert", transition["transition_id"]),
+        }, marking=ctx.marking, recorded_time=ctx.now_fn(), actor=ctx.actor)
+        if created:
+            raised.append(alert_id)
+    return raised
 
 
 def _raise_analytic_alerts(ctx: AnalyticContext, change: Mapping[str, Any],

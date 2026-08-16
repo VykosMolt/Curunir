@@ -252,6 +252,48 @@ class DependencyIndex:
             if analogue["query_kind"] in ANALYTIC_ID_FIELDS:
                 self._add(self.by_analytic,
                           (analogue["query_kind"], analogue["query_id"]), ref)
+        for forecast in store.current_analytics("analytic_forecast").values():
+            ref = ("analytic_forecast", forecast["forecast_id"])
+            self._add_basis(forecast["basis"], ref)
+            for kind, dep in forecast["proposition_refs"]:
+                if kind == "object":
+                    self._add(self.by_object, dep, ref)
+                elif kind == "relationship":
+                    self._add(self.by_relationship, dep, ref)
+                elif kind == "activity":
+                    self._add(self.by_activity, dep, ref)
+                elif kind == "claim":
+                    self._add(self.by_claim, dep, ref)
+                elif kind == "hypothesis":
+                    self._add(self.by_analytic, ("hypothesis", dep), ref)
+                elif kind in ANALYTIC_ID_FIELDS:
+                    self._add(self.by_analytic, (kind, dep), ref)
+                else:
+                    raise ValueError(
+                        f"forecast {forecast['forecast_id'][:24]} references a "
+                        f"proposition of unknown kind {kind!r}; it cannot be "
+                        "tracked")
+            for assumption_id in forecast["assumption_ids"]:
+                self._add(self.by_assumption, assumption_id, ref)
+            for indicator_id in forecast["indicator_ids"]:
+                self._add(self.by_analytic,
+                          ("forecast_indicator", indicator_id), ref)
+        for indicator in store.current_analytics("forecast_indicator").values():
+            # an indicator's state changes move its forecasts: every forecast
+            # the indicator names depends on it, whichever side declared the
+            # link first (the indicator's own list may lead the forecast's)
+            for forecast_id in indicator["forecast_ids"]:
+                self._add(self.by_analytic,
+                          ("forecast_indicator", indicator["indicator_id"]),
+                          ("analytic_forecast", forecast_id))
+        for warning in store.current_analytics("strategic_warning").values():
+            ref = ("strategic_warning", warning["warning_id"])
+            self._add(self.by_analytic,
+                      ("analytic_forecast", warning["forecast_id"]), ref)
+            self._add(self.by_analytic,
+                      ("mission_objective", warning["objective_id"]), ref)
+            for path_id in warning["impact_path_ids"]:
+                self._add(self.by_analytic, ("impact_path", path_id), ref)
 
     def affected_by(self, *, claim_ids: Iterable[str] = (),
                     object_ids: Iterable[str] = (),
@@ -356,14 +398,19 @@ def require_accepted_candidate(store: AnalyticStore, *, inference_id: str,
             raise ValueError(
                 f"materialized {key!r} differs from what the human accepted: "
                 "the acceptance covers the candidate's content, nothing else")
+    # consumption is a fact about the LOG, not about current state: a spend
+    # that landed on a version (e.g. a model probability update) must stay
+    # spent even after a later version overwrites the record's proposal_id —
+    # scanning only current records would free every superseded acceptance
+    # for unbounded re-spending
     for kind in ANALYTIC_ID_FIELDS:
-        for record in store.current_analytics(kind).values():
+        for record in store.records_of(kind):
             if record.get("proposal_id") == proposal_id:
                 _, id_field = ANALYTIC_ID_FIELDS[kind]
                 raise ValueError(
                     f"candidate proposal {proposal_id[:24]} was already "
                     f"materialized as {kind} {record[id_field][:24]}: an "
-                    "acceptance is consumed by one object, not reused")
+                    "acceptance is consumed by one materialization, not reused")
     return proposal
 
 
@@ -406,6 +453,10 @@ CANDIDATE_BINDING_KEYS = {
     "impact_path": ("objective_id", "summary", "edge_chain"),
     "response_option": ("objective_id", "path_id", "description"),
     "historical_analogue": ("query_id", "episode_id"),
+    "analytic_forecast": ("question", "probability", "horizon_time"),
+    "forecast_indicator": ("description", "kind", "forecast_ids"),
+    # strategic_warning is a machine projection over forecasts × impact and
+    # is never model-proposed, so it carries no binding keys
 }
 
 

@@ -11,6 +11,10 @@ Commands:
     paths [--objective ID]      impact paths
     assumptions                 assumptions with status
     analogues                   retrieved historical analogues
+    forecasts                   current forecasts with probability history depth
+    indicators                  armed/fired/blocked indicators
+    warnings                    standing warnings with tier and components
+    calibration                 scoreboard: proper scores, buckets, coverage
     needs                       current analytical collection needs
     explain KIND ID             eight-section structured explanation
     history KIND ID             versions + transitions of one object
@@ -100,7 +104,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--root", required=True)
     parser.add_argument("command", choices=(
         "themes", "narratives", "stakeholders", "influence", "objectives",
-        "paths", "assumptions", "analogues", "needs", "explain", "history",
+        "paths", "assumptions", "analogues", "forecasts", "indicators",
+        "warnings", "calibration", "needs", "explain", "history",
         "dependents", "stale"))
     parser.add_argument("args", nargs="*")
     parser.add_argument("--entity", default="")
@@ -145,6 +150,41 @@ def main(argv: list[str] | None = None) -> int:
                    "mismatched": [d["dimension"] for d in a["mismatched"]],
                    "status": a["status"]}
                   for a in store.current_analytics("historical_analogue").values()]
+    elif command == "forecasts":
+        result = [{"forecast_id": f["forecast_id"],
+                   "question": f["question"][:100],
+                   "probability": f["probability"], "status": f["status"],
+                   "author": f["author"], "domain": f["domain"],
+                   "horizon": f["horizon_time"][:19],
+                   "independent_families": len(f["basis"]["origin_families"]),
+                   "versions": len(store.analytic_versions("analytic_forecast",
+                                                           f["forecast_id"])),
+                   "outcome": f["outcome"]}
+                  for f in sorted(store.current_forecasts().values(),
+                                  key=lambda f: f["forecast_id"])]
+    elif command == "indicators":
+        result = [{"indicator_id": i["indicator_id"],
+                   "description": i["description"][:100],
+                   "kind": i["kind"], "direction": i["direction"],
+                   "status": i["status"], "effect": i["effect"]["mode"],
+                   "forecasts": len(i["forecast_ids"]),
+                   "fired_time": i["fired_time"][:19]}
+                  for i in sorted(store.current_indicators().values(),
+                                  key=lambda i: i["indicator_id"])]
+    elif command == "warnings":
+        result = [{"warning_id": w["warning_id"], "tier": w["tier"],
+                   "status": w["status"], "rule": w["tier_rule_id"],
+                   "probability_band": w["probability_band"],
+                   "consequence": w["consequence"],
+                   "time_pressure": w["time_pressure"],
+                   "evidence_confidence": w["evidence_confidence"],
+                   "forecast": w["forecast_id"][:24],
+                   "objective": w["objective_id"][:24]}
+                  for w in sorted(store.current_warnings().values(),
+                                  key=lambda w: w["warning_id"])]
+    elif command == "calibration":
+        from .calibration import scoreboard
+        result = scoreboard(store)
     elif command == "needs":
         result = analytic_collection_needs(store)
     elif command == "explain":

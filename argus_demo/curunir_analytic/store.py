@@ -24,6 +24,9 @@ ANALYTIC_EVENT_TYPES = {
     "ANALYTIC_TRANSITION_RECORDED": "analytic_transition",
     "HISTORICAL_EPISODE_RECORDED": "historical_episode",
     "HISTORICAL_ANALOGUE_RECORDED": "historical_analogue",
+    "ANALYTIC_FORECAST_RECORDED": "analytic_forecast",
+    "FORECAST_INDICATOR_RECORDED": "forecast_indicator",
+    "STRATEGIC_WARNING_RECORDED": "strategic_warning",
 }
 
 # record_type → (event type, id field) for the generic version helpers
@@ -40,6 +43,9 @@ ANALYTIC_ID_FIELDS = {
     "response_option": ("RESPONSE_OPTION_RECORDED", "option_id"),
     "historical_episode": ("HISTORICAL_EPISODE_RECORDED", "episode_id"),
     "historical_analogue": ("HISTORICAL_ANALOGUE_RECORDED", "analogue_id"),
+    "analytic_forecast": ("ANALYTIC_FORECAST_RECORDED", "forecast_id"),
+    "forecast_indicator": ("FORECAST_INDICATOR_RECORDED", "indicator_id"),
+    "strategic_warning": ("STRATEGIC_WARNING_RECORDED", "warning_id"),
 }
 
 
@@ -119,4 +125,21 @@ class AnalyticStore(SemanticStore):
 
     def paths_for_objective(self, objective_id: str) -> list[dict]:
         return [r for r in self.current_impact_paths().values()
+                if r["objective_id"] == objective_id]
+
+    def current_forecasts(self) -> dict[str, dict]:
+        return self.current_analytics("analytic_forecast")
+
+    def current_indicators(self) -> dict[str, dict]:
+        return self.current_analytics("forecast_indicator")
+
+    def current_warnings(self) -> dict[str, dict]:
+        return self.current_analytics("strategic_warning")
+
+    def indicators_for_forecast(self, forecast_id: str) -> list[dict]:
+        return [r for r in self.current_indicators().values()
+                if forecast_id in r["forecast_ids"]]
+
+    def warnings_for_objective(self, objective_id: str) -> list[dict]:
+        return [r for r in self.current_warnings().values()
                 if r["objective_id"] == objective_id]
