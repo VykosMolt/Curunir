@@ -599,12 +599,12 @@ def _ensure_claim_standing(ctx: IntegrationContext, claim_id: str, version: int,
         return
     prior_state = store.claim_state(claim_id)
     from .contracts import ClaimStateRecord, ReviewItem
-    # standing records are ABOUT the claim; they inherit the claim's own
-    # marking joined with this integration's — a state/review record naming a
-    # compartmented claim's value/standing is never lower-marked
-    _claim = store.current_claims().get(claim_id)
-    standing_marking = most_restrictive([ctx.marking, marking_from_record(_claim["marking"])]) \
-        if _claim and isinstance(_claim.get("marking"), dict) else ctx.marking
+    # standing records NAME the claim's prior standing; they inherit the PRIOR
+    # STATE RECORD's marking (which a compartmented conflict wrote SPECIAL) —
+    # NOT the claim's current version, which the advancing PUBLIC run has
+    # already superseded to a lower marking by the time we get here
+    standing_marking = most_restrictive([ctx.marking, marking_from_record(state_record["marking"])]) \
+        if state_record and isinstance(state_record.get("marking"), dict) else ctx.marking
     if prior_state in ("STALE", "SUPERSEDED"):
         now = ctx.now_fn()
         reset = ClaimStateRecord(

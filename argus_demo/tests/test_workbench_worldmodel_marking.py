@@ -166,18 +166,51 @@ def test_fb_claim_standing_inherits_claim_marking(tmp_path):
     """Confirmatory F-B: the standing reset/review record about a compartmented
     claim inherits the claim's marking on a PUBLIC pass."""
     pipeline, ctx = make_workbench(tmp_path)
-    from curunir_semantic.contracts import ClaimStateRecord
+    from curunir_semantic.contracts import ClaimStateRecord, SemanticClaim
     from curunir_semantic.worldmodel import _ensure_claim_standing
     claim = _special_claim(ctx)
-    # put the claim into a SUPERSEDED standing so fresh evidence resets it
+    # the compartmented conflict recorded a SPECIAL standing
     ctx.store.append("SEMANTIC_CLAIM_STATE_RECORDED", ClaimStateRecord(
         state_id="cs-1", claim_id=claim["claim_id"], state="SUPERSEDED",
         reason="prior", caused_by="", superseded_by="", actor_id="t",
         actor_kind="SERVICE", recorded_time=ctx.now_fn(), marking=RESTRICTED_MARK),
         recorded_time=ctx.now_fn(), actor="t")
+    # REACHABLE-PATH REPRODUCTION: an ordinary public advance already appended a
+    # PUBLIC v2 of the claim, so current_claims() is PUBLIC — the fix must key
+    # off the prior STATE record's marking, not the claim version's
+    raw = ctx.store.current_claims()[claim["claim_id"]]
+    ctx.store.append("SEMANTIC_CLAIM_RECORDED", SemanticClaim(**{
+        **{k: v for k, v in raw.items() if k != "record_type"},
+        "observation_ids": ("obs-public",), "dependence_group_ids": ("evgroup-b",),
+        "object_or_value": "Nils Publicsen", "version": 2,
+        "recorded_time": ctx.now_fn(), "marking": MARK}),
+        recorded_time=ctx.now_fn(), actor="t")
     _ensure_claim_standing(pipeline.context(), claim["claim_id"], version=2,
-                           new_value="Nils Public", observation_id="obs-fresh")
+                           new_value="Nils Publicsen", observation_id="obs-fresh")
     view_b = MissionProjection(ctx.store, CTX_B)
-    states = view_b.family("semantic_claim_state")
-    # the reset state about the compartmented claim is not visible to B
-    assert not any(s["claim_id"] == claim["claim_id"] for s in states)
+    # the reset/standing record naming the compartmented standing is not visible
+    assert not any(s["claim_id"] == claim["claim_id"]
+                   for s in view_b.family("semantic_claim_state"))
+    assert not [r for r in view_b.family("review_item")
+                if r["kind"] == "MANIFESTATION_CHANGED"]
+
+
+def test_f2_stale_basis_inherits_claim_state_marking(tmp_path):
+    """Confirmatory F-2: a stale-basis item on a PUBLIC hypothesis whose
+    degraded claim has a SPECIAL standing inherits the state's marking — it
+    names that compartmented standing in its detail."""
+    pipeline, ctx = make_workbench(tmp_path)
+    from curunir_semantic.contracts import ClaimStateRecord
+    from curunir_semantic.hypotheses import _queue_stale_basis
+    claim = _special_claim(ctx)
+    ctx.store.append("SEMANTIC_CLAIM_STATE_RECORDED", ClaimStateRecord(
+        state_id="cs-disputed", claim_id=claim["claim_id"], state="DISPUTED",
+        reason="compartmented conflict", caused_by="", superseded_by="",
+        actor_id="t", actor_kind="SERVICE", recorded_time=ctx.now_fn(),
+        marking=RESTRICTED_MARK), recorded_time=ctx.now_fn(), actor="t")
+    public_hyp = {"hypothesis_id": "hyp-public", "marking": MARK.to_record(),
+                  "status": "UNRESOLVED"}
+    _queue_stale_basis(pipeline.context(), public_hyp,
+                       [{"claim": claim, "state": "DISPUTED"}])
+    view_b = MissionProjection(ctx.store, CTX_B)
+    assert not [r for r in view_b.family("review_item") if r["kind"] == "STALE_BASIS"]

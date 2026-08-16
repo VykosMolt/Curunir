@@ -15,7 +15,7 @@ from __future__ import annotations
 from typing import Any, Mapping
 
 from argus.source_intelligence.models import digest_id
-from curunir_operational.access import Marking, marking_from_record
+from curunir_operational.access import Marking, marking_from_record, most_restrictive
 
 from .contracts import DiscriminatingObservation, HypothesisRecord
 from .store import SemanticStore
@@ -174,16 +174,23 @@ def _queue_stale_basis(ctx: IntegrationContext, hypothesis: Mapping[str, Any],
         return
     now = ctx.now_fn()
     states = ", ".join(f"{s['claim']['claim_id'][:16]}={s['state']}" for s in degraded_support)
+    # the item is ABOUT the hypothesis AND names each degraded claim's
+    # standing: it inherits the join of the hypothesis's marking and every
+    # degraded claim's STATE-RECORD marking, so naming a compartmented claim's
+    # DISPUTED/degraded standing never lands in a lower-marked record
+    claim_states = store.claim_states()
+    item_markings = [marking_from_record(hypothesis["marking"])
+                     if isinstance(hypothesis.get("marking"), dict) else hypothesis["marking"]]
+    for s in degraded_support:
+        state_rec = claim_states.get(s["claim"]["claim_id"])
+        if state_rec and isinstance(state_rec.get("marking"), dict):
+            item_markings.append(marking_from_record(state_rec["marking"]))
     item = ReviewItem(
         item_id=item_id, kind="STALE_BASIS", subject_kind="hypothesis",
         subject_id=hypothesis["hypothesis_id"],
         detail=f"supporting basis degraded ({states}); status now {hypothesis['status']}",
         evidence_refs=degraded_ids, status="OPEN", resolution_note="",
-        recorded_time=now,
-        # the item is ABOUT the hypothesis — it inherits the hypothesis's
-        # marking, never the (possibly lower) refresh context's marking
-        marking=marking_from_record(hypothesis["marking"])
-        if isinstance(hypothesis.get("marking"), dict) else hypothesis["marking"])
+        recorded_time=now, marking=most_restrictive(item_markings))
     store.append("REVIEW_ITEM_RECORDED", item, recorded_time=now, actor=ctx.actor)
 
 
