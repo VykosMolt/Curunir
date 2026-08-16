@@ -120,14 +120,28 @@ def open_requirement(ctx: CommandContext, *, question: str, priority: str,
                      owning_role: str = "ANALYST", closure_criteria: str = "",
                      due_time: str | None = None,
                      affected_ids: tuple[str, ...] = ()) -> dict:
+    requirement_id = digest_id("req", question, mission_context)
+    existing = None
+    for record in ctx.store.records_of("information_requirement"):
+        if record["requirement_id"] == requirement_id:
+            existing = record
+    if existing is not None and not can_view(existing.get("marking"), ctx.context):
+        # a requirement with this exact question already exists outside the
+        # caller's access: refuse without echoing anything about it. (The
+        # caller authored the colliding question themselves; refusing is the
+        # minimal disclosure — folding would declassify, returning it would
+        # disclose.)
+        raise PermissionError("cannot open this requirement in your context")
     workflow = MissionWorkflow(ctx.store)
-    return workflow.open_requirement(
+    result = workflow.open_requirement(
         mission_context=mission_context, question=question,
         affected_ids=affected_ids, priority=priority, rationale=rationale,
         required_evidence_type=required_evidence_type, owning_role=owning_role,
         closure_criteria=closure_criteria or "answered with cited evidence",
         due_time=due_time, recorded_time=ctx.now_fn(),
-        marking=ctx.marking, actor=ctx.actor)
+        marking=marking_from_record(existing["marking"]) if existing is not None
+        else ctx.marking, actor=ctx.actor)
+    return result
 
 
 def assign_task(ctx: CommandContext, *, assigned_actor: str, task_type: str,
@@ -146,6 +160,17 @@ def assign_task(ctx: CommandContext, *, assigned_actor: str, task_type: str,
 def transition_workflow(ctx: CommandContext, *, subject_kind: str, subject_id: str,
                         to_status: str, evidence_refs: tuple[str, ...] = (),
                         note: str = "") -> dict:
+    view_key = {"requirement": "information_requirements",
+                "analyst_task": "analyst_tasks",
+                "evidence_request": "evidence_requests"}.get(subject_kind)
+    if view_key is None:
+        raise CommandError(f"unknown workflow subject kind: {subject_kind}")
+    id_field = {"requirement": "requirement_id", "analyst_task": "task_id",
+                "evidence_request": "request_id"}[subject_kind]
+    visible = ctx.projection().base_view[view_key]
+    if not any(r[id_field] == subject_id for r in visible):
+        # invisible and nonexistent are the same refusal
+        raise NotFound(f"unknown {subject_kind}: {subject_id}")
     workflow = MissionWorkflow(ctx.store)
     return workflow.transition(
         subject_kind, subject_id, to_status, actor_id=ctx.actor,
@@ -382,7 +407,12 @@ def create_watch(ctx: CommandContext, *, need_id: str, target_kind: str,
     from curunir_fabric.contracts import WatchDefinition
     now = ctx.now_fn()
     watch_id = digest_id("watch", need_id, source_id, operation, query_value)
-    if ctx.store.latest_by_id("fabric_watch", "watch_id").get(watch_id) is not None:
+    raw = ctx.store.latest_by_id("fabric_watch", "watch_id").get(watch_id)
+    if raw is not None:
+        if not can_view(raw.get("marking"), ctx.context):
+            # collision with a watch outside the caller's access: refuse
+            # without echoing the id or confirming what exists
+            raise PermissionError("cannot create this watch in your context")
         raise Conflict(f"watch {watch_id} already exists; change its state "
                        "through pause/resume, never by re-creation")
     definition = WatchDefinition(
@@ -434,7 +464,8 @@ def save_view(ctx: CommandContext, *, title: str, view_kind: str,
     existing = ctx.store.latest_by_id("workbench_saved_view", "view_id").get(view_id)
     record = SavedViewRecord(
         view_id=view_id, title=title, author=ctx.actor, view_kind=view_kind,
-        definition=dict(definition), recorded_time=now, marking=ctx.marking,
+        definition=dict(definition), recorded_time=now,
+        marking=marking_from_record(existing["marking"]) if existing else ctx.marking,
         version=(existing["version"] + 1) if existing else 1)
     try:
         ctx.store.append("WORKBENCH_SAVED_VIEW_RECORDED", record,

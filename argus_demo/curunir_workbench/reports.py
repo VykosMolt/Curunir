@@ -254,11 +254,15 @@ def validate_report(projection: MissionProjection, report: Mapping[str, Any]) ->
                         finding("HISTORICAL_AS_CURRENT", sentence,
                                 "every supporting claim's validity has ended; "
                                 "the sentence presents historical state as current")
+                    elif expired and not sentence.get("temporal_scope"):
+                        finding("TEMPORAL_SCOPE_REQUIRED", sentence,
+                                f"{len(expired)}/{len(claims)} supporting claims "
+                                "have ended validity; state the sentence's "
+                                "temporal scope (CURRENT or HISTORICAL) explicitly")
                     elif expired:
                         finding("PARTIALLY_HISTORICAL_BASIS", sentence,
                                 f"{len(expired)}/{len(claims)} supporting claims "
-                                "have ended validity; mark the sentence HISTORICAL "
-                                "or narrow the basis", blocking=False)
+                                "have ended validity", blocking=False)
                 # independence honesty
                 if sentence.get("asserts_independent"):
                     claims = [r for f, r in resolved if f == "semantic_claim"]
@@ -269,16 +273,18 @@ def validate_report(projection: MissionProjection, report: Mapping[str, Any]) ->
                                 f"independent basis count is {best}; the sentence "
                                 "asserts independent corroboration")
             # forecast probability fidelity (any status): EVERY quoted
-            # numeric probability must equal some AUTHORED version of the
-            # referenced forecast — word-form probabilities ("three in
-            # four") are a stated limitation, not silently accepted
-            for family, record in resolved:
-                if family != "analytic_forecast":
-                    continue
-                authored = {v["probability"] for v in
-                            projection.versions("analytic_forecast",
-                                                record["forecast_id"])} \
-                    | {record["probability"]}
+            # numeric probability must equal some AUTHORED version of one of
+            # the forecasts the sentence references (union across refs, so an
+            # honest comparative sentence validates) — word-form
+            # probabilities ("three in four") are a stated limitation
+            sentence_forecasts = [r for f, r in resolved if f == "analytic_forecast"]
+            if sentence_forecasts:
+                authored: set[float] = set()
+                for record in sentence_forecasts:
+                    authored |= {v["probability"] for v in
+                                 projection.versions("analytic_forecast",
+                                                     record["forecast_id"])}
+                    authored.add(record["probability"])
                 quoted = []
                 for match in _PROBABILITY_RE.finditer(sentence["text"]):
                     if match.group(1):
@@ -289,9 +295,8 @@ def validate_report(projection: MissionProjection, report: Mapping[str, Any]) ->
                        if not any(abs(q - a) < 0.005 for a in authored)]
                 if bad:
                     finding("FORECAST_PROBABILITY_MISMATCH", sentence,
-                            f"sentence quotes {bad} but forecast "
-                            f"{record['forecast_id']}'s authored versions are "
-                            f"{sorted(authored)}")
+                            f"sentence quotes {bad} but the referenced "
+                            f"forecasts' authored versions are {sorted(authored)}")
     stale = report["based_on_state_token"] != projection.state_token
     dispositions = [projection.redact(d) for d in
                     projection.store.report_dispositions(report["report_id"])
@@ -350,12 +355,12 @@ def submit_report(store: WorkbenchStore, report_id: str, *, actor: str,
 
 
 def open_dissent(projection: MissionProjection, report_id: str) -> list[dict]:
-    """Open dissent on the report OR any of its sentences/sections — dissent
-    anchored below report level must not dodge the approval gate."""
-    report = projection.get("workbench_report", report_id)
+    """Open dissent on the report OR any of its sentences/sections, across
+    EVERY version — dissent anchored below report level must not dodge the
+    approval gate, and rewording a sentence must not detach it."""
     part_ids = {report_id}
-    if report is not None:
-        for section in report["sections"]:
+    for version in projection.versions("workbench_report", report_id):
+        for section in version["sections"]:
             part_ids.add(section["section_id"])
             part_ids |= {x["sentence_id"] for x in section["sentences"]}
     return [a for a in projection.family("workbench_annotation")
@@ -376,6 +381,13 @@ def approve_report(store: WorkbenchStore, projection: MissionProjection,
     current = _current(store, report_id)
     if current["status"] != "IN_REVIEW":
         raise ValueError(f"cannot approve a report in status {current['status']}")
+    submitters = {d["actor_id"] for d in store.report_dispositions(report_id)
+                  if d["disposition"] == "SUBMITTED"}
+    content_authors = {v["author"] for v in store.report_versions(report_id)}
+    if actor in content_authors | submitters:
+        raise PermissionError(
+            "separation of duties: an analyst who authored or submitted this "
+            "report cannot also approve it")
     validation = validate_report(projection, current)
     if not validation["ok"]:
         raise ReportValidationError(validation["blocking"])

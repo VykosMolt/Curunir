@@ -136,6 +136,33 @@ class MissionProjection:
                             if not can_view(self.base.objects[oid]["current"].get("marking"), context)}
         hidden |= {rid for rid, entry in self.base.relationships.items()
                    if not can_view(entry["current"].get("marking"), context)}
+        # every access-filtered OPERATIONAL family joins the hidden set too:
+        # a hidden activity/alert/task/decision id must scrub out of visible
+        # records exactly like a hidden object id
+        def _op_hidden(records, id_field, unwrap=None):
+            for entry in records:
+                record = unwrap(entry) if unwrap else entry
+                if not can_view(record.get("marking"), context):
+                    hidden.add(record[id_field])
+        _op_hidden(self.base.activities, "activity_id")
+        _op_hidden(self.base.alerts.values(), "alert_id", lambda e: e["record"])
+        _op_hidden(self.base.recommendations.values(), "recommendation_id")
+        _op_hidden(self.base.decisions, "decision_id")
+        _op_hidden(self.base.analyst_actions, "action_id")
+        _op_hidden(self.base.association_proposals.values(), "proposal_id",
+                   lambda e: e["proposal"])
+        _op_hidden(self.base.inferences.values(), "inference_id")
+        _op_hidden(self.base.requirements.values(), "requirement_id",
+                   lambda e: e["record"])
+        _op_hidden(self.base.analyst_tasks.values(), "task_id",
+                   lambda e: e["record"])
+        _op_hidden(self.base.evidence_requests.values(), "request_id",
+                   lambda e: e["record"])
+        # base-view activities additionally suppress on hidden participants;
+        # treat those as hidden for scrub purposes as well
+        for record in self.base.activities:
+            if record["activity_id"] not in self._visible_activity_ids:
+                hidden.add(record["activity_id"])
         for record_type, id_field in LATEST_FAMILIES.items():
             visible: dict[str, dict] = {}
             history: dict[str, list[dict]] = {}
@@ -173,6 +200,10 @@ class MissionProjection:
             "|".join(re.escape(h) + r"(?:@v\d+)?" for h in sorted(hidden, key=len,
                                                                   reverse=True))
         ) if hidden else None
+        # the operational base view carries its own (object-level) redaction
+        # but not the cross-plane hidden-id scrub — apply it here, once, so
+        # every consumer of base_view serializes scrubbed state
+        self.base_view = self._scrub(self.base_view)
 
     # ---- redaction ---------------------------------------------------------
 
@@ -184,7 +215,8 @@ class MissionProjection:
         if isinstance(value, (list, tuple)):
             return [self._scrub(v) for v in value]
         if isinstance(value, Mapping):
-            return {k: self._scrub(v) for k, v in value.items()}
+            return {(self._scrub(k) if isinstance(k, str) else k): self._scrub(v)
+                    for k, v in value.items()}
         return value
 
     def redact(self, record: Mapping[str, Any]) -> dict[str, Any]:
@@ -265,6 +297,10 @@ class MissionProjection:
 
     def visible_object_ids(self) -> set[str]:
         return {o["object_id"] for o in self.base_view["objects"]}
+
+    def object_history(self, object_id: str) -> list[dict]:
+        """Access-filtered, scrubbed version history of one world object."""
+        return self._scrub(self.base.object_history(object_id, self.context))
 
     def object_current(self, object_id: str) -> dict | None:
         for record in self.base_view["objects"]:

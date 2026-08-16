@@ -140,9 +140,30 @@ def test_sentence_anchored_dissent_blocks_approval(mission):
                       text="the registry basis is single-origin")
     projection = MissionProjection(ctx.store, CTX_A)
     assert open_dissent(projection, report["report_id"])
-    with pytest.raises(ValueError, match="dissent"):
+    # separation of duties: the drafter cannot approve at all
+    with pytest.raises(PermissionError, match="separation of duties"):
         commands.approve_report(cc(CTX_A), report["report_id"],
                                 expected_version=submitted["version"])
+    # an independent approver is still blocked by the sentence-anchored dissent
+    with pytest.raises(ValueError, match="dissent"):
+        commands.approve_report(cc(CTX_B), report["report_id"],
+                                expected_version=submitted["version"])
+    # rewording the sentence does not detach the dissent (finding 7, round 2)
+    commands.reject_report(cc(CTX_B), report["report_id"],
+                           expected_version=submitted["version"],
+                           note="revise wording", return_for_revision=True)
+    current = ctx.store.current_reports()[report["report_id"]]
+    reworded = commands.edit_report(cc(CTX_A), report["report_id"],
+                                    expected_version=current["version"],
+                                    sections=[
+        {"kind": "key_judgments", "title": "KJ", "sentences": [
+            {"text": "Acme holds an ISSUED registration. ", "status": "SUPPORTED",
+             "basis_refs": [claim_id]}]}])
+    resubmitted = commands.submit_report(cc(CTX_A), report["report_id"],
+                                         expected_version=reworded["version"])
+    with pytest.raises(ValueError, match="dissent"):
+        commands.approve_report(cc(CTX_B), report["report_id"],
+                                expected_version=resubmitted["version"])
 
 
 def test_only_the_dissenting_author_resolves_dissent(mission):

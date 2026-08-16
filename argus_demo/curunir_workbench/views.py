@@ -57,7 +57,7 @@ def entity_dossier(projection: MissionProjection, object_id: str) -> dict | None
     current = projection.object_current(object_id)
     if current is None:
         return None
-    history = projection.base.object_history(object_id, projection.context)
+    history = projection.object_history(object_id)
     relationships = [r for r in projection.base_view["relationships"]
                      if object_id in (r["source_object_id"], r["target_object_id"])]
     events = [a for a in projection.base_view["activities"]
@@ -510,11 +510,14 @@ def review_queue(projection: MissionProjection) -> dict[str, Any]:
     for record in projection.family("analytical_proposal"):
         action = resolved_analyst_actions.get(record["proposal_id"])
         status = record.get("status", "PROPOSED")
+        content = record.get("content", {}) or {}
+        detail = "; ".join(f"{k}={str(v)[:60]}" for k, v in sorted(content.items())
+                           if k != "target_kind")[:300]
         items.append({"queue": "MODEL_PROPOSAL", "kind": record.get("proposal_type", ""),
                       "id": record["proposal_id"],
-                      "subject_kind": record.get("target_kind", ""),
-                      "subject_id": record.get("target_id", ""),
-                      "detail": str(record.get("summary") or record.get("content", ""))[:300],
+                      "subject_kind": content.get("target_kind", ""),
+                      "subject_id": record.get("inference_id", ""),
+                      "detail": detail,
                       "status": "OPEN" if status == "PROPOSED" else status,
                       "evidence_refs": (), "resolution_note": action.get("note", "") if action else "",
                       "recorded_time": record["recorded_time"], "version": 1})

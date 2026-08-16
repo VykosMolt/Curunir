@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 
-from .access import AccessContext, Marking
+from .access import AccessContext, Marking, marking_from_record
 from .canonical import digest_id
 from .contracts import (REQUIREMENT_PRIORITIES, AnalystTask, EvidenceRequest,
                         InformationRequirement, WorkflowTransition)
@@ -90,7 +90,9 @@ class MissionWorkflow:
                 **{**{k: v for k, v in latest.items() if k != "record_type"},
                    "priority": merged_priority, "affected_ids": merged_affected,
                    "version": latest.get("version", 1) + 1,
-                   "marking": marking})
+                   # a fold escalates priority / widens scope; it never
+                   # re-classifies: the record keeps its own marking
+                   "marking": marking_from_record(latest["marking"])})
             self.store.append("REQUIREMENT_RECORDED", updated,
                               recorded_time=recorded_time, actor=actor)
             return updated.to_record()

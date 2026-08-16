@@ -142,8 +142,13 @@ def test_report_flow_with_validation_rejection(client):
     submitted = c.post(f"/api/commands/reports/{report['report_id']}/submit",
                        headers=_h("token-a"), json={"expected_version": 1})
     assert submitted.status_code == 200
+    # the submitter cannot approve their own report at all
+    self_approve = c.post(f"/api/commands/reports/{report['report_id']}/approve",
+                          headers=_h("token-a"),
+                          json={"expected_version": submitted.json()["version"]})
+    assert self_approve.status_code == 403
     rejected = c.post(f"/api/commands/reports/{report['report_id']}/approve",
-                      headers=_h("token-a"),
+                      headers=_h("token-b"),
                       json={"expected_version": submitted.json()["version"]})
     assert rejected.status_code == 422
     assert any(f["code"] == "NO_EVIDENCE_BASIS"
@@ -180,7 +185,7 @@ def test_workflow_transition_guard_over_http(client):
     hijack = c.post("/api/commands/workflow/transition", headers=_h("token-a"),
                     json={"subject_kind": "analyst_task", "subject_id": task_id,
                           "to_status": "DONE", "note": "not mine"})
-    assert hijack.status_code == 400
+    assert hijack.status_code == 403
     legit = c.post("/api/commands/workflow/transition", headers=_h("token-b"),
                    json={"subject_kind": "analyst_task", "subject_id": task_id,
                          "to_status": "IN_PROGRESS"})

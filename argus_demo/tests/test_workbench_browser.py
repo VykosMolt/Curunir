@@ -155,10 +155,16 @@ def test_dossier_flow_in_browser(browser_ctx, mission_server):
     expect(page.locator("main")).to_contain_text("validation: no blocking findings")
     page.get_by_role("button", name="Submit for review").click()
     expect(page.locator("main h1")).to_contain_text("IN_REVIEW")
-    page.get_by_role("button", name="Approve (validated, human act)").click()
-    expect(page.locator("main h1")).to_contain_text("APPROVED")
-    expect(page.locator("main")).to_contain_text("Dispositions")
+    report_url = page.url
     page.close()
+    # separation of duties: a second analyst performs the approval
+    reviewer = browser_ctx.new_page()
+    _login(reviewer, base, "token-b")
+    reviewer.goto(report_url)
+    reviewer.get_by_role("button", name="Approve (validated, human act)").click()
+    expect(reviewer.locator("main h1")).to_contain_text("APPROVED")
+    expect(reviewer.locator("main")).to_contain_text("Dispositions")
+    reviewer.close()
 
 
 def test_restricted_analyst_sees_filtered_mission(browser_ctx, mission_server):

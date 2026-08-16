@@ -542,10 +542,15 @@ export async function evidenceView(main, params, id) {
         ["prior manifestation", m.prior_manifestation_id
           ? refLink("fabric_manifestation", m.prior_manifestation_id) : ""],
       ]),
-      fieldAnchors.length ? [h("h2", {}, "Exact field anchors"),
+      fieldAnchors.length ? [h("h2", {}, "Exact field anchors",
+        d.payload && d.payload.unavailable
+          ? h("span", { class: "faint" }, " — payload failed custody verification; values below are as recorded at extraction, not re-verified")
+          : null),
         table({ columns: [
           { label: "field path", render: (a) => h("span", { class: "mono" }, a.field_path) },
-          { label: "exact value", render: (a) => h("span", { class: "mono" }, clip(a.exact_value, 60)) },
+          { label: "value (recorded at extraction)", render: (a) =>
+              h("span", { class: d.payload && d.payload.unavailable ? "mono faint" : "mono" },
+                clip(a.exact_value, 60)) },
           { label: "observation", render: (a) => h("span", {}, a.attribute, " ",
               refLink("semantic_observation", a.observation_id, "→")) },
           { label: "mapping", render: (a) => badge(a.mapping_status) }],

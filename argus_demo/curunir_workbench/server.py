@@ -84,21 +84,32 @@ def create_app(mission_root: str | Path, actors_path: str | Path,
         return Marking(owning_authority=meta.get("store_id", "curunir-workbench"),
                        releasability=("PUBLIC",))
 
-    def run(fn, *args, **kwargs):
-        """Translate command-layer failures into honest HTTP semantics.
+    def run(request, fn, *args, **kwargs):
+        """Translate command-layer failures into honest HTTP semantics, and
+        scrub the RESPONSE through the caller's own projection — a write
+        path never returns state its author could not read.
 
         Only the typed NotFound becomes 404 — a bare KeyError is a server
-        bug and must surface as 500, never as an existence claim."""
+        bug and must surface as 500, never as an existence claim. Workflow
+        authority refusals are 403, not 400."""
+        from curunir_operational.missions import MissionWorkflowError
+        from curunir_operational.workflow import WorkflowError
         try:
-            return fn(*args, **kwargs)
+            result = fn(*args, **kwargs)
         except Conflict as error:
             raise HTTPException(status_code=409, detail=str(error))
         except NotFound as error:
             raise HTTPException(status_code=404, detail=str(error))
         except PermissionError as error:
             raise HTTPException(status_code=403, detail=str(error))
+        except (MissionWorkflowError, WorkflowError) as error:
+            raise HTTPException(status_code=403, detail=str(error))
         except ValueError as error:
             raise HTTPException(status_code=400, detail=str(error))
+        if isinstance(result, (dict, list)):
+            return MissionProjection(fresh_store(), context(request)).redact(
+                result if isinstance(result, dict) else {"items": result})
+        return result
 
     def found(record):
         if record is None:
@@ -269,7 +280,7 @@ def create_app(mission_root: str | Path, actors_path: str | Path,
 
     @app.post("/api/commands/annotate")
     def cmd_annotate(request: Request, body: AnnotateBody):
-        return run(commands.annotate, command_context(request), **body.model_dump())
+        return run(request, commands.annotate, command_context(request), **body.model_dump())
 
     class ResolveAnnotationBody(BaseModel):
         expected_version: int; status: str; note: str
@@ -277,7 +288,7 @@ def create_app(mission_root: str | Path, actors_path: str | Path,
     @app.post("/api/commands/annotations/{annotation_id}/resolve")
     def cmd_resolve_annotation(request: Request, annotation_id: str,
                                body: ResolveAnnotationBody):
-        return run(commands.resolve_annotation, command_context(request),
+        return run(request, commands.resolve_annotation, command_context(request),
                    annotation_id, **body.model_dump())
 
     class RequirementBody(BaseModel):
@@ -288,7 +299,7 @@ def create_app(mission_root: str | Path, actors_path: str | Path,
     def cmd_requirement(request: Request, body: RequirementBody):
         data = body.model_dump()
         data["affected_ids"] = tuple(data["affected_ids"])
-        return run(commands.open_requirement, command_context(request), **data)
+        return run(request, commands.open_requirement, command_context(request), **data)
 
     class TaskBody(BaseModel):
         assigned_actor: str; task_type: str; required_action: str
@@ -299,7 +310,7 @@ def create_app(mission_root: str | Path, actors_path: str | Path,
     def cmd_task(request: Request, body: TaskBody):
         data = body.model_dump()
         data["affected_ids"] = tuple(data["affected_ids"])
-        return run(commands.assign_task, command_context(request), **data)
+        return run(request, commands.assign_task, command_context(request), **data)
 
     class TransitionBody(BaseModel):
         subject_kind: str; subject_id: str; to_status: str
@@ -308,20 +319,16 @@ def create_app(mission_root: str | Path, actors_path: str | Path,
 
     @app.post("/api/commands/workflow/transition")
     def cmd_transition(request: Request, body: TransitionBody):
-        from curunir_operational.missions import MissionWorkflowError
         data = body.model_dump()
         data["evidence_refs"] = tuple(data["evidence_refs"])
-        try:
-            return run(commands.transition_workflow, command_context(request), **data)
-        except MissionWorkflowError as error:
-            raise HTTPException(status_code=403, detail=str(error))
+        return run(request, commands.transition_workflow, command_context(request), **data)
 
     class ReviewBody(BaseModel):
         expected_version: int; status: str; note: str
 
     @app.post("/api/commands/review/{item_id}/resolve")
     def cmd_review(request: Request, item_id: str, body: ReviewBody):
-        return run(commands.resolve_review_item, command_context(request),
+        return run(request, commands.resolve_review_item, command_context(request),
                    item_id, **body.model_dump())
 
     class ProposalBody(BaseModel):
@@ -329,7 +336,7 @@ def create_app(mission_root: str | Path, actors_path: str | Path,
 
     @app.post("/api/commands/proposals/{proposal_id}/resolve")
     def cmd_proposal(request: Request, proposal_id: str, body: ProposalBody):
-        return run(commands.resolve_model_proposal, command_context(request),
+        return run(request, commands.resolve_model_proposal, command_context(request),
                    proposal_id, **body.model_dump())
 
     class HypothesisBody(BaseModel):
@@ -339,7 +346,7 @@ def create_app(mission_root: str | Path, actors_path: str | Path,
 
     @app.post("/api/commands/hypotheses")
     def cmd_hypothesis(request: Request, body: HypothesisBody):
-        return run(commands.create_hypothesis, command_context(request),
+        return run(request, commands.create_hypothesis, command_context(request),
                    statement=body.statement, case_id=body.case_id,
                    assumptions=tuple(body.assumptions),
                    unknowns=tuple(body.unknowns))
@@ -349,7 +356,7 @@ def create_app(mission_root: str | Path, actors_path: str | Path,
 
     @app.post("/api/commands/hypotheses/{hypothesis_id}/assess")
     def cmd_assess(request: Request, hypothesis_id: str, body: AssessBody):
-        return run(commands.assess_hypothesis, command_context(request),
+        return run(request, commands.assess_hypothesis, command_context(request),
                    hypothesis_id, **body.model_dump())
 
     class ForecastBody(BaseModel):
@@ -362,7 +369,7 @@ def create_app(mission_root: str | Path, actors_path: str | Path,
 
     @app.post("/api/commands/forecasts")
     def cmd_forecast(request: Request, body: ForecastBody):
-        return run(commands.author_forecast, command_context(request),
+        return run(request, commands.author_forecast, command_context(request),
                    question=body.question, outcome_semantics=body.outcome_semantics,
                    horizon_time=body.horizon_time, probability=body.probability,
                    probability_basis=body.probability_basis,
@@ -379,7 +386,7 @@ def create_app(mission_root: str | Path, actors_path: str | Path,
     def cmd_move_forecast(request: Request, forecast_id: str, body: MoveForecastBody):
         data = body.model_dump()
         data["evidence_refs"] = tuple(data["evidence_refs"])
-        return run(commands.move_forecast, command_context(request),
+        return run(request, commands.move_forecast, command_context(request),
                    forecast_id, **data)
 
     class ResolveForecastBody(BaseModel):
@@ -389,7 +396,7 @@ def create_app(mission_root: str | Path, actors_path: str | Path,
     @app.post("/api/commands/forecasts/{forecast_id}/resolve")
     def cmd_resolve_forecast(request: Request, forecast_id: str,
                              body: ResolveForecastBody):
-        return run(commands.resolve_forecast, command_context(request),
+        return run(request, commands.resolve_forecast, command_context(request),
                    forecast_id, outcome=body.outcome, rationale=body.rationale,
                    evidence_refs=tuple(body.evidence_refs))
 
@@ -398,7 +405,7 @@ def create_app(mission_root: str | Path, actors_path: str | Path,
 
     @app.post("/api/commands/hypotheses/{hypothesis_id}/link")
     def cmd_link_claim(request: Request, hypothesis_id: str, body: LinkClaimBody):
-        return run(commands.link_hypothesis_claim, command_context(request),
+        return run(request, commands.link_hypothesis_claim, command_context(request),
                    hypothesis_id, **body.model_dump())
 
     class ProjectWarningBody(BaseModel):
@@ -407,19 +414,19 @@ def create_app(mission_root: str | Path, actors_path: str | Path,
     @app.post("/api/commands/forecasts/{forecast_id}/project-warning")
     def cmd_project_warning(request: Request, forecast_id: str,
                             body: ProjectWarningBody):
-        return run(commands.project_forecast_warning, command_context(request),
+        return run(request, commands.project_forecast_warning, command_context(request),
                    forecast_id, objective_id=body.objective_id)
 
     @app.post("/api/commands/routes/{route_id}/launch")
     def cmd_launch_route(request: Request, route_id: str):
-        return run(commands.launch_route, command_context(request), route_id)
+        return run(request, commands.launch_route, command_context(request), route_id)
 
     class AssignRouteBody(BaseModel):
         assigned_actor: str
 
     @app.post("/api/commands/routes/{route_id}/assign")
     def cmd_assign_route(request: Request, route_id: str, body: AssignRouteBody):
-        return run(commands.assign_route, command_context(request), route_id,
+        return run(request, commands.assign_route, command_context(request), route_id,
                    assigned_actor=body.assigned_actor)
 
     class WatchBody(BaseModel):
@@ -432,7 +439,7 @@ def create_app(mission_root: str | Path, actors_path: str | Path,
     def cmd_watch(request: Request, body: WatchBody):
         data = body.model_dump()
         data["blind_spots"] = tuple(data["blind_spots"])
-        return run(commands.create_watch, command_context(request), **data)
+        return run(request, commands.create_watch, command_context(request), **data)
 
     class WatchActiveBody(BaseModel):
         active: bool
@@ -440,7 +447,7 @@ def create_app(mission_root: str | Path, actors_path: str | Path,
 
     @app.post("/api/commands/watches/{watch_id}/active")
     def cmd_watch_active(request: Request, watch_id: str, body: WatchActiveBody):
-        return run(commands.set_watch_active, command_context(request),
+        return run(request, commands.set_watch_active, command_context(request),
                    watch_id, active=body.active,
                    expected_active=body.expected_active)
 
@@ -450,7 +457,7 @@ def create_app(mission_root: str | Path, actors_path: str | Path,
 
     @app.post("/api/commands/saved-views")
     def cmd_saved_view(request: Request, body: SavedViewBody):
-        return run(commands.save_view, command_context(request),
+        return run(request, commands.save_view, command_context(request),
                    **body.model_dump())
 
     class ReportCreateBody(BaseModel):
@@ -459,7 +466,7 @@ def create_app(mission_root: str | Path, actors_path: str | Path,
 
     @app.post("/api/commands/reports")
     def cmd_report_create(request: Request, body: ReportCreateBody):
-        return run(commands.create_report, command_context(request),
+        return run(request, commands.create_report, command_context(request),
                    **body.model_dump())
 
     class ReportEditBody(BaseModel):
@@ -470,7 +477,7 @@ def create_app(mission_root: str | Path, actors_path: str | Path,
 
     @app.post("/api/commands/reports/{report_id}/edit")
     def cmd_report_edit(request: Request, report_id: str, body: ReportEditBody):
-        return run(commands.edit_report, command_context(request), report_id,
+        return run(request, commands.edit_report, command_context(request), report_id,
                    **body.model_dump())
 
     class ReportVersionBody(BaseModel):
@@ -478,7 +485,7 @@ def create_app(mission_root: str | Path, actors_path: str | Path,
 
     @app.post("/api/commands/reports/{report_id}/submit")
     def cmd_report_submit(request: Request, report_id: str, body: ReportVersionBody):
-        return run(commands.submit_report, command_context(request), report_id,
+        return run(request, commands.submit_report, command_context(request), report_id,
                    expected_version=body.expected_version)
 
     class ReportApproveBody(BaseModel):
@@ -489,7 +496,7 @@ def create_app(mission_root: str | Path, actors_path: str | Path,
     def cmd_report_approve(request: Request, report_id: str, body: ReportApproveBody):
         from .reports import ReportValidationError
         try:
-            return run(commands.approve_report, command_context(request), report_id,
+            return run(request, commands.approve_report, command_context(request), report_id,
                        expected_version=body.expected_version, note=body.note,
                        acknowledge_dissent=tuple(body.acknowledge_dissent))
         except ReportValidationError as error:
@@ -503,7 +510,7 @@ def create_app(mission_root: str | Path, actors_path: str | Path,
 
     @app.post("/api/commands/reports/{report_id}/reject")
     def cmd_report_reject(request: Request, report_id: str, body: ReportRejectBody):
-        return run(commands.reject_report, command_context(request), report_id,
+        return run(request, commands.reject_report, command_context(request), report_id,
                    **body.model_dump())
 
     # ---- UI -----------------------------------------------------------------

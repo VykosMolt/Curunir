@@ -261,12 +261,26 @@ def evidence_view(projection: MissionProjection, manifestation_id: str) -> dict[
             candidates.append(projection.store.get_payload(sha))
         except (KeyError, FileNotFoundError, OSError):
             pass
-        # canonical content-addressed custody location under the mission root
+        # canonical content-addressed custody location under the mission
+        # root; the recorded path is a last resort, and only when it resolves
+        # INSIDE the mission root as an ordinary bounded-size file — a fifo,
+        # device node or symlink out of the root never blocks the request
+        MAX_PAYLOAD = 64 * 1024 * 1024
         canonical = mission_root / "custody" / "sha256" / sha[:2] / sha[2:4] / sha
-        for path in (canonical, Path(custody_path) if custody_path else None):
+        recorded = None
+        if custody_path:
+            resolved = (mission_root / custody_path).resolve() \
+                if not Path(custody_path).is_absolute() \
+                else Path(custody_path).resolve()
+            if resolved.is_relative_to(mission_root):
+                recorded = resolved
+        for path in (canonical, recorded):
             if path is None:
                 continue
             try:
+                stat = path.stat()
+                if not path.is_file() or stat.st_size > MAX_PAYLOAD:
+                    continue
                 candidates.append(path.read_bytes())
             except OSError:
                 continue
