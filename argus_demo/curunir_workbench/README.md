@@ -1,0 +1,158 @@
+# Curunír analyst workbench (`curunir_workbench`)
+
+**Tranche:** `CURUNIR_V6_ANALYST_WORKBENCH_AND_COLLABORATIVE_OPERATIONS`
+
+The operator surface over one Curunír mission store. A human analyst operates
+the full intelligence loop — see what matters, inspect why, descend to exact
+evidence, challenge the analysis, collect more, collaborate, make an
+attributable judgment, construct an evidence-bound dossier — from a normal
+browser, without research scripts or raw JSON.
+
+## Architecture
+
+```
+one mission root
+├── store/      WorkbenchStore < AnalyticStore < SemanticStore < FabricStore
+│               < MissionDataStore — ONE append-only hash-chained event log
+│               carrying every plane (workflow, fabric acquisition, semantic
+│               understanding, analytics, workbench collaboration/reports)
+├── custody/    content-addressed source bytes (SourceCustodyStore)
+└── actors.json bearer-token → actor/access registry (deployment config,
+                never mission truth, never served)
+
+            ┌──────────── server.py (FastAPI) ────────────┐
+            │   bearer token → AccessContext (auth.py)    │
+   queries  │  MissionProjection: filtered BEFORE          │  commands
+   (GET)    │  serialization; hidden = nonexistent         │  (POST)
+            │  views.py/provenance.py/search.py/reports.py │  commands.py →
+            │                                              │  canonical plane
+            └────────────── static/ (no-build ES modules) ─┘  functions only
+```
+
+* **Projection boundary** (`projections.py`): `MissionProjection(store, context)`
+  composes the operational world view with every fabric/semantic/analytic/
+  workbench record family. A record the context cannot view appears in no
+  list, count, graph, search hit, timeline, chain or export; visible records'
+  references to hidden state are redacted (`REDACTED`); unknown and forbidden
+  are indistinguishable (both 404). Source *descriptors* (the registry of
+  where Curunír can look — not what it found) are catalog metadata visible to
+  any authenticated context; every acquired/derived record is marking-gated.
+* **Command boundary** (`commands.py`): the browser names a command; the
+  server resolves the actor from authentication and calls the same store
+  functions the rest of Curunír uses. Human-only guards (task closure, model
+  candidate acceptance, forecast authorship/movement, review disposition,
+  report approval) live in the canonical layers and are surfaced, never
+  bypassed. Versioned families carry `expected_version`; a stale write is a
+  409 with the current version — never a silent overwrite (the store's strict
+  next-version enforcement backstops the check inside the append lock).
+* **No second ontology**: the frontend renders truth produced by the server.
+  Object identities are canonical ids everywhere; selecting an object in any
+  view pivots into the same dossier.
+
+## Major views
+
+Mission (overview/COP, investigation, search, activity) · World (entities,
+events, valid/knowledge timeline, typed relationship graph, evidence-backed
+map, evidence viewer with exact span/field anchors, source registry +
+independence) · Analysis (themes, narratives with variant/propagation vs
+independence, stakeholders with position≠interest and authority≠influence
+labeling, impact paths with per-edge basis, hypothesis comparison matrix
+projected from claim links) · Forecasting (authored probability history,
+indicators with coverage semantics, warning center with named-rule tier
+explanation) · Operations (EIV-ranked collection routes with launch/assign,
+coverage matrix where NOT_SEARCHED ≠ absence, watches, tasks, unified review
+queue) · Output (annotations/dissent, report/dossier engine).
+
+## Provenance descent
+
+First-class both ways, access-filtered at every hop:
+
+```
+warning → objective → impact path → forecast (authored judgment)
+        → assumptions → claims → observations → EXACT anchor
+        (JSON field path / text offsets) → manifestation (custody sha256)
+        → source
+```
+
+and upward: source → manifestations → observations → claims → dependent
+analytical objects → warnings. A link into hidden state terminates in an
+explicit "not accessible" node. Evidence payload bytes are served only when
+their sha256 matches the recorded custody hash.
+
+## Collaboration
+
+Annotations (`NOTE`/`QUESTION`/`DISSENT`/`CORRECTION_SUGGESTION`) bind to
+canonical records the author can see; dissent never overwrites the assessment
+it disagrees with and blocks plain report approval until resolved or carried
+visibly as `APPROVED_WITH_DISSENT`. Hypothesis assessments re-append with an
+attributable history entry. All workflow transitions (assign/claim/complete,
+review dispositions) are recorded human acts through `MissionWorkflow`.
+
+## Report / dossier engine (`reports.py`)
+
+A report is a versioned structured projection, not generated prose. Every
+sentence is `SUPPORTED` (resolvable observation-backed basis),
+`EXPLICITLY_INFERENTIAL` (inference note + assumptions exposed) or
+`UNRESOLVED` (reason stated). Validation runs against the **approving
+actor's own authorized projection** and rejects: missing/unresolvable basis,
+inference laundered as observation, contested/stale basis rendered settled,
+historical state rendered current, independence asserted over a single origin
+family, and quoted probabilities that differ from the authored forecast
+record. Approval is human-only, records the validation sha256 + state token,
+and pins an immutable version; revision is a new version. Role projections
+(ANALYST / EXECUTIVE / SOURCE_LEGAL / OPERATOR) derive from the one record.
+Exports: JSON package with expanded basis lineage, deterministic HTML.
+
+## Access model (V6.6 scope, stated honestly)
+
+Bearer tokens in `actors.json` map to actor identity + roles/compartments/
+releasability (`curunir_operational.access` fail-closed model). This gives
+every action an attributable actor and every projection a server-side filter;
+it is NOT production PKI/credential rotation — that is the V6.7 security
+tranche. "Signatures" on dispositions are the authenticated actor identity
+recorded in the hash-chained log.
+
+## Restart / replay
+
+All state derives from the event log; a restarted process reconstructs
+identical authorized projections, and `export_to`/`import_from` (hash-chain
+verified, tamper-refusing) plus the custody directory reproduce the mission
+elsewhere without network or model providers.
+
+## Running
+
+```bash
+cd argus_demo && source .venv/bin/activate
+CURUNIR_MISSION_ROOT=missions/apple_workbench_v66 \
+CURUNIR_ACTORS=missions/apple_workbench_v66/actors.json \
+uvicorn --factory curunir_workbench.server:app --port 8100
+# open http://127.0.0.1:8100 and sign in with a token from actors.json
+```
+
+## Integrated live demonstration
+
+```bash
+# 1. populate a real mission root (live GLEIF/Wikidata/SEC/Wayback):
+python -m curunir_analytic.demo --root missions/apple_workbench_v66 --phase 1
+python -m curunir_analytic.demo --root missions/apple_workbench_v66 --phase 2 --operator jan
+python -m curunir_analytic.demo --root missions/apple_workbench_v66 --phase 3 --operator jan
+python -m curunir_analytic.demo --root missions/apple_workbench_v66 --phase 6 --operator jan
+# 2. run the full operator exercise through the HTTP boundary
+#    (overview → descent → hypothesis → LIVE route launch → annotation →
+#     restricted second analyst → review disposition → dossier validation
+#     rejection → repair → approval → restart → replay):
+python -m curunir_workbench.demo_mission --root missions/apple_workbench_v66
+```
+
+## Tests
+
+```bash
+python -m pytest tests/test_workbench_projections.py tests/test_workbench_reports.py \
+  tests/test_workbench_commands.py tests/test_workbench_server.py \
+  tests/test_workbench_replay.py tests/test_workbench_browser.py
+```
+
+`test_workbench_browser.py` drives real Chromium (Playwright) against a real
+server over a real seeded store — sign-in, COP, warning→evidence descent,
+hypothesis assessment, annotation, the full dossier flow, restricted-analyst
+filtering, timeline axes.
