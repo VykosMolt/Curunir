@@ -26,7 +26,7 @@ from typing import Any, Iterable, Mapping
 from urllib.parse import urlparse
 
 from argus.source_intelligence.models import digest_id
-from curunir_operational.access import Marking, marking_from_record
+from curunir_operational.access import Marking, marking_from_record, most_restrictive
 from curunir_operational.association import AssociationEngine
 from curunir_operational.contracts import (ActivityRecord, EvidenceRef, ExternalRef,
                                            ObjectVersion, ProvenanceSummary, RelationshipVersion)
@@ -341,7 +341,12 @@ def _queue_identity_ambiguity(ctx: IntegrationContext, proposal: Mapping[str, An
                f"{proposal['right_object_id'][:24]} ({proposal['outcome']}): "
                + "; ".join(proposal["rationale"])[:240],
         evidence_refs=(observation["observation_id"],) if observation else (),
-        status="OPEN", resolution_note="", recorded_time=now, marking=ctx.marking)
+        status="OPEN", resolution_note="", recorded_time=now,
+        # the ambiguity item is ABOUT the proposal (it names the equivalence of
+        # two objects); it inherits the proposal's marking, which is the join
+        # of both endpoints' markings — never a lower context default
+        marking=marking_from_record(proposal["marking"])
+        if isinstance(proposal.get("marking"), dict) else ctx.marking)
     store.append("REVIEW_ITEM_RECORDED", item, recorded_time=now, actor=ctx.actor)
 
 
@@ -669,8 +674,16 @@ def propose_cross_scheme_associations(ctx: IntegrationContext) -> list[dict[str,
                 pair = (left, right)
                 if pair in proposed_pairs:
                     continue
+                # the proposal (and its review item) reveals that two objects
+                # are equivalent — it is at least as restricted as the more
+                # restricted endpoint, never the pipeline default
+                pair_marking = most_restrictive(
+                    [ctx.marking]
+                    + [marking_from_record(latest[o]["marking"])
+                       for o in (left, right)
+                       if isinstance(latest[o].get("marking"), dict)])
                 proposal = engine.evaluate(left, right, recorded_time=ctx.now_fn(),
-                                           actor=ctx.actor, marking=ctx.marking,
+                                           actor=ctx.actor, marking=pair_marking,
                                            temporal_window_hours=24 * 3650,
                                            auto_accept=False)
                 _queue_identity_ambiguity(ctx, proposal, None)

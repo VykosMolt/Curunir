@@ -158,19 +158,41 @@ def _reference_marking(ctx: "CommandContext", projection: MissionProjection, *,
     compartmented subject is itself compartmented. The actor must be cleared
     for the result (`marked` already enforces the compartment floor; this
     also refuses a join above the actor's own access)."""
-    markings = [marked(ctx, compartments)]
-    for ref in refs:
-        if not ref:
-            continue
-        found = projection.marking_of(str(ref))
-        if isinstance(found, dict):
-            markings.append(marking_from_record(found))
+    markings = [marked(ctx, compartments)] + _ref_markings(projection, tuple(refs))
     result = most_restrictive(markings)
     if not can_view(result, ctx.context):
         raise PermissionError(
             "this record references state above your access; it cannot be "
             "written at a classification you cannot yourself view")
     return result
+
+
+def _ref_markings(projection: MissionProjection, refs: tuple) -> list[Marking]:
+    out: list[Marking] = []
+    for ref in refs:
+        if not ref:
+            continue
+        found = projection.marking_of(str(ref))
+        if isinstance(found, dict):
+            out.append(marking_from_record(found))
+    return out
+
+
+def _guard_reference_floor(projection: MissionProjection, subject_marking: Marking,
+                           refs: tuple) -> None:
+    """A record kept at its OWN fixed marking (a re-append, a fold, a
+    transition on an existing subject) must not cite state more restricted
+    than it can hold — that reference and any prose about it would sit in an
+    under-classified record. When the citation would raise the high-water
+    mark above the subject's marking, refuse. This is the single guard every
+    reference-accepting re-append/extend path shares; the NEW-record path
+    uses `_reference_marking` (which raises the marking instead)."""
+    joined = most_restrictive([subject_marking] + _ref_markings(projection, refs))
+    if joined.to_record() != subject_marking.to_record():
+        raise CommandError(
+            "this record cites state more restricted than its own "
+            "classification; cite records it can carry, or create the record "
+            "at that classification")
 
 
 def _definition_refs(definition: Mapping[str, Any]) -> tuple:
@@ -304,6 +326,12 @@ def open_requirement(ctx: CommandContext, *, question: str, priority: str,
         # minimal disclosure — folding would declassify, returning it would
         # disclose.)
         raise PermissionError("cannot open this requirement in your context")
+    if existing is not None:
+        # the fold keeps the existing requirement's marking while widening its
+        # affected set: it must not fold in a reference more restricted than
+        # that marking can hold
+        _guard_reference_floor(projection, marking_from_record(existing["marking"]),
+                               tuple(affected_ids))
     workflow = MissionWorkflow(ctx.store)
     result = workflow.open_requirement(
         mission_context=mission_context, question=question,
@@ -355,6 +383,9 @@ def transition_workflow(ctx: CommandContext, *, subject_kind: str, subject_id: s
     # "answering requires evidence" must mean evidence that RESOLVES:
     # a transition cannot be closed on fabricated or invisible references
     _validate_inbound(projection, refs=evidence_refs, texts=(note,))
+    # the transition keeps the subject's marking; cited evidence must not be
+    # more restricted than the subject can hold
+    _guard_reference_floor(projection, _record_marking(subject), tuple(evidence_refs))
     workflow = MissionWorkflow(ctx.store)
     # the transition inherits its subject's marking — it can never be less
     # restricted than the requirement/task it moves
@@ -502,10 +533,12 @@ def author_forecast(ctx: CommandContext, *, question: str, outcome_semantics: st
         raise PermissionError("a forecast probability is authored by a human "
                               "(or enters as a gated model candidate, not here)")
     projection = ctx.projection()
-    _validate_inbound(projection,
-                      refs=assumption_ids + tuple(r[1] for r in proposition_refs),
+    forecast_refs = assumption_ids + tuple(r[1] for r in proposition_refs)
+    _validate_inbound(projection, refs=forecast_refs,
                       texts=(question, outcome_semantics, probability_basis))
-    forecast_marking = marked(ctx, compartments)
+    # a forecast citing compartmented assumptions/propositions is compartmented
+    forecast_marking = _reference_marking(ctx, projection, refs=forecast_refs,
+                                          compartments=compartments)
     rule = resolution if isinstance(resolution, ResolutionRule) else ResolutionRule(
         **{k: (tuple(v) if isinstance(v, list) else v)
            for k, v in resolution.items() if k != "record_type"})
@@ -535,8 +568,10 @@ def move_forecast(ctx: CommandContext, forecast_id: str, *, expected_version: in
     if current["version"] != expected_version:
         raise Conflict(f"forecast is at version {current['version']}, "
                        f"you saw {expected_version}")
-    # the movement and its recorded transition inherit the forecast's marking
+    # the movement and its recorded transition inherit the forecast's marking;
+    # cited evidence must not be more restricted than the forecast can hold
     forecast_marking = _record_marking(ctx.store.current_forecasts()[forecast_id])
+    _guard_reference_floor(projection, forecast_marking, tuple(evidence_refs))
     try:
         return update_probability(ctx.analytic(forecast_marking), forecast_id,
                                   probability=probability,
@@ -559,6 +594,7 @@ def resolve_forecast(ctx: CommandContext, forecast_id: str, *, outcome: str,
         raise NotFound(f"unknown forecast: {forecast_id}")
     _validate_inbound(projection, refs=evidence_refs, texts=(rationale,))
     forecast_marking = _record_marking(ctx.store.current_forecasts()[forecast_id])
+    _guard_reference_floor(projection, forecast_marking, tuple(evidence_refs))
     return resolve_forecast_human(ctx.analytic(forecast_marking), forecast_id,
                                   outcome=outcome, evidence_refs=evidence_refs,
                                   note=rationale, actor_id=ctx.actor,
@@ -574,9 +610,11 @@ def link_hypothesis_claim(ctx: CommandContext, hypothesis_id: str, *,
     if projection.get("semantic_claim", claim_id) is None:
         raise NotFound(f"unknown claim: {claim_id}")
     _validate_inbound(projection, texts=(rationale,))
-    # the hypothesis re-append and any review item it queues inherit the
-    # hypothesis's own marking
+    # the hypothesis keeps its own marking (a re-append never re-classifies),
+    # so it must not take on a claim more restricted than it can hold — that
+    # claim id and the rationale about it would sit under-classified
     hyp_marking = _record_marking(ctx.store.current_hypotheses()[hypothesis_id])
+    _guard_reference_floor(projection, hyp_marking, (claim_id,))
     return link_claim(ctx.store, hypothesis_id, claim_id, stance,
                       rationale=rationale, now=ctx.now_fn(), actor=ctx.actor,
                       marking=hyp_marking)
@@ -652,8 +690,15 @@ def create_watch(ctx: CommandContext, *, need_id: str, target_kind: str,
     # and query_value are EXTERNAL identifiers (an LEI, a URL, a phrase), not
     # internal record ids — none is strict-validated. Only the free-text
     # blind-spot notes and REDACTED/hidden leakage are checked.
-    _soft_reject(ctx.projection(), (need_id, target_ref, query_value))
-    _validate_inbound(ctx.projection(), texts=tuple(blind_spots))
+    projection = ctx.projection()
+    _soft_reject(projection, (need_id, target_ref, query_value))
+    _validate_inbound(projection, texts=tuple(blind_spots))
+    # target_ref/query_value are external identifiers, but if either resolves
+    # to a visible internal record (a watch ON a compartmented object), the
+    # watch — its cadence, target and run history — inherits that marking
+    write_marking = _reference_marking(ctx, projection,
+                                       refs=(need_id, target_ref, query_value),
+                                       compartments=compartments)
     now = ctx.now_fn()
     watch_id = digest_id("watch", need_id, source_id, operation, query_value)
     raw = ctx.store.latest_by_id("fabric_watch", "watch_id").get(watch_id)
@@ -669,7 +714,7 @@ def create_watch(ctx: CommandContext, *, need_id: str, target_kind: str,
         need_id=need_id, target_kind=target_kind, target_ref=target_ref,
         source_id=source_id, operation=operation, query_value=query_value,
         cadence_seconds=cadence_seconds, active=True, blind_spots=blind_spots,
-        created_by=ctx.actor, created_time=now, marking=marked(ctx, compartments))
+        created_by=ctx.actor, created_time=now, marking=write_marking)
     register_watch(ctx.store, definition, actor=ctx.actor)
     return definition.to_record()
 
@@ -718,14 +763,18 @@ def save_view(ctx: CommandContext, *, title: str, view_kind: str,
     existing = ctx.store.latest_by_id("workbench_saved_view", "view_id").get(view_id)
     # a saved view whose focus/filters name compartmented objects is
     # compartmented (its definition embeds those ids)
-    write_marking = _reference_marking(ctx, projection,
-                                       refs=_definition_refs(definition),
-                                       compartments=compartments)
+    definition_refs = _definition_refs(definition)
+    if existing is not None:
+        # a re-save keeps the view's original marking; it must not now embed a
+        # reference more restricted than that marking can hold
+        view_marking = marking_from_record(existing["marking"])
+        _guard_reference_floor(projection, view_marking, definition_refs)
+    else:
+        view_marking = _reference_marking(ctx, projection, refs=definition_refs,
+                                          compartments=compartments)
     record = SavedViewRecord(
         view_id=view_id, title=title, author=ctx.actor, view_kind=view_kind,
-        definition=dict(definition), recorded_time=now,
-        marking=marking_from_record(existing["marking"]) if existing
-        else write_marking,
+        definition=dict(definition), recorded_time=now, marking=view_marking,
         version=(existing["version"] + 1) if existing else 1)
     try:
         ctx.store.append("WORKBENCH_SAVED_VIEW_RECORDED", record,
