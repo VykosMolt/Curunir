@@ -571,6 +571,10 @@ class MissionDataStore:
                 f"import rather than silently misreading the log. Restore with "
                 f"matching code (rollback), or run a migration.")
         new_root = Path(new_root)
+        if new_root.exists() and not new_root.is_dir():
+            # a file/symlink-to-file target would make mkdir + the rollback unlink
+            # raise NotADirectoryError untyped; refuse it up front as a StoreError (M1)
+            raise StoreError(f"import target exists and is not a directory: {new_root}")
         if (new_root / "store_meta.json").exists():
             raise StoreError(f"refusing to import over an existing store: {new_root}")
         root_preexisted = new_root.exists()
@@ -581,6 +585,13 @@ class MissionDataStore:
             (new_root / "store_meta.json").write_bytes(store_meta_bytes)
             (new_root / "events.jsonl").write_bytes(events_bytes)
             for name in manifest["payloads"]:
+                # the manifest is untrusted: a payload name MUST be a content-
+                # address (64-hex sha256) before we read it, or a hostile export
+                # naming "../../../etc/passwd" turns install into an arbitrary-file
+                # read (content discarded, but a read + existence oracle) (M4).
+                if not (isinstance(name, str) and len(name) == 64
+                        and all(c in "0123456789abcdef" for c in name)):
+                    raise StoreError(f"export manifest names a non-digest payload {name!r}; refusing")
                 body = (source_dir / "payloads" / name).read_bytes()
                 if hashlib.sha256(body).hexdigest() != name:
                     raise StoreError(f"export tampered: payload {name} hash mismatch")

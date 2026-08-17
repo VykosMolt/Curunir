@@ -72,7 +72,10 @@ class ActorRegistry:
         try:
             if self.path.stat().st_mtime != self._mtime:
                 self._load()
-        except OSError:
+        except (OSError, ValueError, KeyError):
+            # OSError = missing/unreadable; ValueError (incl. JSONDecodeError) /
+            # KeyError = a malformed registry mid-edit. Either way fail closed as
+            # an AuthError (401), never an untyped 500 on every request (M11).
             raise AuthError("actor registry unavailable")
         entry = self._by_actor.get(actor_id)
         if entry is None or not entry.get("enabled", True):
@@ -94,7 +97,10 @@ class ActorRegistry:
         try:
             if self.path.stat().st_mtime != self._mtime:
                 self._load()
-        except OSError:
+        except (OSError, ValueError, KeyError):
+            # OSError = missing/unreadable; ValueError (incl. JSONDecodeError) /
+            # KeyError = a malformed registry mid-edit. Either way fail closed as
+            # an AuthError (401), never an untyped 500 on every request (M11).
             raise AuthError("actor registry unavailable")
         # constant-time comparison over registered tokens; unknown token and
         # disabled actor are indistinguishable

@@ -40,6 +40,14 @@ function canonical(value) {
         "canonical: only safe-integer numbers may appear in a signed payload " +
         "(got " + value + "); carry non-integers as strings");
     }
+    if (Object.is(value, -0)) {
+      // JS collapses -0 and -0.0 to the same value, but the Python verifier
+      // renders "0" for int -0 and "-0.0" for float -0.0 — the browser cannot
+      // know which, so it cannot reproduce the verifier's bytes. Refuse it, like
+      // any other divergent number (review M8).
+      throw new Error("canonical: negative zero is ambiguous between int/float; " +
+                      "carry it as a string");
+    }
     return String(value);
   }
   if (t === "string") {

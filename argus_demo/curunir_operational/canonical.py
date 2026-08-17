@@ -6,6 +6,7 @@ repository stays confined to one replaceable seam (see sovereignty manifest).
 """
 from __future__ import annotations
 
+import math
 from datetime import datetime, timezone
 from typing import Any
 
@@ -30,5 +31,32 @@ def require_aware_or_none(value: str | None) -> None:
         require_aware(value)
 
 
+def reject_non_finite(value: Any) -> None:
+    """Raise ValueError if a float NaN / Infinity / -Infinity appears anywhere in
+    `value`. These are the surrogate class's TWIN: the kernel `canonical_bytes`
+    uses json.dumps at its default allow_nan=True, so a non-finite float
+    serializes to a bare `NaN`/`Infinity` token — NOT valid RFC-8259 JSON. Left
+    unchecked it lands in the append-only event log (which then no longer parses
+    under any strict third-party auditor), permanently 500s the record projection
+    that replays it, replicates through export/delta bundles, and can enter a
+    cryptographic signed_payload — all while verify_chain still reports valid.
+    Refused here at the single serialization seam so no record can carry one
+    (review NEW-C)."""
+    if isinstance(value, bool):
+        return
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise ValueError(
+                "non-finite float (NaN/Infinity) is not valid interchange JSON; refused")
+    elif isinstance(value, dict):
+        for k, v in value.items():
+            reject_non_finite(k)
+            reject_non_finite(v)
+    elif isinstance(value, (list, tuple, set, frozenset)):
+        for item in value:
+            reject_non_finite(item)
+
+
 def canonical_line(value: Any) -> str:
+    reject_non_finite(value)
     return canonical_bytes(value).decode()

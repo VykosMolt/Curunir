@@ -16,6 +16,7 @@ NOTE: no `from __future__ import annotations` here — the request models are
 defined inside create_app, and stringified annotations would make FastAPI
 unable to resolve them (silently demoting body models to query params).
 """
+import math
 import os
 from pathlib import Path
 from typing import Any
@@ -56,16 +57,24 @@ def render_safe(value) -> str:
 
 
 def _deep_render_safe(value):
-    """render_safe applied recursively across a nested structure — for response
-    content assembled from caller-supplied data (a validation-error echo) before
-    it reaches Starlette's UTF-8 render (review NEW-1)."""
+    """render_safe applied recursively and TOTALLY: every value maps to a
+    JSON-native, RFC-8259-renderable form, so response content assembled from
+    caller-supplied data (a validation-error echo) cannot crash Starlette's
+    render — not on a lone surrogate, a non-UTF-8 `bytes` input, a non-finite
+    float, or an arbitrary object (review NEW-1 / NEW-A / NEW-B)."""
+    if value is None or isinstance(value, (bool, int)):
+        return value
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None       # NaN/Infinity are not JSON
     if isinstance(value, str):
         return render_safe(value)
+    if isinstance(value, (bytes, bytearray)):
+        return bytes(value).decode("utf-8", "replace")        # a non-UTF-8 body input
     if isinstance(value, dict):
         return {_deep_render_safe(k): _deep_render_safe(v) for k, v in value.items()}
-    if isinstance(value, (list, tuple)):
+    if isinstance(value, (list, tuple, set, frozenset)):
         return [_deep_render_safe(v) for v in value]
-    return value
+    return render_safe(value)                                 # any other object -> scrubbed str()
 
 
 def create_app(mission_root: str | Path, actors_path: str | Path,
@@ -80,20 +89,23 @@ def create_app(mission_root: str | Path, actors_path: str | Path,
     app.state.registry = registry
 
     from fastapi.exceptions import RequestValidationError
-    from fastapi.encoders import jsonable_encoder
 
     @app.exception_handler(RequestValidationError)
     async def _scrub_validation_errors(request: Request, exc: RequestValidationError):
         # Body validation runs BEFORE the endpoint (so before context() / any
         # auth), and FastAPI's default 422 handler echoes the offending input
-        # verbatim. A lone surrogate in that input then crashes Starlette's
-        # UTF-8 render into an UNAUTHENTICATED 500 on every POST endpoint. The
-        # premise that the wire cannot carry a lone surrogate is FALSE: JSON
-        # "\uD800" is pure ASCII on the wire, json.loads accepts it, and a
-        # browser's JSON.stringify emits exactly that form. Scrub the echoed
-        # errors so the 422 renders cleanly (corrects the mistaken F-W1 premise;
-        # review NEW-1).
-        safe = _deep_render_safe(jsonable_encoder(exc.errors()))
+        # verbatim. That echo can 500 Starlette's render UNAUTHENTICATED on every
+        # POST — via a lone surrogate (JSON "\uD800" is pure ASCII on the wire, so
+        # the F-W1 "wire can't carry it" premise was FALSE), a non-UTF-8 `bytes`
+        # input (jsonable_encoder's bytes-decode raises first — NEW-A), or a
+        # NaN/Infinity float (Starlette renders allow_nan=False — NEW-B).
+        # _deep_render_safe is TOTAL, so it neutralizes all three; the try is a
+        # belt-and-suspenders fallback for any residual un-encodable errors()
+        # structure (review NEW-1 / NEW-A / NEW-B).
+        try:
+            safe = _deep_render_safe(exc.errors())
+        except Exception:
+            safe = "invalid request body"
         return JSONResponse(status_code=422, content={"detail": safe})
 
     # ---- auth ---------------------------------------------------------------
@@ -418,7 +430,7 @@ def create_app(mission_root: str | Path, actors_path: str | Path,
     class ForecastBody(BaseModel):
         question: str; outcome_semantics: str; horizon_time: str
         probability: float; probability_basis: str
-        proposition_refs: list[list[str]]
+        proposition_refs: list[tuple[str, str]]   # fixed 2-tuples: a bad shape is a 422, not a 500 (M5)
         resolution: dict[str, Any]
         domain: str
         assumption_ids: list[str] = Field(default_factory=list)

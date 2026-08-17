@@ -80,6 +80,7 @@ REFUSED_CORPUS = [
     {"k": "tail \udfff"},     # a lone surrogate nested in a value
     {"\ud800": 1},            # a lone surrogate in an object KEY (F-J1 residual)
     {"outer": {"k\udfff": "ok"}},  # a lone-surrogate key nested one level down
+    -0.0,                     # negative zero: JS "0" vs Python "-0.0" — refuse (M8)
 ]
 
 

@@ -176,7 +176,11 @@ class KeyRegistry:
                 public_key=new_public_key_hex, status="ACTIVE",
                 enrolled_time=record["enrolled_time"], status_time=now,
                 supersedes_key_id=old["key_id"], reason="rotated-in", recorded_time=now,
-                marking=self._marking_for()), recorded_time=now, actor=self.actor)
+                # floor on the SUPERSEDED key's marking — the rotated-in record
+                # embeds its key_id, so it must not be less protected than it
+                # (no write-down; completes the _transition/revoke floor; M6).
+                marking=inherited_marking(self._marking_for(), [old.get("marking")])),
+                recorded_time=now, actor=self.actor)
             return self.current(new_key_id)
         return record
 

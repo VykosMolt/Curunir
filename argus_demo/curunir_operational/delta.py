@@ -111,7 +111,10 @@ def import_delta_bundle(store: MissionDataStore, bundle_dir: str | Path) -> dict
     # system ingests), so splitlines() would tear an event in half and fail an
     # otherwise byte-valid privileged bundle import. This is the C-1 doctrine
     # ("all readers split on \n only") applied to the delta path (review NEW-3).
-    raw = (bundle_dir / "delta_events.jsonl").read_bytes().decode("utf-8")
+    try:
+        raw = (bundle_dir / "delta_events.jsonl").read_bytes().decode("utf-8")
+    except UnicodeDecodeError as exc:                          # hostile bundle (M9)
+        raise StoreError("delta bundle events are not valid UTF-8") from exc
     events = [json.loads(line) for line in raw.split("\n") if line.strip()]
     applied = 0
     for event in events:

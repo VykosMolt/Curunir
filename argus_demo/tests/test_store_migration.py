@@ -195,3 +195,15 @@ def test_import_install_failure_rolls_back_whole_root_and_is_typed(tmp_path):
     with pytest.raises(StoreError):
         WorkbenchStore.import_from(backup_b, restored_b)
     assert not restored_b.exists()
+
+
+def test_canonical_line_refuses_non_finite_float(tmp_path):
+    # review NEW-C: the serialization seam refuses NaN/Infinity so no record can
+    # carry a bare non-RFC-8259 token into the append-only log (the surrogate
+    # class's twin). Finite floats are unaffected.
+    for bad in (float("nan"), float("inf"), float("-inf")):
+        with pytest.raises(ValueError):
+            canonical_line({"x": bad})
+        with pytest.raises(ValueError):
+            canonical_line([1, {"deep": [bad]}])        # nested containers too
+    assert canonical_line({"x": 1.5, "y": -2.0, "z": 3})  # finite is fine

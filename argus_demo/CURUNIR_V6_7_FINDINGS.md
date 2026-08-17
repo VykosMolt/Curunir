@@ -609,3 +609,76 @@ record leaves zero bytes), query/path/header surrogate delivery (all decode to
 U+FFFD or latin-1), the connector edge and semantic normalizer, executor fault
 domains, four-eyes/SoD, `export_html` escaping, fail-closed defaults, and
 export/manifest hashing.
+
+## Round 15 — reconvergence found the surrogate class's TWIN (non-finite floats) + 2 more render vectors (3 MAJOR, repaired round 16)
+
+Round 15 independently re-verified the round-14 repairs — NEW-4, NEW-2, NEW-3,
+F-P1, F-J1, F-B1 and the KeyRegistry floor all CONFIRMED_CORRECT with live
+probes — but returned `NOT_CONVERGED`: NEW-1 was not fully closed (two more ways
+the validation-error echo 500s), and it found the class the whole campaign had
+been circling without naming — **a value that canonical serialization ACCEPTS
+but that is not valid interchange JSON**. Three MAJOR, all repaired round 16.
+
+- **NEW-A (MAJOR)** — unauthenticated 500 on every POST via a **non-UTF-8 body**.
+  The round-14 handler ran `jsonable_encoder(exc.errors())`, and FastAPI's
+  `ENCODERS_BY_TYPE[bytes]` does `o.decode()`, which raises `UnicodeDecodeError`
+  on a non-UTF-8 `input` BEFORE the scrub. Fixed: `_deep_render_safe` is now
+  TOTAL — it handles `bytes` (decode replace), and the handler no longer calls
+  `jsonable_encoder`. Lock: `test_non_utf8_and_nan_bodies_yield_422_not_500`.
+- **NEW-B (MAJOR)** — unauthenticated 500 on every POST via a **NaN/Infinity
+  float** in a JSON body. `json.loads` accepts them; Starlette renders with
+  `allow_nan=False`; the pass-through fallthrough let them reach the render.
+  Fixed: `_deep_render_safe` maps a non-finite float to `null`. Same lock.
+- **NEW-C (MAJOR)** — the twin, at the RECORD boundary. The kernel
+  `canonical_bytes` uses `json.dumps` at default `allow_nan=True`, so a NaN/Inf
+  serialized to a bare non-RFC-8259 token. An ordinary ANALYST POSTing
+  `/api/commands/saved-views` with `{"definition":{"zoom":NaN}}` committed the
+  event, THEN 500ed the response — permanently 500ing the record projection that
+  replays it (append-only, no recovery), replicating the poison through
+  export/delta bundles, and (via a signed `payload`) writing a non-reproducible
+  `signed_payload` into a non-repudiation record while `replay` still reported
+  GENUINE — all with `verify_chain` still valid. Fixed at the single
+  serialization seam: `canonical_line` now REFUSES any non-finite float
+  (`reject_non_finite`), so **no record can carry one**. This closes both HTTP
+  sinks automatically: `save_view`'s append raises `ValueError` → honest 400
+  (nothing committed); the signed path's `verify()` re-canonicalizes the payload,
+  the raise is caught as a bad signature → 401. Locks:
+  `test_canonical_line_refuses_non_finite_float`,
+  `test_non_finite_float_saved_view_is_refused_not_committed`,
+  `test_signed_payload_with_non_finite_is_refused_not_recorded`.
+
+Confirming the source→record path was already closed for this class (the
+connector edge `str()`-coerces and the normalizer stringifies), the exposure was
+the workbench's free-form dict fields; the seam fix covers those and everything
+else uniformly.
+
+MINOR / hardening repaired the same round:
+
+- **M6** — `KeyRegistry.rotate`'s "rotated-in" re-append stamped the ambient
+  marking; now floors on the superseded key's marking (completes the round-14
+  `_transition`/`revoke` no-write-down fix).
+- **M1** — `import_from` into a non-directory target raised an untyped
+  `NotADirectoryError`; now a typed `StoreError` up front.
+- **M4** — `import_from` read a payload file named by the untrusted manifest
+  BEFORE the hash check (an arbitrary-file-read / existence-oracle via a hostile
+  `../../..` name); now the name must be a 64-hex content digest first.
+- **M5** — two authenticated 500s where a 4xx is due: the forecast
+  `proposition_refs` model is now `list[tuple[str,str]]` (bad shape → 422), and a
+  malformed `resolution` dict → `ValueError` → 400 (not an uncaught `TypeError`).
+- **M8** — `canonical.js` refused `-0` (JS "0" vs Python "-0.0"); parity corpus
+  updated.
+- **M9** — a hostile delta bundle with invalid UTF-8 → typed `StoreError`.
+- **M11** — a malformed actor registry mid-edit → `AuthError` (401), not an
+  untyped 500 on every request.
+- **ValueError→Conflict consistency** — `save_view` / `resolve_review_item` /
+  `create_hypothesis` relabelled a malformed-content `ValueError` as 409; now
+  only a store `StoreError` (a real version conflict) is a 409, content errors
+  stay 400 (the forecast path already did this).
+
+Registered bounded (reviewer-assessed, not merge-blocking): M2/M3 (importing over
+an existing non-store directory overwrites/leaves debris — inherent to
+import-over-existing), M7 (a source `Infinity` lands in a text-only content
+payload, never re-parsed), M10 (legacy `str.splitlines()` readers in
+`partition_custody`/`v3..v5_3`/`scenario`, proven unreachable from the V6.7
+product by an import-graph probe), and the F-B1 torn-tail double-observation
+(over-reporting, the safe direction).

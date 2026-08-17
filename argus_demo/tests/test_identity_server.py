@@ -246,3 +246,70 @@ def test_non_ascii_bearer_over_http_is_401_not_500(tmp_path):
     asyncio.run(app(scope, receive, send))
     status = next(m for m in out if m["type"] == "http.response.start")["status"]
     assert status == 401
+
+
+def test_non_utf8_and_nan_bodies_yield_422_not_500(tmp_path):
+    # review NEW-A / NEW-B: the validation-error echo must not 500 the whole POST
+    # surface, unauthenticated, on a non-UTF-8 body (jsonable_encoder's bytes
+    # decode raised first) or a NaN/Infinity float (Starlette renders allow_nan=
+    # False). Both must be honest 422s.
+    root, actors_path, clock, report_id, version, pem_b = _build(tmp_path)
+    client = TestClient(create_app(root, actors_path, now_fn=clock.now),
+                        raise_server_exceptions=False)
+    for path in ("/api/auth/challenge", "/api/auth/authenticate"):
+        a = client.post(path, content=b"\xff",                       # NEW-A: non-UTF-8, no auth
+                        headers={"Content-Type": "text/plain"})
+        assert a.status_code == 422, f"NEW-A {path} -> {a.status_code}"
+        b = client.post(path, content=b'{"zz":NaN}',                 # NEW-B: non-finite, no auth
+                        headers={"Content-Type": "application/json"})
+        assert b.status_code == 422, f"NEW-B {path} -> {b.status_code}"
+
+
+def test_non_finite_float_saved_view_is_refused_not_committed(tmp_path):
+    # review NEW-C (store sink): a non-finite float would serialize to a bare
+    # non-RFC-8259 NaN token and poison the append-only log. canonical_line now
+    # REFUSES it, so an authenticated ANALYST gets an honest 400 and NOTHING is
+    # committed (no poisoned projection, no non-standard JSON in the chain).
+    root, actors_path, clock, report_id, version, pem_b = _build(tmp_path)
+    client = TestClient(create_app(root, actors_path, now_fn=clock.now),
+                        raise_server_exceptions=False)
+    head_before = WorkbenchStore(root / "store").head()["head_hash"]
+    r = client.post("/api/commands/saved-views",
+                    content=b'{"title":"t","view_kind":"graph",'
+                            b'"definition":{"zoom":NaN},"compartments":[]}',
+                    headers={"Authorization": "Bearer tok-a",
+                             "Content-Type": "application/json"})
+    assert r.status_code == 400, r.text                              # honest rejection, not 500
+    assert WorkbenchStore(root / "store").head()["head_hash"] == head_before  # nothing written
+
+
+def test_signed_payload_with_non_finite_is_refused_not_recorded(tmp_path):
+    # review NEW-C (signing sink): a signed_payload carrying a non-finite float
+    # must not become a non-repudiation record. The server canonicalizes the
+    # received payload to verify the signature; canonical_line now raises on the
+    # NaN, verify() catches it as a bad signature -> 401. No non-RFC-8259 bytes
+    # can enter a SIGNED_ACTION_RECORDED event.
+    import json as _json
+    from curunir_identity.sessions import SessionManager
+    root, actors_path, clock, report_id, version, pem_b = _build(tmp_path)
+    client = TestClient(create_app(root, actors_path, now_fn=clock.now),
+                        raise_server_exceptions=False)
+    ch = client.post("/api/auth/challenge", json={"actor_id": "analyst-b"},
+                     headers={"Authorization": "Bearer tok-b"}).json()
+    auth = client.post("/api/auth/authenticate", json={
+        "actor_id": "analyst-b", "nonce": ch["nonce"],
+        "signature": sign(pem_b, SessionManager.challenge_payload("analyst-b", ch["nonce"]))})
+    session_id = auth.json()["session_id"]
+    body = ('{"session_id":"%s","signature":"%s","expected_version":%d,"payload":'
+            '{"actor_id":"analyst-b","actor_kind":"HUMAN","action_type":"approve_report",'
+            '"target_kind":"workbench_report","target_id":"%s",'
+            '"target_version_token":"workbench_report:%s@v%d","mission_id":"%s",'
+            '"nonce":"nan-n1","timestamp":"%s","command":{"disposition":"APPROVED",'
+            '"score":NaN}}}' % (session_id, "00" * 64, version, report_id, report_id,
+                                version, MISSION, clock.now())).encode()
+    r = client.post(f"/api/commands/reports/{report_id}/approve-signed",
+                    content=body, headers={"Content-Type": "application/json"})
+    assert r.status_code == 401, r.text                              # unverifiable, never a poisoned 200
+    store = WorkbenchStore(root / "store")
+    signed = [e for e in store.records_of("signed_action")] if "signed_action" in store.EVENT_TYPES.values() else []
+    assert all("NaN" not in _json.dumps(e) for e in signed)         # no non-finite in any signed record

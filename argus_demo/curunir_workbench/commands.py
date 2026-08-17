@@ -26,6 +26,7 @@ from curunir_fabric.watch import register_watch, retire_watch
 from curunir_operational.access import (AccessContext, Marking, can_view,
                                         marking_from_record, most_restrictive)
 from curunir_operational.missions import MissionWorkflow
+from curunir_operational.store import StoreError
 from curunir_operational.workflow import WorkflowEngine
 from curunir_semantic.collection import assign_human_route, execute_route
 from curunir_semantic.contracts import ReviewItem
@@ -428,7 +429,7 @@ def resolve_review_item(ctx: CommandContext, item_id: str, *,
     try:
         ctx.store.append("REVIEW_ITEM_RECORDED", record,
                          recorded_time=record.recorded_time, actor=ctx.actor)
-    except ValueError as error:
+    except StoreError as error:      # a version conflict is a 409; malformed content stays a 400
         raise Conflict(str(error)) from error
     return record.to_record()
 
@@ -514,7 +515,7 @@ def assess_hypothesis(ctx: CommandContext, hypothesis_id: str, *,
     try:
         ctx.store.append("HYPOTHESIS_RECORDED", record,
                          recorded_time=record.recorded_time, actor=ctx.actor)
-    except ValueError as error:
+    except StoreError as error:      # a version conflict is a 409; malformed content stays a 400
         raise Conflict(str(error)) from error
     return record.to_record()
 
@@ -539,9 +540,14 @@ def author_forecast(ctx: CommandContext, *, question: str, outcome_semantics: st
     # a forecast citing compartmented assumptions/propositions is compartmented
     forecast_marking = _reference_marking(ctx, projection, refs=forecast_refs,
                                           compartments=compartments)
-    rule = resolution if isinstance(resolution, ResolutionRule) else ResolutionRule(
-        **{k: (tuple(v) if isinstance(v, list) else v)
-           for k, v in resolution.items() if k != "record_type"})
+    try:
+        rule = resolution if isinstance(resolution, ResolutionRule) else ResolutionRule(
+            **{k: (tuple(v) if isinstance(v, list) else v)
+               for k, v in resolution.items() if k != "record_type"})
+    except TypeError as exc:
+        # a client-supplied resolution dict with unknown/missing fields is a bad
+        # request, not a server bug: surface it as ValueError -> 400, not a 500 (M5)
+        raise ValueError(f"invalid resolution rule: {exc}")
     analytic_ctx = ctx.analytic()
     analytic_ctx.marking = forecast_marking
     return create_forecast(analytic_ctx, question=question,
@@ -779,7 +785,11 @@ def save_view(ctx: CommandContext, *, title: str, view_kind: str,
     try:
         ctx.store.append("WORKBENCH_SAVED_VIEW_RECORDED", record,
                          recorded_time=now, actor=ctx.actor)
-    except ValueError as error:
+    except StoreError as error:
+        # only a store-level conflict (a concurrent writer advanced the version)
+        # is a 409; a malformed-CONTENT ValueError (e.g. a non-finite float or a
+        # lone surrogate refused by canonical_line) must stay a 400, not be
+        # relabelled a Conflict (review NEW-C).
         raise Conflict(str(error)) from error
     return record.to_record()
 
