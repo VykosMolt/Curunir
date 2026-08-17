@@ -287,6 +287,17 @@ from committed state plus its documented external prerequisites — the inherite
 development-machine accident. Proven in an isolated `git archive` tree with a
 working-tree-free import path by `tests/test_clean_reconstruction.py`.
 
+## Endurance (§8)
+
+A bounded continuous-operation exercise (`tests/test_endurance.py`) runs 120
+cycles of collection → semantic processing → operator read/write, with a poison
+manifestation injected mid-run. Observed: the hash chain stays valid throughout,
+no file-descriptor leak (fd 7→7), memory grows modestly and linearly
+(≈61→67 MiB), each cycle's work lands exactly once, and the poison record is
+retried at most the cap (no storm). Per-cycle latency grows mildly with mission
+size (≈3.5→4.4 ms) — the whole-log-in-memory store's per-op scan cost, a
+documented scale limitation below, not a lifecycle defect.
+
 ## Known bounded limitations (not V6.7 defects)
 
 - **Signed-action crash window** (F-06 residual): the command commits, then the
@@ -322,5 +333,20 @@ working-tree-free import path by `tests/test_clean_reconstruction.py`.
   chokepoint to referenced-object markings so it is the sole fail-closed defense.
 - No tool-execution/sandbox surface exists in the product, so tool-sandbox
   hardening is not applicable to the current runtime.
+- **`pdftotext` peak memory** (§6a): the 25 MB output cap bounds what flows
+  downstream, but `subprocess.run(stdout=PIPE)` buffers the child's whole stdout
+  before the cap is applied, so a PDF that decompresses to multi-GB of text
+  within the 30 s timeout could exhaust memory before truncation. Bounded by the
+  30 s timeout; full closure needs a streaming bounded read.
+- **Whole-log-in-memory scale** (§4a/§4b/§8): the store replays the entire event
+  log into memory and several read/write paths scan it per operation, so per-op
+  cost grows with mission size (the endurance exercise shows this is mild and
+  coherent at bounded scale). This is a scalability limitation, not a
+  correctness or security defect; large-mission responsiveness needs on-disk
+  indexing — a future scale pass.
+- **Acquisition-edge trickle timeout** (§1a): the 40 MB byte cap bounds download
+  size, and connector faults are contained, but the transport's per-socket
+  timeout (in the untracked kernel) is not a whole-transfer deadline, so a very
+  slow trickle can hold a connection open. Bytes are bounded; wall-time is not.
 
 See `CURUNIR_V6_7_FINDINGS.md` for the adversarial finding ledger.
