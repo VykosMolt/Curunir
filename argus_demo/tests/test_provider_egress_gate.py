@@ -221,3 +221,35 @@ def test_provider_non_finite_output_is_scrubbed_and_recorded(tmp_path):
     rec = ctx.store.records_of("inference")[-1]              # audit landed
     assert rec["output"]["confidence"] is None               # non-finite -> null
     assert json.dumps(rec, allow_nan=False)                  # whole record re-serializes clean
+
+
+def test_provider_scrub_is_total_no_container_escapes_containment(tmp_path):
+    # review N-1: _scrub_output must be TOTAL — a set with a non-finite member
+    # (which canonical order-normalises by SORTING), bytes, a Decimal, or mixed
+    # dict-key types must NOT crash the InferenceRecord append (which is built
+    # OUTSIDE propose()'s containment) and lose the non-repudiation record.
+    import json, decimal
+    from curunir_analytic.providers import _scrub_output
+    from curunir_operational.canonical import canonical_line
+    hostile = {"title": "ok", "a_set": {float("inf"), 1.0}, "hetero": {1, "x", 2.5},
+               "raw": b"\xff\x00", "dec": decimal.Decimal("1.5"),
+               "mixedkeys": {5: "a", "b": 2}}
+    scrubbed = _scrub_output(hostile)
+    canonical_line(scrubbed)                                  # serializes without raising
+    assert canonical_line(_scrub_output(hostile)) == canonical_line(scrubbed)  # deterministic
+
+    # and end-to-end through propose(): the audit survives a set-bearing response
+    pipeline, ctx = make_analytic(tmp_path)
+    _plant_restricted(pipeline, "SEC0000000000000009")
+    pipeline.process_new_evidence()
+    claim = _claim(ctx.store, "SEC0000000000000009")
+    provider = AnalyticalAssist(
+        package=analytical_assist_package("local-total", "m", "1"),
+        infer_fn=lambda t, i: {"title": "ok", "s": {float("nan"), 3.0},
+                               "supporting_claim_ids": [claim["claim_id"]]},
+        allowed_input_marking=RESTRICTED_MARK)
+    out = provider.propose(ctx, task="t", target_kind="analytic_theme",
+                           inputs={"x": "y"}, input_refs=(claim["claim_id"],))  # must NOT raise
+    assert out["status"] in ("PROPOSED", "MALFORMED_CANDIDATE"), out
+    rec = ctx.store.records_of("inference")[-1]              # audit landed
+    assert json.dumps(rec, allow_nan=False)                  # and re-serializes clean

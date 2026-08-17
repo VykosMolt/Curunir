@@ -407,3 +407,29 @@ def test_report_sentence_id_wrong_type_is_400_not_500(tmp_path):
                         json={"title": "T", "question": "Q", "sections": sections, "compartments": []},
                         headers={"Authorization": "Bearer tok-a"})
         assert r.status_code == 400, f"{sections} -> {r.status_code}"
+
+
+def test_signed_timestamp_non_string_is_401_not_500(tmp_path):
+    # review N-2: a non-str timestamp in a signed payload has no .replace() in
+    # parse_time (AttributeError) — it must be an honest 401 (unparseable
+    # timestamp), never an authenticated 500.
+    from curunir_identity.sessions import SessionManager
+    root, actors_path, clock, report_id, version, pem_b = _build(tmp_path)
+    client = TestClient(create_app(root, actors_path, now_fn=clock.now),
+                        raise_server_exceptions=False)
+    ch = client.post("/api/auth/challenge", json={"actor_id": "analyst-b"},
+                     headers={"Authorization": "Bearer tok-b"}).json()
+    auth = client.post("/api/auth/authenticate", json={
+        "actor_id": "analyst-b", "nonce": ch["nonce"],
+        "signature": sign(pem_b, SessionManager.challenge_payload("analyst-b", ch["nonce"]))})
+    sid = auth.json()["session_id"]
+    signed = sign_action(pem_b, actor_id="analyst-b", actor_kind="HUMAN",
+                         action_type="approve_report", target_kind="workbench_report",
+                         target_id=report_id,
+                         target_version_token=f"workbench_report:{report_id}@v{version}",
+                         mission_id=MISSION, nonce="ts-n1", timestamp=12345,   # int, not str
+                         command={"disposition": "APPROVED"})
+    r = client.post(f"/api/commands/reports/{report_id}/approve-signed", json={
+        "session_id": sid, "payload": signed["payload"],
+        "signature": signed["signature"], "expected_version": version})
+    assert r.status_code == 401, f"{r.status_code}: {r.text}"

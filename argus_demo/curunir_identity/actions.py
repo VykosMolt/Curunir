@@ -135,7 +135,10 @@ def verify_action(store, registry: KeyRegistry, sessions: SessionManager, *,
     timestamp = payload.get("timestamp", "")
     try:
         skew = abs((parse_time(timestamp) - parse_time(sessions.now_fn())).total_seconds())
-    except (ValueError, TypeError):
+    except (ValueError, TypeError, AttributeError):
+        # AttributeError: a non-str timestamp has no .replace() in parse_time — a
+        # bad signed timestamp is an unparseable timestamp (SignatureRejected /
+        # 401), never an authenticated 500 (review N-2)
         raise SignatureRejected(CLOCK_SKEW, "action timestamp is unparseable")
     if skew > MAX_CLOCK_SKEW_SECONDS:
         raise SignatureRejected(CLOCK_SKEW,

@@ -119,10 +119,17 @@ def import_delta_bundle(store: MissionDataStore, bundle_dir: str | Path) -> dict
         events = [json.loads(line) for line in raw.split("\n") if line.strip()]
     except json.JSONDecodeError as exc:                        # hostile bundle (MINOR-3)
         raise StoreError("delta bundle has a malformed event line") from exc
-    # validate EVERY event (non-finite by value, incl. 1e400->inf) BEFORE applying
-    # any, so a poison bundle is refused atomically rather than partially applied
-    # with an untyped ValueError from canonical_line mid-loop (review MINOR-3)
+    # validate EVERY event (shape + non-finite by value, incl. 1e400->inf) BEFORE
+    # applying any, so a poison/malformed bundle is refused atomically with a
+    # typed StoreError rather than partially applied then crashing mid-loop on an
+    # untyped TypeError/KeyError/ValueError while indexing event[...] (review
+    # MINOR-3 / N-3)
     for event in events:
+        if not (isinstance(event, dict) and isinstance(event.get("seq"), int)
+                and not isinstance(event.get("seq"), bool)
+                and isinstance(event.get("entry_hash"), str)
+                and isinstance(event.get("record"), dict)):   # record must be a dict — the apply loop .get()s it
+            raise StoreError("delta bundle has a malformed event envelope; refusing")
         try:
             reject_non_finite(event)
         except ValueError as exc:

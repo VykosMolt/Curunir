@@ -245,3 +245,44 @@ def test_delta_import_refuses_non_finite_atomically(tmp_path):
     with pytest.raises(StoreError):
         import_delta_bundle(target, tmp_path / "delta")
     assert target.head()["head_hash"] == head_before                   # ATOMIC: nothing applied
+
+
+def test_delta_import_refuses_malformed_envelope_atomically(tmp_path):
+    # review N-3: a JSON-valid but structurally-malformed event — a scalar line, OR
+    # a valid envelope whose `record` is a scalar (the apply loop .get()s it) — must
+    # be refused with a typed StoreError and NOTHING applied, not crash mid-loop
+    # with an untyped TypeError/KeyError after a partial apply.
+    import hashlib, shutil
+    from curunir_operational.canonical import canonical_line, sha256
+
+    def _run(sub, mutate_first_line):
+        store, base_seq = build_two_phase_store(tmp_path / sub)
+        store.export_to(tmp_path / sub / "exp")
+        lines = (tmp_path / sub / "exp" / "events.jsonl").read_text().splitlines()
+        tgt = tmp_path / sub / "target"; (tgt / "payloads").mkdir(parents=True)
+        shutil.copyfile(tmp_path / sub / "exp" / "store_meta.json", tgt / "store_meta.json")
+        (tgt / "events.jsonl").write_text("\n".join(lines[:base_seq]) + "\n")
+        for p in (tmp_path / sub / "exp" / "payloads").iterdir():
+            shutil.copyfile(p, tgt / "payloads" / p.name)
+        target = MissionDataStore(tgt)
+        head_before = target.head()["head_hash"]
+        build_delta_bundle(store, tmp_path / sub / "delta", base_seq=base_seq)
+        ev_path = tmp_path / sub / "delta" / "delta_events.jsonl"
+        dlines = ev_path.read_bytes().split(b"\n")
+        dlines[0] = mutate_first_line(dlines[0])
+        newb = b"\n".join(dlines); ev_path.write_bytes(newb)
+        man = json.loads((tmp_path / sub / "delta" / "delta_manifest.json").read_text())
+        man["events_sha256"] = hashlib.sha256(newb).hexdigest()
+        man["manifest_sha256"] = sha256({k: v for k, v in man.items() if k != "manifest_sha256"})
+        (tmp_path / sub / "delta" / "delta_manifest.json").write_text(canonical_line(man) + "\n")
+        assert verify_delta_bundle(tmp_path / sub / "delta")["valid"]   # gates pass; only the shape check catches it
+        with pytest.raises(StoreError):
+            import_delta_bundle(target, tmp_path / sub / "delta")
+        assert target.head()["head_hash"] == head_before               # ATOMIC: nothing applied
+
+    _run("scalar_event", lambda line: b"5")
+    # a valid envelope whose record is a scalar (isinstance(record, dict) half)
+    def _scalar_record(line):
+        ev = json.loads(line); ev["record"] = 5
+        return json.dumps(ev).encode()
+    _run("scalar_record", _scalar_record)

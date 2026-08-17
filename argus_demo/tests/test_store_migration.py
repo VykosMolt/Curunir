@@ -246,15 +246,62 @@ def test_import_refuses_non_finite_event_log(tmp_path):
 
 
 def test_import_refuses_non_finite_store_meta(tmp_path):
-    # review MAJOR-1: store_meta is byte-copied too, so it needs the same guard.
+    # review MAJOR-1 / N-5 self-review: store_meta is byte-copied too, so it needs
+    # the same by-value + depth guard (a non-finite float AND a deeply nested
+    # hostile meta must both be a typed StoreError, never an untyped RecursionError).
     import hashlib
-    make_workbench(tmp_path)
-    store = WorkbenchStore(tmp_path / "store")
-    exp = tmp_path / "exp"; store.export_to(exp)
-    meta = json.loads((exp / "store_meta.json").read_text()); meta["junk"] = float("inf")
-    newb = json.dumps(meta, allow_nan=True).encode(); (exp / "store_meta.json").write_bytes(newb)
-    man = json.loads((exp / "export_manifest.json").read_text())
-    man["store_meta_sha256"] = hashlib.sha256(newb).hexdigest()
-    (exp / "export_manifest.json").write_text(canonical_line(man) + "\n")
-    with pytest.raises(StoreError):
-        WorkbenchStore.import_from(exp, tmp_path / "dest")
+    def _poison_meta(sub, produce_bytes):
+        make_workbench(tmp_path / sub)
+        store = WorkbenchStore(tmp_path / sub / "store")
+        exp = tmp_path / sub / "exp"; store.export_to(exp)
+        newb = produce_bytes(json.loads((exp / "store_meta.json").read_text()))
+        (exp / "store_meta.json").write_bytes(newb)
+        man = json.loads((exp / "export_manifest.json").read_text())
+        man["store_meta_sha256"] = hashlib.sha256(newb).hexdigest()
+        (exp / "export_manifest.json").write_text(canonical_line(man) + "\n")
+        with pytest.raises(StoreError):
+            WorkbenchStore.import_from(exp, tmp_path / sub / "dest")
+
+    def _inf(meta):
+        meta["junk"] = float("inf"); return json.dumps(meta, allow_nan=True).encode()
+    def _deep(meta):
+        node = meta
+        for _ in range(2500):
+            node["n"] = {}; node = node["n"]
+        return json.dumps(meta).encode()
+    _poison_meta("meta_inf", _inf)
+    _poison_meta("meta_deep", _deep)
+    _poison_meta("meta_scalar", lambda meta: b"5")            # a non-dict meta (self-review)
+
+
+def test_import_refuses_duplicate_keyed_and_deeply_nested_events(tmp_path):
+    # review N-4/N-5: a by-VALUE non-finite check cannot catch a duplicate-key
+    # token ("score":NaN,"score":1.0 parses finite but leaves a bare NaN in the
+    # archived bytes), and a deeply nested event must not escape as an untyped
+    # RecursionError. Both are refused with a typed StoreError and no debris.
+    import hashlib
+    def _poison(sub, mutate_bytes):
+        make_workbench(tmp_path / sub)
+        store = WorkbenchStore(tmp_path / sub / "store")
+        exp = tmp_path / sub / "exp"; store.export_to(exp)
+        lines = (exp / "events.jsonl").read_bytes().split(b"\n")
+        lines[0] = mutate_bytes(lines[0])
+        newb = b"\n".join(lines); (exp / "events.jsonl").write_bytes(newb)
+        man = json.loads((exp / "export_manifest.json").read_text())
+        man["events_sha256"] = hashlib.sha256(newb).hexdigest()
+        (exp / "export_manifest.json").write_text(canonical_line(man) + "\n")
+        dest = tmp_path / sub / "dest"
+        with pytest.raises(StoreError):
+            WorkbenchStore.import_from(exp, dest)
+        assert not dest.exists()
+
+    def _dupkey(line):                       # a duplicate key (both values finite)
+        # operate on the raw canonical bytes (no spaces), so the injection matches
+        return line.replace(b'"record":{', b'"record":{"dup":1,"dup":2,', 1)
+    def _deep(line):                         # nested past Python's recursion limit
+        ev = json.loads(line); node = ev["record"]
+        for _ in range(2000):
+            node["n"] = {}; node = node["n"]
+        return json.dumps(ev).encode()
+    _poison("dupkey", _dupkey)
+    _poison("deep", _deep)

@@ -62,6 +62,21 @@ class StoreError(ValueError):
     pass
 
 
+def _no_duplicate_keys(pairs):
+    """json object_pairs_hook that REFUSES a duplicate key. A by-value non-finite
+    check cannot catch a duplicate-key token (`"score":NaN,"score":1.0` parses to
+    a finite 1.0 but leaves a bare `NaN` in the archived bytes, and first/last-wins
+    is itself an ambiguity a strict auditor rejects), so an imported log is parsed
+    strictly (review N-4). Legitimate exports never carry a duplicate key —
+    canonical_line emits sorted, unique keys."""
+    seen: set = set()
+    for key, _ in pairs:
+        if key in seen:
+            raise ValueError(f"duplicate JSON key {key!r}")
+        seen.add(key)
+    return dict(pairs)
+
+
 def _entry_hash(seq: int, event_type: str, recorded_time: str, actor: str, record: Mapping[str, Any], prev_hash: str) -> str:
     return sha256({"seq": seq, "event_type": event_type, "recorded_time": recorded_time,
                    "actor": actor, "record": record, "prev_hash": prev_hash})
@@ -563,11 +578,19 @@ class MissionDataStore:
         # migration safety: refuse a backup written under a contract version this
         # code cannot interpret, rather than importing and silently misreading it.
         # (The store_meta is authenticated above, so its version is trustworthy.)
-        imported_meta = json.loads(store_meta_bytes.decode("utf-8"))
         try:
-            reject_non_finite(imported_meta)      # store_meta is byte-copied too (MAJOR-1)
+            imported_meta = json.loads(store_meta_bytes.decode("utf-8"),
+                                       object_pairs_hook=_no_duplicate_keys)
+            reject_non_finite(imported_meta)      # store_meta is byte-copied too (MAJOR-1/N-4)
+        except RecursionError as exc:
+            raise StoreError("export store_meta is nested too deeply; refusing") from exc
         except ValueError as exc:
-            raise StoreError("export store_meta contains a non-finite float; refusing") from exc
+            raise StoreError("export store_meta is not valid interchange JSON "
+                             "(a non-finite float or a duplicate key); refusing") from exc
+        if not isinstance(imported_meta, dict):
+            # a hostile export (hash-matched) could make store_meta a scalar/list;
+            # .get() below would then AttributeError untyped, before the install try
+            raise StoreError("export store_meta is not an object; refusing")
         imported_contract = imported_meta.get("contract_version")
         if imported_contract not in COMPATIBLE_CONTRACT_VERSIONS:
             raise StoreError(
@@ -590,15 +613,18 @@ class MissionDataStore:
             if not line.strip():
                 continue
             try:
-                parsed_event = json.loads(line)
+                parsed_event = json.loads(line, object_pairs_hook=_no_duplicate_keys)
+                reject_non_finite(parsed_event)
             except json.JSONDecodeError as exc:
                 raise StoreError("export events.jsonl has a malformed line; refusing to import") from exc
-            try:
-                reject_non_finite(parsed_event)
+            except RecursionError as exc:
+                raise StoreError("export event is nested too deeply; refusing to import") from exc
             except ValueError as exc:
+                # a non-finite float (incl. 1e400->inf) or a duplicate JSON key —
+                # a poisoned/tampered log the by-hash gates cannot catch
                 raise StoreError(
-                    "export event log contains a non-finite float (NaN/Infinity); "
-                    "refusing to reconstruct a poisoned store") from exc
+                    "export event log is not valid interchange JSON (a non-finite float "
+                    "or a duplicate key); refusing to reconstruct a poisoned store") from exc
         new_root = Path(new_root)
         if new_root.exists() and not new_root.is_dir():
             # a file/symlink-to-file target would make mkdir + the rollback unlink

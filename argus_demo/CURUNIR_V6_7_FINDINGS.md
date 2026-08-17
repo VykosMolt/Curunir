@@ -748,3 +748,58 @@ operator's own store on open; a ~1200-deep nested request body still hits
 Python's recursion limit in the kernel `canonical_bytes` (pre-existing, framework
 depth, authenticated); `import_from` follows a symlink-to-directory target
 (operator-supplied).
+
+## Round 19 — reconvergence found the SET/totality half of the provider fix (1 MAJOR, repaired round 20)
+
+Round 19 CONFIRMED_CORRECT the whole of MAJOR-1 (import by-value guard — probed
+with correctly re-hashed hostile exports: NaN/Infinity/1e400/deep/envelope/meta
+all refused, clean backups still import), MINOR-1, MINOR-2 (a raw-bytes fuzz of
+every report/save-view/forecast/signed field × hostile tokens = 0 authenticated
+500s), the id-field and signed-command guards, and re-verified four-eyes,
+fail-closed disabled-actor, and connector-edge coercion. It returned
+`NOT_CONVERGED` on one MAJOR plus MINORs — again unswept halves:
+
+- **N-1 (MAJOR)** — `_scrub_output` was not TOTAL: a non-finite inside a `set`
+  became `{None, 1.0}`, which the kernel's set-SORT then crashed on
+  (`'<' not supported between float and NoneType`); `bytes`, `Decimal`, and
+  mixed-type dict keys (also sorted) escaped the `return value` fallthrough — each
+  crashing the InferenceRecord append (built OUTSIDE containment) and losing the
+  non-repudiation record, the exact MAJOR-2 harm. Fixed: `_scrub_output` is now
+  total — a set becomes a deterministic list (members scrubbed, non-finite
+  dropped, ordered by canonical string form so it never depends on cross-type
+  sorting), non-string dict keys become their string form, bytes decode, and any
+  other object becomes its scrubbed `str()` (mirroring `_deep_render_safe`). Lock:
+  `test_provider_scrub_is_total_no_container_escapes_containment`.
+- **N-2 (MINOR)** — a non-str `timestamp` in a signed payload hit
+  `parse_time(...).replace` → `AttributeError`, uncaught → authenticated 500. Now
+  caught → 401 unparseable. Lock: `test_signed_timestamp_non_string_is_401_not_500`.
+- **N-3 (MINOR)** — a JSON-valid but structurally-malformed delta event (scalar
+  line, missing seq, scalar record) applied PARTIALLY then crashed untyped. Now a
+  shape check (dict envelope, int seq, str entry_hash, dict record) refuses it
+  atomically before any apply. Lock:
+  `test_delta_import_refuses_malformed_envelope_atomically`.
+- **N-4 (MINOR)** — a by-VALUE check cannot catch a duplicate-key token
+  (`"score":NaN,"score":1.0` parses finite but leaves a bare NaN in the archived
+  bytes); import now parses strictly (`object_pairs_hook` refusing duplicate
+  keys). Lock: `test_import_refuses_duplicate_keyed_and_deeply_nested_events`.
+- **N-5 (MINOR)** — a deeply nested hostile export raised an untyped
+  `RecursionError` from the import pre-pass (events AND store_meta); both now
+  typed `StoreError`. Locks: the events case above +
+  `test_import_refuses_non_finite_store_meta` (deep-meta case).
+
+Self-review (round 20, before the independent round) again caught two more unswept
+halves of its OWN fixes and closed them: the store_meta parse initially caught
+only `ValueError` (not `RecursionError`), and the delta shape check initially
+checked `"record" in event` but not that `record` is a dict.
+
+Accepted (reviewer-assessed hygiene, NOT touched to avoid regression risk): N-6a
+`move_forecast` still routes 409-vs-400 by `"version" in str(error)` rather than a
+type test — confirmed non-misfiring (its version conflict is a StoreError; its own
+validation ValueErrors never carry the word "version"); N-6b `build_delta_bundle`
+on a LEGACY store already carrying a non-finite raises a bare ValueError from
+canonical_line — such a store can be exported but its backup can never be
+restored (a fail-closed operational consequence). Also bounded: a legacy IN-PLACE
+store carrying a non-finite still opens (only the import of a foreign backup is
+guarded); a duplicate-key export is now refused, but the by-value guarantee
+remains value-level not byte-level for any residual construction the strict parse
+does not reach.

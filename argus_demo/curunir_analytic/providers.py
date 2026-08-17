@@ -13,6 +13,7 @@ inferences are replayed from their retained records like all other state.
 """
 from __future__ import annotations
 
+import json
 import math
 from dataclasses import dataclass
 from typing import Any, Callable, Mapping
@@ -28,28 +29,45 @@ InferFn = Callable[[str, Mapping[str, Any]], Mapping[str, Any]]
 
 
 def _scrub_output(value: Any) -> Any:
-    """Neutralize BOTH halves of the not-valid-interchange-JSON class across an
-    external inference response, the analogue of the connector/normalize scrubs
-    for the provider boundary: lone surrogates (which cannot be UTF-8-encoded)
-    become U+FFFD, and non-finite floats (NaN/Infinity, which canonical_line now
-    REFUSES) become null. A malformed provider response must not crash the
-    InferenceRecord's serialization and thereby lose the invocation's own
-    non-repudiation record (review F-P1 / MAJOR-2)."""
-    if isinstance(value, str):
-        return value.encode("utf-8", "replace").decode("utf-8")
-    if isinstance(value, bool):
-        return value                       # bool is an int subclass; leave it be
+    """Make an external inference response TOTALLY safe for canonical
+    serialization — which sorts sets and dict keys — the analogue of the
+    connector/normalize scrubs for the provider boundary. Lone surrogates (which
+    cannot be UTF-8-encoded) become U+FFFD; non-finite floats (NaN/Infinity, which
+    canonical_line REFUSES) become null; bytes become decoded text; a set (which
+    canonical order-normalises by SORTING, so a substituted null or a mixed member
+    type would crash the sort) becomes a deterministic list; a non-string dict key
+    (keys are sorted, so they must be homogeneous strings) becomes its string
+    form; anything else becomes its scrubbed str(). Being TOTAL is the point: a
+    malformed provider response must not crash the InferenceRecord's serialization
+    and thereby lose the invocation's own non-repudiation record (which is built
+    and appended OUTSIDE the propose() containment) — review F-P1 / MAJOR-2 / N-1."""
+    if value is None or isinstance(value, bool):
+        return value                       # bool before int/float (it subclasses int)
     if isinstance(value, float):
         return value if math.isfinite(value) else None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        return value.encode("utf-8", "replace").decode("utf-8")
+    if isinstance(value, (bytes, bytearray)):
+        return bytes(value).decode("utf-8", "replace")
     if isinstance(value, dict):
-        return {_scrub_output(k): _scrub_output(v) for k, v in value.items()}
+        out: dict[str, Any] = {}
+        for k, v in value.items():
+            key = k if isinstance(k, str) else str(k)
+            out[key.encode("utf-8", "replace").decode("utf-8")] = _scrub_output(v)
+        return out
     if isinstance(value, (list, tuple)):
-        return type(value)(_scrub_output(item) for item in value)
+        return [_scrub_output(item) for item in value]
     if isinstance(value, (set, frozenset)):
-        # canonical serialization DOES serialize sets, so a surrogate/non-finite
-        # inside one would crash the append just like any other container
-        return type(value)(_scrub_output(item) for item in value)
-    return value
+        # emit a deterministic LIST (canonical never re-sorts a list): scrub each
+        # member, drop non-finite floats, and order by canonical string form so
+        # the result is stable regardless of the set's iteration order and never
+        # depends on cross-type sorting.
+        members = [_scrub_output(item) for item in value
+                   if not (isinstance(item, float) and not math.isfinite(item))]
+        return sorted(members, key=lambda m: json.dumps(m, sort_keys=True, ensure_ascii=True))
+    return str(value).encode("utf-8", "replace").decode("utf-8")
 
 
 def _input_markings(store, input_refs: tuple[str, ...]) -> list[Marking]:
