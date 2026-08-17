@@ -30,7 +30,7 @@ from .forecasts import (update_probability, _absence_coverage_satisfied,
                         _close_coverage_gap)
 from .store import AnalyticStore
 from .substrate import (AnalyticContext, append_version, ensure_transition,
-                        record_transition, require_accepted_candidate)
+                        marked_for_subject, record_transition, require_accepted_candidate)
 
 
 def indicator_id_for(description: str, forecast_ids: tuple[str, ...]) -> str:
@@ -394,7 +394,11 @@ def check_indicators(ctx: AnalyticContext) -> list[dict[str, Any]]:
                                f"is needed before silence means anything.",
                         evidence_refs=(indicator["indicator_id"],),
                         status="OPEN", resolution_note="",
-                        recorded_time=ctx.now_fn(), marking=ctx.marking)
+                        recorded_time=ctx.now_fn(),
+                        # floor on the indicator this item is ABOUT (its detail
+                        # quotes the indicator's compartmented text) — R23B-1
+                        marking=marked_for_subject(ctx, "forecast_indicator",
+                                                   indicator["indicator_id"]))
                     store.append("REVIEW_ITEM_RECORDED", item,
                                  recorded_time=item.recorded_time, actor=ctx.actor)
                 outcomes.append(blocked)
@@ -496,7 +500,11 @@ def _apply_effects(ctx: AnalyticContext, indicator: Mapping[str, Any]) -> int:
                            f"human review",
                     evidence_refs=evidence[:5],
                     status="OPEN", resolution_note="",
-                    recorded_time=ctx.now_fn(), marking=ctx.marking)
+                    recorded_time=ctx.now_fn(),
+                    # floor on the forecast (subject) AND the indicator whose
+                    # compartmented description this detail quotes verbatim (R23B-1)
+                    marking=marked_for_subject(ctx, "analytic_forecast", forecast_id,
+                                               reference_markings=[indicator.get("marking")]))
                 store.append("REVIEW_ITEM_RECORDED", item,
                              recorded_time=item.recorded_time, actor=ctx.actor)
         record_transition(ctx, subject_kind="analytic_forecast",

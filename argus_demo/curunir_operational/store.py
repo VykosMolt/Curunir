@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import shutil
 import time
 from pathlib import Path
@@ -515,12 +516,36 @@ class MissionDataStore:
     def put_payload(self, body: bytes) -> str:
         digest = hashlib.sha256(body).hexdigest()
         path = self.payload_dir / digest
-        if not path.exists():
-            path.write_bytes(body)
+        # content-addressed + crash-atomic + SELF-REPAIRING: an existing file whose
+        # bytes do NOT hash to its name is a prior torn write (SIGKILL / OOM /
+        # ENOSPC mid-write) — treat it as ABSENT and rewrite, never trust a bare
+        # existence gate that would serve wrong evidence forever and make every
+        # later backup unrestorable with no signal at backup time (review A-F2).
+        if path.exists():
+            try:
+                if hashlib.sha256(path.read_bytes()).hexdigest() == digest:
+                    return digest                         # already present and intact
+            except OSError:
+                pass                                      # unreadable -> rewrite below
+        tmp = path.with_name(f".{digest}.{os.getpid()}.{time.time_ns()}.tmp")
+        try:
+            with tmp.open("wb") as handle:
+                handle.write(body)
+                handle.flush()
+                os.fsync(handle.fileno())                 # durable before the rename
+            tmp.replace(path)                             # atomic on the same filesystem
+        finally:
+            tmp.unlink(missing_ok=True)                   # clean up if replace failed
         return digest
 
     def get_payload(self, digest: str) -> bytes:
-        return (self.payload_dir / digest).read_bytes()
+        body = (self.payload_dir / digest).read_bytes()
+        if hashlib.sha256(body).hexdigest() != digest:
+            # a torn/corrupt payload must fail LOUDLY, never be served as silent
+            # wrong evidence to extraction/claims (review A-F2)
+            raise StoreError(f"payload {digest[:12]} is corrupt (content does not "
+                             "match its content-address); refusing to serve it")
+        return body
 
     def verify_chain(self) -> dict[str, Any]:
         prev = CHAIN_GENESIS

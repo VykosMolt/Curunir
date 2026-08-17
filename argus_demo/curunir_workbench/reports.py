@@ -392,6 +392,36 @@ def open_dissent(projection: MissionProjection, report_id: str) -> list[dict]:
             and (a["target_id"] in part_ids or a.get("anchor_ref") in part_ids)]
 
 
+def _raw_hidden_basis_concerns(store: WorkbenchStore, projection: MissionProjection,
+                               report: Mapping[str, Any]) -> list[str]:
+    """A basis (claim / object) the report cites whose current claim-STATE (a
+    retraction/contradiction) or OPEN review the approver is NOT cleared to see
+    must BLOCK approval. validate_report reads the approver's FILTERED projection,
+    so an invisible retraction/contest is silently counted absent and a published,
+    four-eyes-approved report can render retracted evidence as settled fact. This
+    is the SAME fail-open-gate class as the dissent gate (a control that BLOCKS
+    reads the RAW store, never a filtered view), swept to the basis gate (R23B-3)."""
+    cited: set = set()
+    for section in report["sections"]:
+        for sentence in section["sentences"]:
+            cited |= set(sentence.get("basis_refs", ()))
+    if not cited:
+        return []
+    visible_states = {s["claim_id"] for s in projection.family("semantic_claim_state")}
+    visible_reviews = {r["subject_id"] for r in projection.family("review_item")
+                       if r["status"] == "OPEN"}
+    hidden: list[str] = []
+    # current state per claim (last-wins, matching the store's semantic view)
+    for claim_id in store.latest_by_id("semantic_claim_state", "claim_id"):
+        if claim_id in cited and claim_id not in visible_states:
+            hidden.append(claim_id)
+    for item in store.latest_by_id("review_item", "item_id").values():
+        if item.get("status") == "OPEN" and item.get("subject_id") in cited \
+                and item["subject_id"] not in visible_reviews:
+            hidden.append(item["subject_id"])
+    return hidden
+
+
 def _raw_open_dissent(store: WorkbenchStore, report_id: str) -> list[dict]:
     """Open dissent on the report or its parts, read from the RAW store (ALL
     markings). An access-filtered VIEW must never silently disarm the control
@@ -444,6 +474,16 @@ def approve_report(store: WorkbenchStore, projection: MissionProjection,
     validation = validate_report(projection, current)
     if not validation["ok"]:
         raise ReportValidationError(validation["blocking"])
+    # fail CLOSED on a cited basis whose claim-state / open review the approver is
+    # not cleared to see: validate_report reads the filtered projection and would
+    # silently count it absent, letting an approval assert retracted/contested
+    # evidence as settled fact (R23B-3 — the dissent-gate fix, swept to the basis gate)
+    hidden_basis = _raw_hidden_basis_concerns(store, projection, current)
+    if hidden_basis:
+        raise ValueError(
+            "this report cites a basis whose claim-state or open review you are "
+            "not cleared to view; it must be reviewed and cleared by an actor who "
+            "can see it before approval — approval refused")
     dissent = open_dissent(projection, report_id)
     dissent_ids = tuple(a["annotation_id"] for a in dissent)
     # fail CLOSED on dissent the approver is not cleared to see: they cannot

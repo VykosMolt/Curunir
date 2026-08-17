@@ -235,3 +235,42 @@ def test_warning_floors_marking_on_referenced_forecast(tmp_path):
     assert "SPECIAL" in marking_from_record(warn["marking"]).compartments  # floored, not PUBLIC
     uncleared = AccessContext("c", "d", "HUMAN", ("ANALYST",), releasability=("PUBLIC",))
     assert can_view(warn["marking"], uncleared) is False                 # invisible to the uncleared
+
+
+def test_no_derived_record_underclassifies_its_restricted_subject(tmp_path):
+    # CLASS-LEVEL property (review R23B-1/2/4): after a background pass at a lower
+    # marking, NO analytic_transition or review_item ABOUT a restricted subject may
+    # be viewable by an uncleared actor. Tests the record_transition /
+    # marked_for_subject subject-floor chokepoint as an INVARIANT over every
+    # emitting site, not a single instance.
+    from curunir_analytic.substrate import AnalyticContext
+    from curunir_analytic.store import ANALYTIC_ID_FIELDS
+    from curunir_operational.access import AccessContext, can_view
+    from workbench_support import RESTRICTED_MARK
+    pipeline, ctx = make_analytic(tmp_path)                       # ctx.marking is PUBLIC
+    claims = _seed(pipeline, ctx)
+    rctx = AnalyticContext(store=ctx.store, actor="analyst-a",
+                           marking=RESTRICTED_MARK, now_fn=ctx.now_fn)
+    obj = _objective(rctx); fc = _forecast(rctx, claims)         # SPECIAL objective + forecast
+    # project + move + re-project the warning on the PUBLIC pass (emits transitions)
+    _project = lambda: project_warning(ctx, forecast_id=fc["forecast_id"],
+                                       objective_id=obj["objective_id"])
+    _project()
+    update_probability(rctx, fc["forecast_id"], probability=0.92, reason="registry flip",
+                       actor_id="analyst-a", actor_kind="HUMAN")
+    _project()
+    uncleared = AccessContext("c", "d", "HUMAN", ("ANALYST",), releasability=("PUBLIC",))
+    subj_marking = {}
+    for kind, (_, id_field) in ANALYTIC_ID_FIELDS.items():
+        for rec in ctx.store.current_analytics(kind).values():
+            subj_marking[(kind, rec[id_field])] = rec["marking"]
+    leaks = []
+    for t in ctx.store.records_of("analytic_transition"):
+        m = subj_marking.get((t["subject_kind"], t["subject_id"]))
+        if m and not can_view(m, uncleared) and can_view(t["marking"], uncleared):
+            leaks.append(("transition", t["transition_type"], t["subject_kind"]))
+    for r in ctx.store.records_of("review_item"):
+        m = subj_marking.get((r["subject_kind"], r["subject_id"]))
+        if m and not can_view(m, uncleared) and can_view(r["marking"], uncleared):
+            leaks.append(("review_item", r["kind"], r["subject_kind"]))
+    assert leaks == [], f"derived records under-classifying a restricted subject: {leaks}"

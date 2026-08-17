@@ -296,3 +296,28 @@ def test_compartmented_dissent_invisible_to_approver_blocks(mission):
                                  __import__("curunir_workbench.reports", fromlist=["_raw_open_dissent"])
                                  ._raw_open_dissent(ctx.store, report["report_id"])))
     assert cleared["status"] == "APPROVED_WITH_DISSENT"
+
+
+def test_hidden_claim_state_on_cited_basis_blocks_approval(mission):
+    # review R23B-3: a cited basis whose current claim-STATE the approver cannot
+    # SEE must BLOCK approval (fail closed) — validate_report reads the filtered
+    # projection and would silently count the retraction absent, letting an
+    # approval render retracted evidence as settled fact (the dissent-gate fix,
+    # swept to the basis gate).
+    from workbench_support import RESTRICTED_MARK
+    from curunir_semantic.contracts import ClaimStateRecord
+    _, ctx, seeded = mission
+    claim_id = seeded["status_claim"]["claim_id"]
+    report = _draft(ctx, seeded)                                  # cites status_claim
+    submitted = submit_report(ctx.store, report["report_id"], actor="analyst-a",
+                              marking=MARK, now=ctx.now_fn(), expected_version=1, state_token="tok")
+    ctx.store.append("SEMANTIC_CLAIM_STATE_RECORDED", ClaimStateRecord(
+        state_id="cs-secret-1", claim_id=claim_id, state="RETRACTED",
+        reason="retracted on compartmented evidence", caused_by="review-x",
+        superseded_by="", actor_id="analyst-a", actor_kind="HUMAN",
+        recorded_time=ctx.now_fn(), marking=RESTRICTED_MARK),
+        recorded_time=ctx.now_fn(), actor="analyst-a")
+    with pytest.raises(ValueError, match="not cleared to view"):   # uncleared approver: BLOCKED
+        approve_report(ctx.store, _projection(ctx, CTX_B), report["report_id"],
+                       actor="supervisor", actor_kind="HUMAN", marking=MARK,
+                       now=ctx.now_fn(), expected_version=submitted["version"])

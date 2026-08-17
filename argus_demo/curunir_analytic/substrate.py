@@ -108,6 +108,28 @@ def object_own_marking(record: Mapping[str, Any], fallback: Marking) -> Marking:
     return fallback
 
 
+def _subject_marking(ctx: AnalyticContext, subject_kind: str, subject_id: str):
+    """The current marking of an analytic SUBJECT object, or None. The single
+    lookup used by record_transition AND marked_for_subject, so the no-write-down
+    floor on a derived record (transition / review item / alert) is derived one
+    way (review R23B-1/2/4)."""
+    if subject_kind in ANALYTIC_ID_FIELDS:
+        subject = ctx.store.current_analytics(subject_kind).get(subject_id)
+        if subject is not None:
+            return subject.get("marking")
+    return None
+
+
+def marked_for_subject(ctx: AnalyticContext, subject_kind: str, subject_id: str,
+                       reference_markings: "list | tuple" = ()):
+    """The marking a record DERIVED from an analytic subject must carry: floored on
+    the subject's own current marking plus any explicit references — the record
+    analogue of record_transition's subject floor, for engine-written review
+    items / alerts that summarize a subject's state (review R23B-1)."""
+    return inherited_marking(ctx.marking, [*reference_markings,
+                                           _subject_marking(ctx, subject_kind, subject_id)])
+
+
 def record_transition(ctx: AnalyticContext, *, subject_kind: str, subject_id: str,
                       transition_type: str, detail: str, caused_by: str,
                       evidence_refs: tuple[str, ...] = (),
@@ -129,7 +151,15 @@ def record_transition(ctx: AnalyticContext, *, subject_kind: str, subject_id: st
            for r in ctx.store.records_of("analytic_transition")):
         return None
     now = ctx.now_fn()
-    marking = inherited_marking(ctx.marking, list(reference_markings))
+    # CHOKEPOINT (review R23B-1/2/4): floor the transition on the SUBJECT object's
+    # OWN current marking, as an implicit reference — not just ctx.marking +
+    # explicit reference_markings. A transition's detail summarizes the subject's
+    # state (a warning's tier, a forecast's resolution, a degraded basis), so it
+    # must never be viewable by a context that cannot view the subject. This is
+    # the append_version no-write-down guarantee extended to transitions, so no
+    # engine call site has to remember to pass reference_markings for the subject.
+    marking = inherited_marking(ctx.marking, [*reference_markings,
+                                              _subject_marking(ctx, subject_kind, subject_id)])
     record = AnalyticalTransition(
         transition_id=transition_id, subject_kind=subject_kind, subject_id=subject_id,
         transition_type=transition_type, detail=detail[:500], caused_by=caused_by,

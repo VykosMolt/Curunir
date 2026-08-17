@@ -173,3 +173,20 @@ def test_constructor_refuses_incompatible_contract_version(tmp_path):
     meta_path.write_text(json.dumps(meta))
     with pytest.raises(StoreError, match="contract version"):
         WorkbenchStore(root)                        # directory-copy / snapshot restore path
+
+
+def test_put_payload_repairs_a_torn_write_and_get_payload_fails_loud(tmp_path):
+    # review A-F2: an existing payload whose content does not hash to its name (a
+    # prior torn write: SIGKILL/OOM/ENOSPC) must be REPAIRED by put_payload, not
+    # trusted via the existence gate; get_payload must fail LOUD on a corrupt
+    # payload rather than serve silent wrong evidence.
+    from curunir_operational.store import MissionDataStore, StoreError
+    from operational_support import make_store
+    store = make_store(tmp_path)
+    body = b"the real evidence bytes, long enough to matter"
+    digest = store.put_payload(body)
+    (store.payload_dir / digest).write_bytes(b"trunc")           # simulate a torn write
+    with pytest.raises(StoreError):
+        store.get_payload(digest)                                # loud, not silent wrong bytes
+    assert store.put_payload(body) == digest                     # self-repairs
+    assert store.get_payload(digest) == body                     # correct again

@@ -24,6 +24,33 @@ DELTA_FORMAT = "curunir-operational-delta-v1"
 AUDIENCE = "PRIVILEGED_STORE_SYNC"
 
 
+def _referenced_payloads(store: MissionDataStore, events: list) -> set:
+    """Every payload digest referenced by these events, family-AGNOSTICALLY. A
+    payload is content-addressed, so ANY string field in a record that names an
+    existing payload file is a reference — the V6.7 `semantic_document` families
+    (normalized_sha256 / fields_sha256), the V2 `ingestion` family, and any future
+    family, without the copy predicate being bound to one record type. The old
+    `record_type == "ingestion"` predicate omitted 100% of a V6.7 mission's
+    evidence while declaring "none omitted" (review A-F1)."""
+    available = {p.name for p in store.payload_dir.iterdir()}
+    referenced: set = set()
+
+    def walk(value):
+        if isinstance(value, str):
+            if value in available:
+                referenced.add(value)
+        elif isinstance(value, dict):
+            for item in value.values():
+                walk(item)
+        elif isinstance(value, (list, tuple)):
+            for item in value:
+                walk(item)
+
+    for event in events:
+        walk(event.get("record"))
+    return referenced
+
+
 def _is_digest(value: Any) -> bool:
     """True iff `value` is a 64-hex sha256 content address — safe to use as a
     payload file name. A payload_ref from an untrusted bundle used as a path
@@ -44,8 +71,7 @@ def build_delta_bundle(store: MissionDataStore, out_dir: str | Path, *, base_seq
     payload_dir = out_dir / "payloads"
     payload_dir.mkdir(exist_ok=True)
     payload_hashes = []
-    referenced = {e["record"].get("payload_ref") for e in events
-                  if e["record"].get("record_type") == "ingestion" and e["record"].get("payload_ref")}
+    referenced = _referenced_payloads(store, events)      # family-agnostic (A-F1)
     for digest in sorted(referenced):
         (payload_dir / digest).write_bytes(store.get_payload(digest))
         payload_hashes.append(digest)
@@ -77,7 +103,7 @@ def verify_delta_bundle(bundle_dir: str | Path) -> dict[str, Any]:
         manifest = json.loads((bundle_dir / "delta_manifest.json").read_bytes().decode("utf-8"))
     except FileNotFoundError:
         return {"valid": False, "reason": "delta_manifest.json missing"}
-    except (ValueError, UnicodeDecodeError, RecursionError):
+    except (ValueError, UnicodeDecodeError, RecursionError, OSError):   # incl. IsADirectoryError (A-F5)
         return {"valid": False, "reason": "delta_manifest.json is not valid JSON", "manifest": {}}
     if not isinstance(manifest, dict):
         return {"valid": False, "reason": "delta_manifest.json is not an object", "manifest": {}}
@@ -86,18 +112,31 @@ def verify_delta_bundle(bundle_dir: str | Path) -> dict[str, Any]:
         failures.append("manifest hash mismatch")
     if not isinstance(manifest.get("base_seq"), int) or isinstance(manifest.get("base_seq"), bool):
         failures.append("base_seq is not an integer")   # import_delta_bundle compares it numerically
+    if not isinstance(manifest.get("base_entry_hash"), str):
+        failures.append("base_entry_hash is missing or not a string")   # import indexes it (A-F4)
     events_path = bundle_dir / "delta_events.jsonl"
-    if not events_path.exists():
-        failures.append("delta_events.jsonl missing")
-    elif hashlib.sha256(events_path.read_bytes()).hexdigest() != manifest.get("events_sha256"):
+    try:
+        events_bytes = events_path.read_bytes() if events_path.exists() else None
+    except OSError:                                      # a directory in its place (A-F5)
+        events_bytes = None
+    if events_bytes is None:
+        failures.append("delta_events.jsonl missing or unreadable")
+    elif hashlib.sha256(events_bytes).hexdigest() != manifest.get("events_sha256"):
         failures.append("events hash mismatch")
     payloads = manifest.get("payloads", [])
-    for digest in payloads if isinstance(payloads, list) else []:
+    if not isinstance(payloads, list):                  # a non-list is a FAILURE, not a silent skip (A-F6)
+        failures.append("manifest payloads is not a list")
+        payloads = []
+    for digest in payloads:
         if not _is_digest(digest):        # never use an untrusted ref as a path (traversal)
             failures.append("payload ref is not a content-address digest")
             continue
         path = bundle_dir / "payloads" / digest
-        if not path.exists() or hashlib.sha256(path.read_bytes()).hexdigest() != digest:
+        try:
+            ok = path.exists() and hashlib.sha256(path.read_bytes()).hexdigest() == digest
+        except OSError:                                 # a directory named like a digest (A-F5)
+            ok = False
+        if not ok:
             failures.append(f"payload {digest[:12]} missing or tampered")
     return {"valid": not failures, "failures": failures, "manifest": manifest}
 
@@ -112,7 +151,11 @@ def _receipt(status: str, manifest: dict[str, Any], store: MissionDataStore, det
 def import_delta_bundle(store: MissionDataStore, bundle_dir: str | Path) -> dict[str, Any]:
     verification = verify_delta_bundle(bundle_dir)
     if not verification["valid"]:
-        raise StoreError(f"delta bundle failed verification: {verification['failures']}")
+        # verify's early returns carry "reason" (not "failures") — read both, or a
+        # malformed manifest re-raises an untyped KeyError, the exact unswept half
+        # of the round-22 NEW-A2 repair (review A-F3)
+        raise StoreError("delta bundle failed verification: "
+                         f"{verification.get('failures') or [verification.get('reason', 'invalid')]}")
     manifest = verification["manifest"]
     bundle_dir = Path(bundle_dir)
     head = store.head()
@@ -163,6 +206,13 @@ def import_delta_bundle(store: MissionDataStore, bundle_dir: str | Path) -> dict
             reject_non_finite(event)
         except ValueError as exc:
             raise StoreError("delta bundle contains a non-finite float (NaN/Infinity); refusing") from exc
+    # install EVERY payload the bundle carries (all record families, not just the
+    # V2 ingestion one — a V6.7 mission's evidence lives in semantic_document
+    # payloads), BEFORE applying any event. verify_delta_bundle already confirmed
+    # each manifest payload is present and hashes to its name; put_payload is
+    # crash-atomic + self-repairing (review A-F1 / A-F2).
+    for digest in manifest.get("payloads", []):
+        store.put_payload((bundle_dir / "payloads" / digest).read_bytes())
     applied = 0
     for event in events:
         if event["seq"] <= head["event_count"]:
@@ -173,11 +223,6 @@ def import_delta_bundle(store: MissionDataStore, bundle_dir: str | Path) -> dict
                                   "unresolved conflict, nothing further applied",
                         "store_head": store.head(), "bundle_base_seq": base_seq, "received_at": utc_now()}
             continue  # duplicate portion: idempotent skip
-        for digest in ([event["record"].get("payload_ref")] if event["record"].get("record_type") == "ingestion"
-                       and event["record"].get("payload_ref") else []):
-            body_path = bundle_dir / "payloads" / digest
-            if body_path.exists():
-                store.put_payload(body_path.read_bytes())
         store.append_imported_event(event)
         applied += 1
     if applied == 0:

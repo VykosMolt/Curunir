@@ -325,3 +325,17 @@ def test_verify_delta_bundle_fails_closed_on_malformed_manifest(tmp_path):
     for bad in (b"\xff\xff", b"5", b"[1,2]", b'"x"', b"{", b'{"base_seq":"3"}'):
         mpath.write_bytes(bad)
         assert verify_delta_bundle(tmp_path / "delta")["valid"] is False
+
+
+def test_delta_referenced_payloads_is_family_agnostic(tmp_path):
+    # review A-F1: a payload referenced by ANY record field (a semantic_document's
+    # normalized_sha256, a nested value), not only the V2 ingestion payload_ref,
+    # must be detected — else the bundle omits a V6.7 mission's evidence.
+    from curunir_operational.delta import _referenced_payloads
+    from operational_support import make_store
+    store = make_store(tmp_path)
+    digest = store.put_payload(b"real evidence bytes")
+    events = [{"record": {"record_type": "semantic_document", "normalized_sha256": digest}},
+              {"record": {"record_type": "object_version", "attributes": {"nested": [digest]}}}]
+    assert _referenced_payloads(store, events) == {digest}        # found by field-agnostic scan
+    assert _referenced_payloads(store, [{"record": {"x": "de" * 32}}]) == set()   # non-payload string ignored

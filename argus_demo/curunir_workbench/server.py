@@ -663,11 +663,14 @@ def create_app(mission_root: str | Path, actors_path: str | Path,
         # bearer-gated: only an authenticated actor may mint challenges, so an
         # anonymous flood cannot grow the pending-challenge map (which is also
         # pruned + hard-capped server-side).
-        context(request)
+        principal = context(request)
         # scrub the client-supplied actor id: it is echoed on the 200 response,
         # whose UTF-8 encode would otherwise 500 on a lone surrogate (review F-W1)
         actor_id = render_safe(body.actor_id)
-        return app.state.sessions.issue_challenge(actor_id)
+        # account the cap-eviction to the BEARER principal that minted this, not the
+        # client-chosen actor_id, so a flooder cannot evict other actors' live
+        # challenges by naming fresh/victim ids (review R23B-5)
+        return app.state.sessions.issue_challenge(actor_id, owner=principal.actor_id)
 
     class AuthenticateBody(BaseModel):
         actor_id: str

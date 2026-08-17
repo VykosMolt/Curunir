@@ -58,7 +58,7 @@ class SessionManager:
 
     # ---- authentication --------------------------------------------------
 
-    def _prune_pending(self, now: str, actor_id: str) -> None:
+    def _prune_pending(self, now: str, owner: str) -> None:
         """Drop expired pending challenges (authenticate only pops on an attempt,
         so without this a flood of never-answered challenges would grow the map
         without bound). Also hard-cap the map so it cannot grow unboundedly even
@@ -72,18 +72,22 @@ class SessionManager:
             # exhausts its own footprint rather than knocking out another actor's
             # live challenge (denying it authentication) — the round-4 finding-5
             # eviction of _prune_sessions, applied to the pending map too (B-5)
-            own = [n for n, p in self._pending.items() if p["actor_id"] == actor_id]
+            own = [n for n, p in self._pending.items() if p.get("owner") == owner]
             pool = own or list(self._pending)
             victim = min(pool, key=lambda n: self._pending[n]["issued_time"])
             self._pending.pop(victim, None)
 
-    def issue_challenge(self, actor_id: str) -> dict[str, str]:
-        """A fresh single-use nonce the actor must sign to prove key
-        possession. Bound to the actor and expiring quickly."""
+    def issue_challenge(self, actor_id: str, *, owner: str = "") -> dict[str, str]:
+        """A fresh single-use nonce the actor must sign to prove key possession.
+        `owner` is the BEARER-authenticated principal that minted this challenge —
+        the cap-eviction accounts to it, not to the client-chosen `actor_id`, so a
+        flooder cannot name fresh/victim actor_ids to evict other actors' live
+        challenges (review R23B-5). Falls back to `actor_id` for internal callers."""
         now = self.now_fn()
-        self._prune_pending(now, actor_id)
+        owner = owner or actor_id
+        self._prune_pending(now, owner)
         nonce = secrets.token_hex(32)
-        self._pending[nonce] = {"actor_id": actor_id, "issued_time": now,
+        self._pending[nonce] = {"actor_id": actor_id, "owner": owner, "issued_time": now,
                                 "expires_time": self._plus(now, self.challenge_ttl)}
         return {"actor_id": actor_id, "nonce": nonce,
                 "purpose": "curunir-authenticate"}

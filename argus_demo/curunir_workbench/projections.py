@@ -222,7 +222,13 @@ class MissionProjection:
         needles: set[str] = set()
         for h in hidden:
             needles.add(h)
-            for cut in (24, 18, 16):
+            # cover EVERY id-truncation length the codebase actually persists in
+            # served text — the code emits id[:20] (propagate/changes caused_by)
+            # and id[:12] (stakeholders/themes/narratives/impact), not only the
+            # original 24/18/16, so a 12-char prefix of a hidden id was leaking
+            # verbatim (review R23B-6). The startswith guard below prevents
+            # scrubbing a shorter prefix a cleared user's own id legitimately shares.
+            for cut in (24, 20, 18, 16, 14, 12):
                 if len(h) <= cut:
                     continue
                 prefix = h[:cut]
