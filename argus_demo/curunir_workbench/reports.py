@@ -393,21 +393,22 @@ def approve_report(store: WorkbenchStore, projection: MissionProjection,
     current = _current(store, report_id)
     if current["status"] != "IN_REVIEW":
         raise ValueError(f"cannot approve a report in status {current['status']}")
+    content_authors = {v["author"] for v in store.report_versions(report_id)}
+    # Robust submitter derivation: the actor who appended the IN_REVIEW VERSION
+    # event is the submitter, and that append (`submit_report`'s #1) is durable —
+    # whereas the SUBMITTED disposition (#2) can be lost to a crash between the
+    # two, which would erase the submitter and permit a self-approval (review
+    # C-4). We union the disposition-derived submitters (when present) with the
+    # IN_REVIEW-version-event actors. Reviewers who REJECTED
+    # (RETURNED_FOR_REVISION) or approved are NOT authors/submitters and stay
+    # eligible to approve a later revision — the normal review workflow.
     submitters = {d["actor_id"] for d in store.report_dispositions(report_id)
                   if d["disposition"] == "SUBMITTED"}
-    content_authors = {v["author"] for v in store.report_versions(report_id)}
-    # Robust separation of duties: also take the EVENT-ENVELOPE actors of this
-    # report's version and disposition events. `submit_report` writes the
-    # IN_REVIEW version FIRST and the SUBMITTED disposition second; deriving the
-    # submitter only from the disposition would let a crash between those two
-    # appends (which loses the disposition) erase the submitter and permit a
-    # self-approval. The version-transition event's actor is the submitter and
-    # is durable append #1, so it closes that window.
-    acting = {event["actor"] for event in store.events()
-              if event["record"].get("record_type")
-              in ("workbench_report", "workbench_report_disposition")
-              and event["record"].get("report_id") == report_id}
-    if actor in content_authors | submitters | acting:
+    submitters |= {event["actor"] for event in store.events()
+                   if event["record"].get("record_type") == "workbench_report"
+                   and event["record"].get("report_id") == report_id
+                   and event["record"].get("status") == "IN_REVIEW"}
+    if actor in content_authors | submitters:
         raise PermissionError(
             "separation of duties: an analyst who authored or submitted this "
             "report cannot also approve it")
