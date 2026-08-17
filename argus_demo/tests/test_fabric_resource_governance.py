@@ -211,3 +211,17 @@ def test_pivot_fan_out_is_bounded(tmp_path):
                             marking=Marking(owning_authority="t", releasability=("PUBLIC",)))
     assert len(pivots) <= MAX_PIVOTS_PER_RESPONSE
     assert len(store.records_of("fabric_pivot")) <= MAX_PIVOTS_PER_RESPONSE
+
+
+def test_scrub_handles_non_string_and_request_value():
+    from curunir_fabric.connectors.base import (ConnectorRequest, NativeResult,
+                                                scrub_surrogates)
+    # F8-B: a non-string scalar in a str slot is coerced, not raised (which would
+    # discard the whole record)
+    assert scrub_surrogates(5) == "5"
+    assert scrub_surrogates(None) is None
+    assert NativeResult(native_id="Q1", identifiers=(("s", 42),)).identifiers == (("s", "42"),)
+    # F8-C: a surrogate in the request value is scrubbed before URL building
+    req = ConnectorRequest(operation="SEARCH", value="Q\ud800", cursor="c\ud834")
+    req.value.encode("utf-8")            # no lone surrogate survives to quote()/URL
+    req.cursor.encode("utf-8")

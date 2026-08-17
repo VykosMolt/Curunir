@@ -57,6 +57,13 @@ class ConnectorRequest:
             raise ValueError(f"invalid operation: {self.operation!r}")
         if not 1 <= self.limit <= 100:
             raise ValueError("request limit out of bounds")
+        # value/cursor can be pivot-derived from a prior source response; scrub
+        # so a lone surrogate cannot crash urllib.quote / URL building before the
+        # NativeResult edge is ever reached, discarding an otherwise-valid page
+        # (review F8-C).
+        object.__setattr__(self, "value", scrub_surrogates(self.value))
+        if self.cursor is not None:
+            object.__setattr__(self, "cursor", scrub_surrogates(self.cursor))
 
     def extra_map(self) -> dict[str, str]:
         return dict(self.extra)
@@ -74,6 +81,12 @@ def scrub_surrogates(value: str | None) -> str | None:
     the class everywhere at once (review F8-E1)."""
     if value is None:
         return None
+    if not isinstance(value, str):
+        # a source may put a non-string scalar in a str slot (a numeric CDX
+        # digest, a JSON number); coerce rather than raise — the field is typed
+        # str and a raise here would discard the whole (otherwise valid) record
+        # (review F8-B).
+        value = str(value)
     return value.encode("utf-8", "replace").decode("utf-8")
 
 

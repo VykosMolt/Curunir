@@ -444,3 +444,32 @@ edge every source string crosses:
 The round-6 CONSTRUCTION-side containment was confirmed correct (the date-only
 timestamp + lone-surrogate single-result escapes are genuinely contained); this
 round closed the SERIALIZATION side and the shared root (surrogate scrub).
+
+## Round 9 — surrogate class CLOSED for executor+watch; MAJOR remained in the semantic plane (repaired)
+
+The comprehensive recheck confirmed the executor + watch loop are CLOSED (the
+permanent-stall escape re-run and confirmed dead; full connector×surrogate sweep
+clean) and found the class still open where the connector scrub cannot reach —
+the response BODY, re-derived into strings by the semantic normalizer:
+
+- **F8-A (MAJOR)** — a lone surrogate in the body survives `json.loads` (a
+  \udXXX escape) or a utf-7/declared-charset HTML decode, then crashes the
+  normalizer's own `json.dumps(...).encode()` / `put_payload(text.encode())`.
+  Contained as PROCESSING_FAILED (no corruption, honest OPEN item) but the
+  document is permanently unprocessable — invisible to the world model — after
+  auto-retry exhausts. Fixed: `normalize._scrub_surrogates` on the derived text /
+  title / publisher and `errors="replace"` on the fields payloads (the
+  semantic-plane analogue of the connector scrub; consistent with the xml/text/
+  pdf branches). Lock: `test_json_body_with_lone_surrogate_normalizes_and_is_not_lost`.
+- **F8-B (MINOR, regression this campaign introduced)** — `scrub_surrogates`
+  assumed str; a non-string scalar in an identifier slot raised AttributeError
+  → discarded the record. Now coerces via `str()`.
+- **F8-C (MINOR, pre-existing)** — a surrogate in `request.value` crashed
+  `urllib.quote` before the NativeResult edge. Now scrubbed at `ConnectorRequest`.
+- **F8-D (MINOR, residual in the E1 repair)** — `finish()` scrubbed error_detail
+  for the ExecutionRecord but not for `record_source_status`. Now scrubbed once at
+  the top of `finish()`. Lock: `test_scrub_handles_non_string_and_request_value`.
+
+Confirmed NOT-A-DEFECT: the E2 reorder (net improvement — an under-claim, the
+doctrine-safe direction), non-surrogate serialization hazards (NaN/Inf/bigint/
+bytes — no reachable source→record path), and E3 (custody ValueErrors are local).

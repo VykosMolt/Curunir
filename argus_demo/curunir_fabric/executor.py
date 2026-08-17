@@ -180,6 +180,10 @@ def execute_single(ctx: ExecutionContext, *, query: QuerySpec, source_id: str,
                manifestations: tuple[ManifestationRecord, ...] = (),
                policy_decision: str = "", error_class: str | None = None,
                error_detail: str = "") -> ExecutionResult:
+        # scrub once, up front: error_detail may be built from a raised exception
+        # carrying a source token with a lone surrogate, and it feeds BOTH the
+        # ExecutionRecord and record_source_status (review F8-D).
+        error_detail = scrub_surrogates(error_detail)
         completed = ctx.now_fn()
         execution = ExecutionRecord(
             execution_id=digest_id("execution", plan_id, query.query_id, source_id, started),
@@ -190,10 +194,7 @@ def execute_single(ctx: ExecutionContext, *, query: QuerySpec, source_id: str,
             request_url=response.request_url if response else "",
             http_status=response.http_status if response else None,
             policy_decision=policy_decision,
-            # scrub the error detail too: on the containment path it is built from
-            # a raised exception whose message may carry a source token with a
-            # lone surrogate (review F8-E1), which would crash this very append.
-            error_class=error_class, error_detail=scrub_surrogates(error_detail),
+            error_class=error_class, error_detail=error_detail,  # scrubbed at finish() top
             manifestation_ids=tuple(item.manifestation_id for item in manifestations),
             started_time=started, completed_time=completed,
             absence_semantics=ABSENCE_SEMANTICS, marking=ctx.marking,

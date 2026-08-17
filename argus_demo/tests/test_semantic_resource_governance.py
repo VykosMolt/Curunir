@@ -7,6 +7,7 @@ failure stays visible to a human; exhaustion is represented truthfully, never as
 from __future__ import annotations
 
 import hashlib
+import json
 from pathlib import Path
 
 import pytest
@@ -192,3 +193,24 @@ def test_recovered_manifestation_resets_the_attempt_budget(tmp_path):
     resolved = [r for r in pipeline.store.latest_by_id("review_item", "item_id").values()
                 if r["kind"] == "PROCESSING_FAILED" and r["subject_id"] == mid]
     assert resolved and resolved[0]["status"] == "RESOLVED"
+
+
+def test_json_body_with_lone_surrogate_normalizes_and_is_not_lost(tmp_path):
+    # review F8-A (MAJOR): a source lone surrogate in the response BODY (a JSON
+    # \udXXX escape survives json.loads) must NOT make the document permanently
+    # unprocessable — it is scrubbed at the normalize boundary, the document is
+    # created, and a visible warning records the replacement.
+    pipeline = make_pipeline(tmp_path, start_minute=1)
+    body = json.dumps({"data": {"id": "X", "attributes": {
+        "entity": {"legalName": {"name": "Acme\ud800Corp"}, "status": "ACTIVE"}}}}).encode("utf-8")
+    m = plant_manifestation(pipeline, source_id="gleif", native_id="lei/X", body=body,
+                            media_type="application/json", retrieval_time=pipeline.now_fn())
+    pipeline.process_new_evidence()
+    docs = [d for d in pipeline.store.records_of("semantic_document")
+            if d["manifestation_id"] == m["manifestation_id"]]
+    assert len(docs) == 1, "the surrogate body must normalize, not be lost to PROCESSING_FAILED"
+    assert "SCRUBBED_UNENCODABLE_CHARACTERS" in docs[0]["warnings"]
+    open_failed = [r for r in pipeline.store.latest_by_id("review_item", "item_id").values()
+                   if r["kind"] == "PROCESSING_FAILED" and r["subject_id"] == m["manifestation_id"]
+                   and r["status"] == "OPEN"]
+    assert not open_failed

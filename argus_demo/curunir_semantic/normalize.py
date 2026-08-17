@@ -157,6 +157,18 @@ def _sniff_charset(data: bytes) -> str | None:
     return None
 
 
+def _scrub_surrogates(value: str) -> str:
+    """Replace lone surrogates (and anything that cannot round-trip through
+    UTF-8) with U+FFFD. The response BODY is re-derived into strings here — a
+    JSON body's \\udXXX escape survives json.loads, and a utf-7/declared-charset
+    HTML page can decode to surrogates — and such a string would crash the
+    payload/record serialization (json.dumps(...).encode()) it feeds. This is
+    the semantic-plane analogue of the connector-edge scrub, which cannot reach
+    raw_body-derived strings (review F8-A); it mirrors the errors='replace'
+    decoding the xml/text/pdf branches already use."""
+    return value.encode("utf-8", "replace").decode("utf-8")
+
+
 def decode_html(data: bytes) -> tuple[str, list[str]]:
     """Decode HTML bytes honoring a declared charset; report what was used."""
     charset = _sniff_charset(data)
@@ -258,7 +270,7 @@ def normalize_manifestation(store: SemanticStore, manifestation: dict,
         field_count = len(rows)
         if field_count >= MAX_FIELDS:
             warnings.append(f"FIELDS_TRUNCATED_AT_{MAX_FIELDS}")
-        fields_body = json.dumps(rows, ensure_ascii=False, sort_keys=False).encode("utf-8")
+        fields_body = json.dumps(rows, ensure_ascii=False, sort_keys=False).encode("utf-8", "replace")
         fields_sha = store.put_payload(fields_body)
         text = json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=1)
         content_class = "API_RESPONSE"
@@ -277,7 +289,7 @@ def normalize_manifestation(store: SemanticStore, manifestation: dict,
         # element paths double as a field table for structured extraction
         rows = [(path, text[start:end][:MAX_FIELD_VALUE]) for path, start, end in maps]
         field_count = len(rows)
-        fields_body = json.dumps(rows, ensure_ascii=False).encode("utf-8")
+        fields_body = json.dumps(rows, ensure_ascii=False).encode("utf-8", "replace")
         fields_sha = store.put_payload(fields_body)
         content_class = "FEED" if fmt == "FEED" else "API_RESPONSE"
         structural.append(("field_paths", "XML_ELEMENT_PATH"))
@@ -300,6 +312,15 @@ def normalize_manifestation(store: SemanticStore, manifestation: dict,
     else:
         raise NormalizationError(f"NORMALIZATION_FAILED_UNSUPPORTED_FORMAT:{fmt}")
 
+    # scrub any lone surrogates the body's own content decoded to (a JSON \udXXX
+    # escape, a utf-7/declared-charset HTML page) before they enter the stored
+    # payload or the document record — otherwise their serialization crashes and
+    # the document is silently lost (review F8-A). A visible warning records that
+    # unencodable characters were replaced.
+    scrubbed = tuple(_scrub_surrogates(v) for v in (text, title, publisher))
+    if scrubbed != (text, title, publisher):
+        warnings.append("SCRUBBED_UNENCODABLE_CHARACTERS")
+    text, title, publisher = scrubbed
     normalized_sha = store.put_payload(text.encode("utf-8"))
     record = NormalizedDocumentRecord(
         document_id=document_id,
