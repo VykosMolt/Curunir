@@ -74,7 +74,11 @@ function canonical(value) {
         throw new Error("canonical: undefined value at key " + JSON.stringify(k) +
                         " (JSON.stringify would silently drop it)");
       }
-      parts.push(JSON.stringify(k) + ":" + canonical(v));
+      // route the KEY through canonical() too, not a bare JSON.stringify(k):
+      // Python's canonical_line RAISES on a lone-surrogate key, so a key must
+      // be refused on the same terms as a value or the browser would sign a
+      // payload whose bytes the verifier cannot reproduce (review F-J1 residual).
+      parts.push(canonical(k) + ":" + canonical(v));
     }
     return "{" + parts.join(",") + "}";
   }

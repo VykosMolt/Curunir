@@ -37,6 +37,10 @@ def _scrub_output(value: Any) -> Any:
         return {_scrub_output(k): _scrub_output(v) for k, v in value.items()}
     if isinstance(value, (list, tuple)):
         return type(value)(_scrub_output(item) for item in value)
+    if isinstance(value, (set, frozenset)):
+        # canonical serialization DOES serialize sets, so a surrogate inside one
+        # would crash the append just like any other container (review F-P1 resid.)
+        return type(value)(_scrub_output(item) for item in value)
     return value
 
 
@@ -175,6 +179,13 @@ class AnalyticalAssist:
                     "model_id": self.package.model_id,
                     "input_marking": effective_input.to_record()}
         self._ensure_registered(ctx)
+        # task/inputs are caller-supplied strings; scrub lone surrogates up front
+        # so the inference-record hashing (inference_id / input_hash, built
+        # OUTSIDE the try below) and the provider call itself cannot crash
+        # canonical serialization and suppress the non-repudiation record
+        # (review F-P1 residual — the scrub was on `output` only).
+        task = _scrub_output(task)
+        inputs = _scrub_output(dict(inputs))
         started = ctx.now_fn()
         try:
             # the inference provider is EXTERNAL data (the fourth such boundary,

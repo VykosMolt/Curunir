@@ -573,17 +573,18 @@ class MissionDataStore:
         new_root = Path(new_root)
         if (new_root / "store_meta.json").exists():
             raise StoreError(f"refusing to import over an existing store: {new_root}")
-        new_root.mkdir(parents=True, exist_ok=True)
-        (new_root / "payloads").mkdir(exist_ok=True)
-        # the verified bytes are the bytes installed, not a fresh read of the source
-        (new_root / "store_meta.json").write_bytes(store_meta_bytes)
-        (new_root / "events.jsonl").write_bytes(events_bytes)
-        for name in manifest["payloads"]:
-            body = (source_dir / "payloads" / name).read_bytes()
-            if hashlib.sha256(body).hexdigest() != name:
-                raise StoreError(f"export tampered: payload {name} hash mismatch")
-            (new_root / "payloads" / name).write_bytes(body)
+        root_preexisted = new_root.exists()
         try:
+            new_root.mkdir(parents=True, exist_ok=True)
+            (new_root / "payloads").mkdir(exist_ok=True)
+            # the verified bytes are the bytes installed, not a fresh read of the source
+            (new_root / "store_meta.json").write_bytes(store_meta_bytes)
+            (new_root / "events.jsonl").write_bytes(events_bytes)
+            for name in manifest["payloads"]:
+                body = (source_dir / "payloads" / name).read_bytes()
+                if hashlib.sha256(body).hexdigest() != name:
+                    raise StoreError(f"export tampered: payload {name} hash mismatch")
+                (new_root / "payloads" / name).write_bytes(body)
             store = cls(new_root)
             check = store.verify_chain()
             if not check["valid"]:
@@ -591,13 +592,23 @@ class MissionDataStore:
             if store.head()["head_hash"] != manifest["head_hash"]:
                 raise StoreError("imported head hash does not match manifest")
         except BaseException as error:
-            # a malformed/hostile export must not leave a permanently-unopenable
-            # store behind, and a serialization crash (a lone surrogate in a
-            # record) must surface as a typed StoreError, not a raw
-            # UnicodeEncodeError (review F-I1). Roll back the installed artifacts.
-            (new_root / "store_meta.json").unlink(missing_ok=True)
-            (new_root / "events.jsonl").unlink(missing_ok=True)
-            shutil.rmtree(new_root / "payloads", ignore_errors=True)
+            # roll back the ENTIRE install, from the first mkdir. A malformed or
+            # hostile export (a payload whose content fails its hash, a payload
+            # file absent from the export, a serialization crash on a lone
+            # surrogate, or a mid-copy OSError like ENOSPC) must not leave behind
+            # a store that OPENS and verifies clean while silently missing payload
+            # content — nor a target root that then refuses a retry ("refusing to
+            # import over an existing store"). Every failure surfaces as a typed
+            # StoreError (review NEW-2 / F-I1). Remove exactly what we created:
+            # the whole root if this import made it, else only our artifacts.
+            if root_preexisted:
+                (new_root / "store_meta.json").unlink(missing_ok=True)
+                (new_root / "events.jsonl").unlink(missing_ok=True)
+                shutil.rmtree(new_root / "payloads", ignore_errors=True)
+            else:
+                shutil.rmtree(new_root, ignore_errors=True)
+            if isinstance(error, (KeyboardInterrupt, SystemExit)):
+                raise                 # never suppress an interrupt as a StoreError
             if isinstance(error, StoreError):
                 raise
             raise StoreError(

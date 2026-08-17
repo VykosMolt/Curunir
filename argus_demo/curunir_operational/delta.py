@@ -105,8 +105,14 @@ def import_delta_bundle(store: MissionDataStore, bundle_dir: str | Path) -> dict
                 "detail": "store history at the bundle base differs from the bundle's base hash; "
                           "stores have diverged and nothing was applied",
                 "store_head": head, "bundle_base_seq": base_seq, "received_at": utc_now()}
-    events = [json.loads(line) for line in (bundle_dir / "delta_events.jsonl").read_text(encoding="utf-8").splitlines()
-              if line.strip()]
+    # split on \n ONLY — NOT str.splitlines(), which also breaks on U+2028 /
+    # U+2029 / U+0085. canonical_line writes those RAW under ensure_ascii=False
+    # (a routine artifact of scraped/pasted web text — the very content this
+    # system ingests), so splitlines() would tear an event in half and fail an
+    # otherwise byte-valid privileged bundle import. This is the C-1 doctrine
+    # ("all readers split on \n only") applied to the delta path (review NEW-3).
+    raw = (bundle_dir / "delta_events.jsonl").read_bytes().decode("utf-8")
+    events = [json.loads(line) for line in raw.split("\n") if line.strip()]
     applied = 0
     for event in events:
         if event["seq"] <= head["event_count"]:

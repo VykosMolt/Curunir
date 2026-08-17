@@ -134,6 +134,25 @@ def test_delta_apply_duplicate_missingbase_wrongbase_tamper(tmp_path):
     assert not verify_delta_bundle(tmp_path / "delta")["valid"]
 
 
+def test_delta_import_splits_on_newline_only_not_unicode_separators(tmp_path):
+    # review NEW-3: canonical_line writes U+2028 / U+2029 / U+0085 RAW under
+    # ensure_ascii=False (a routine artifact of scraped/pasted web text). The
+    # bundle import must split on \n ONLY — str.splitlines() also breaks on those
+    # separators and would tear an event in half, failing an otherwise byte-valid
+    # privileged import (verify_delta_bundle still reports valid, so the operator
+    # gets a clean verification then a JSONDecodeError). Every event must apply.
+    store = seed_store(tmp_path)
+    store.append("OBJECT_VERSION_APPENDED",
+                 obj("infra-SEP", attributes={"status": "line\u2028sep\u2029para\u0085nel"}),
+                 recorded_time=t(1), actor="p")
+    build_full_bundle(store, tmp_path / "full")
+    assert verify_delta_bundle(tmp_path / "full")["valid"]
+    fresh = make_store(tmp_path, name="fresh_sep", store_id="x")
+    receipt = import_delta_bundle(fresh, tmp_path / "full")
+    assert receipt["status"] == "APPLIED"
+    assert fresh.head()["head_hash"] == store.head()["head_hash"]   # every event applied intact
+
+
 def test_full_bundle_round_trips(tmp_path):
     store, _ = build_two_phase_store(tmp_path)
     manifest = build_full_bundle(store, tmp_path / "full")

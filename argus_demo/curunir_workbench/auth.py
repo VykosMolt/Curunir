@@ -82,6 +82,14 @@ class ActorRegistry:
     def context_for(self, token: str | None) -> AccessContext:
         if not token:
             raise AuthError("missing bearer token")
+        if not token.isascii():
+            # Starlette decodes header bytes as latin-1, so a bearer token can
+            # carry a byte >= 0x80; secrets.compare_digest RAISES TypeError on a
+            # non-ASCII str. No registered token is non-ASCII, so treat it as an
+            # ordinary unknown-actor failure rather than letting a TypeError
+            # escape context() to an unauthenticated 500 (+ per-request log-flood
+            # primitive) on the whole API surface (review NEW-4).
+            raise AuthError("unknown or disabled actor")
         # pick up registry edits (e.g. disabling an actor) without a restart
         try:
             if self.path.stat().st_mtime != self._mtime:

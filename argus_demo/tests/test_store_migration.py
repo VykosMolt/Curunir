@@ -164,3 +164,34 @@ def test_failed_import_rolls_back_and_leaves_no_debris(tmp_path):
         WorkbenchStore.import_from(backup, restored)
     assert not (restored / "store_meta.json").exists()   # no debris
     assert not (restored / "events.jsonl").exists()
+
+
+def test_import_install_failure_rolls_back_whole_root_and_is_typed(tmp_path):
+    # review NEW-2: a failure DURING install (tampered payload content, a payload
+    # file absent, a mid-copy error) — not only the post-install open — must roll
+    # back the ENTIRE target root. It must never leave a store that opens and
+    # verifies clean while silently missing payload content, nor a root that then
+    # refuses a retry, and every failure surfaces as a typed StoreError.
+    make_workbench(tmp_path)
+    store = WorkbenchStore(tmp_path / "store")
+    store.put_payload(b"evidence-A"); store.put_payload(b"evidence-B")
+
+    # (A) tampered payload CONTENT — events.jsonl + store_meta still hash-match the
+    # manifest, so both top gates pass and the failure fires mid-install.
+    backup_a = tmp_path / "backup_a"
+    store.export_to(backup_a)
+    sorted((backup_a / "payloads").iterdir())[0].write_bytes(b"tampered")
+    restored_a = tmp_path / "restored_a"
+    with pytest.raises(StoreError):
+        WorkbenchStore.import_from(backup_a, restored_a)
+    assert not restored_a.exists()          # whole freshly-created root removed -> retry is clean
+
+    # (B) a payload file ABSENT from the export → a typed StoreError, not a raw
+    # FileNotFoundError, and again no debris.
+    backup_b = tmp_path / "backup_b"
+    store.export_to(backup_b)
+    sorted((backup_b / "payloads").iterdir())[0].unlink()
+    restored_b = tmp_path / "restored_b"
+    with pytest.raises(StoreError):
+        WorkbenchStore.import_from(backup_b, restored_b)
+    assert not restored_b.exists()

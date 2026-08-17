@@ -526,3 +526,86 @@ semantic normalizer, analytic provider, workbench render, and the browser
 signer. F-I1 and F-B1 extend the crash/dangling-reference doctrine (validate
 before swap; referent before referrer) to the import-install and watch-summary
 surfaces.
+
+## Round 13 — independent audit found 4 MAJOR (repaired round 14), and CORRECTED a false premise
+
+Round 13 was the merge-decision convergence round. It returned `NOT_CONVERGED`:
+the independent reviewer reproduced four MAJOR defects with live probes and
+found bounded MINOR residuals on four round-12 fixes. All repaired in round 14
+with regression locks. Crucially it overturned a premise this campaign had
+recorded as fact — that the wire cannot carry a lone surrogate — so the honesty
+correction is documented here alongside the fix.
+
+- **NEW-1 (MAJOR)** — an unauthenticated **500 on every POST endpoint** via a
+  JSON `\uD800` escape. The F-W1 premise ("a well-formed JSON body cannot carry a
+  lone surrogate") was **FALSE**: JSON `"\uD800"` is pure ASCII on the wire, a
+  browser's well-formed `JSON.stringify` emits exactly that, `json.loads`
+  restores the lone surrogate, and it reaches Pydantic body validation BEFORE the
+  endpoint / before auth. FastAPI's default `RequestValidationError` handler
+  echoes the offending input verbatim, and Starlette's UTF-8 render 500s on it.
+  Fixed: an app-level `@app.exception_handler(RequestValidationError)` that deep-
+  scrubs the echoed errors before render. The false premise was corrected in the
+  `render_safe` docstring, this document, and the (renamed, rewritten) lock.
+  Lock: `test_ascii_escaped_surrogate_body_yields_422_not_500`.
+- **NEW-4 (MAJOR)** — an unauthenticated `TypeError` → 500 on the WHOLE API from
+  one non-ASCII byte in the `Authorization` header. Starlette decodes header
+  bytes as latin-1, so the bearer token can carry a byte ≥ 0x80;
+  `secrets.compare_digest` RAISES on a non-ASCII `str`, escaping `context()`.
+  Fixed: `auth.context_for` rejects a non-ASCII token as an ordinary `AuthError`
+  (→ 401) before the compare. Locks:
+  `test_non_ascii_bearer_token_fails_closed_not_typeerror` (fix site) and
+  `test_non_ascii_bearer_over_http_is_401_not_500` (raw-ASGI end to end).
+- **NEW-2 (MAJOR)** — `import_from`'s install phase ran OUTSIDE the rollback try,
+  so a mid-install failure (a payload whose content fails its hash, a payload
+  file absent, a mid-copy `OSError`) left a store that OPENS and reports
+  `verify_chain: valid` while silently missing payload content — and a target
+  root that then refuses a retry — sometimes raising an untyped `FileNotFoundError`.
+  Fixed: the ENTIRE install (from the first `mkdir`) is inside the try; on any
+  failure the whole freshly-created root is removed (or just our artifacts if the
+  root pre-existed) and a typed `StoreError` is raised; `KeyboardInterrupt` /
+  `SystemExit` are re-raised, never suppressed (this also closes the F-I1
+  MINOR). Lock: `test_import_install_failure_rolls_back_whole_root_and_is_typed`.
+- **NEW-3 (MAJOR)** — the C-1 `str.splitlines()` class was still open in
+  `delta.py` (the privileged store-to-store sync / disaster-recovery import).
+  `build_delta_bundle` writes `canonical_line(e) + "\n"` under `ensure_ascii=
+  False`, so a U+2028/U+2029/U+0085 in ordinary text (routine in scraped/pasted
+  web content) went to the file raw and `str.splitlines()` tore the event in half
+  — `verify_delta_bundle` reports valid, then import raises `JSONDecodeError`. So
+  any mission whose text ever held a Unicode line separator could never be
+  replicated or restored via the delta path. Fixed: split on `\n` only. Lock:
+  `test_delta_import_splits_on_newline_only_not_unicode_separators`.
+
+MINOR residuals from round 12, all repaired round 14:
+
+- **F-P1 residual** — `_scrub_output` handled only `str`/`dict`/`list`/`tuple`
+  (a **set** value, which canonical DOES serialize, slipped through), and the
+  caller-supplied `task`/`inputs` were hashed for `inference_id`/`input_hash`
+  OUTSIDE the try. Fixed: `_scrub_output` covers `set`/`frozenset`; `task`/
+  `inputs` are scrubbed up front. Lock:
+  `test_provider_scrub_covers_sets_and_caller_task_inputs`.
+- **F-J1 residual** — object KEYS bypassed the guard (`JSON.stringify(k)` instead
+  of `canonical(k)`), so the browser would still sign `{"\uD800":1}` that the
+  Python verifier RAISES on. Fixed: keys route through `canonical()`. Lock: key
+  cases added to `REFUSED_CORPUS`.
+- **F-B1 residual** — `WatchRun` and `ChangeObservation` are MUTUALLY
+  referential, so no append order satisfies both; the change→run `run_id` was
+  consumed as an alert evidence fallback (`mission_bridge.py`) and could dangle
+  after a torn tail. Fixed: the alert falls back to the change observation's OWN
+  id (which necessarily exists), never the run_id. The residual torn-tail
+  double-OBSERVATION (a benign duplication in the crash window, not loss or
+  corruption — the safer direction) is a registered bounded limitation; a fully
+  idempotent watch retry (content-derived ids) is out-of-scope future work. Lock:
+  `test_retrieval_failure_alert_cites_change_id_not_a_possibly_dangling_run`.
+
+Additional (reviewer-noted, uncounted) hardening: `KeyRegistry._transition` /
+`revoke` stamped the registry's ambient marking on a status re-append rather than
+flooring on the key's PRIOR marking — a no-write-down hole, unreachable while
+every registry is PUBLIC but latent for a compartmented deployment. Closed by
+`inherited_marking(self._marking_for(), [prior])`.
+
+Verified sound by the same audit (no finding): the signed-action path (a
+surrogate yields an honest 401, never a 500), store append atomicity (a refused
+record leaves zero bytes), query/path/header surrogate delivery (all decode to
+U+FFFD or latin-1), the connector edge and semantic normalizer, executor fault
+domains, four-eyes/SoD, `export_html` escaping, fail-closed defaults, and
+export/manifest hashing.

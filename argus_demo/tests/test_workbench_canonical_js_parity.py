@@ -78,6 +78,8 @@ REFUSED_CORPUS = [
     9007199254740993,       # > 2**53: JS rounds to an unsafe integer -> refused
     "lone \ud800 surrogate",  # Python canonical_line RAISES; JS must refuse too (F-J1)
     {"k": "tail \udfff"},     # a lone surrogate nested in a value
+    {"\ud800": 1},            # a lone surrogate in an object KEY (F-J1 residual)
+    {"outer": {"k\udfff": "ok"}},  # a lone-surrogate key nested one level down
 ]
 
 

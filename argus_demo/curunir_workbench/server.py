@@ -47,12 +47,25 @@ def render_safe(value) -> str:
     """Neutralize a lone surrogate before a string reaches an HTTP-response
     render (an error detail or an echoed field). Starlette UTF-8-encodes the
     response body, which RAISES on a lone surrogate and turns an honest 4xx into
-    a 500. A well-formed JSON request body cannot carry a lone surrogate (the
-    client's UTF-8 body encode refuses it), so this is defense-in-depth for a
-    surrogate reaching the render from STORED data or a non-body channel — the
-    same replace-with-U+FFFD transform used at every external→record boundary
-    (review F-W1)."""
+    a 500. A lone surrogate CAN reach the server (JSON "\\uD800" is pure ASCII on
+    the wire and json.loads restores it — see the NEW-1 validation handler), so
+    this is a real boundary, not merely defensive: the same replace-with-U+FFFD
+    transform used at every external→record boundary, applied here to error
+    details and echoed fields (review F-W1 / NEW-1)."""
     return str(value).encode("utf-8", "replace").decode("utf-8")
+
+
+def _deep_render_safe(value):
+    """render_safe applied recursively across a nested structure — for response
+    content assembled from caller-supplied data (a validation-error echo) before
+    it reaches Starlette's UTF-8 render (review NEW-1)."""
+    if isinstance(value, str):
+        return render_safe(value)
+    if isinstance(value, dict):
+        return {_deep_render_safe(k): _deep_render_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_deep_render_safe(v) for v in value]
+    return value
 
 
 def create_app(mission_root: str | Path, actors_path: str | Path,
@@ -65,6 +78,23 @@ def create_app(mission_root: str | Path, actors_path: str | Path,
     app.state.root = root
     app.state.store = store
     app.state.registry = registry
+
+    from fastapi.exceptions import RequestValidationError
+    from fastapi.encoders import jsonable_encoder
+
+    @app.exception_handler(RequestValidationError)
+    async def _scrub_validation_errors(request: Request, exc: RequestValidationError):
+        # Body validation runs BEFORE the endpoint (so before context() / any
+        # auth), and FastAPI's default 422 handler echoes the offending input
+        # verbatim. A lone surrogate in that input then crashes Starlette's
+        # UTF-8 render into an UNAUTHENTICATED 500 on every POST endpoint. The
+        # premise that the wire cannot carry a lone surrogate is FALSE: JSON
+        # "\uD800" is pure ASCII on the wire, json.loads accepts it, and a
+        # browser's JSON.stringify emits exactly that form. Scrub the echoed
+        # errors so the 422 renders cleanly (corrects the mistaken F-W1 premise;
+        # review NEW-1).
+        safe = _deep_render_safe(jsonable_encoder(exc.errors()))
+        return JSONResponse(status_code=422, content={"detail": safe})
 
     # ---- auth ---------------------------------------------------------------
 

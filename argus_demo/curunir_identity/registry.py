@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
-from curunir_operational.access import Marking
+from curunir_operational.access import Marking, inherited_marking
 from curunir_operational.canonical import parse_time
 
 from .contracts import ActorKeyRecord
@@ -116,8 +116,11 @@ class KeyRegistry:
             status=status, enrolled_time=current["enrolled_time"], status_time=now,
             supersedes_key_id=current.get("supersedes_key_id", ""), reason=reason,
             recorded_time=now,
-            marking=self._marking_for() if isinstance(current.get("marking"), dict)
-            else current["marking"]))
+            # floor on the key's PRIOR marking so a re-append (status change) can
+            # never LOWER a key's marking to the registry's ambient one — the
+            # no-write-down invariant applied to the key family (unreachable while
+            # every registry is PUBLIC, but a latent hole for a compartmented one).
+            marking=inherited_marking(self._marking_for(), [current.get("marking")])))
 
     def revoke(self, key_id: str, *, reason: str = "revoked", compromised: bool = False,
                now: str | None = None) -> dict[str, Any]:
@@ -142,7 +145,8 @@ class KeyRegistry:
             actor_kind=current["actor_kind"], public_key=current["public_key"],
             status="REVOKED", enrolled_time=current["enrolled_time"], status_time=now,
             supersedes_key_id=current.get("supersedes_key_id", ""), reason=tag,
-            recorded_time=now, marking=self._marking_for()))
+            recorded_time=now,  # floor on the prior marking (no write-down; see _transition)
+            marking=inherited_marking(self._marking_for(), [current.get("marking")])))
 
     def rotate(self, *, actor_id: str, new_public_key_hex: str,
                now: str | None = None) -> dict[str, Any]:

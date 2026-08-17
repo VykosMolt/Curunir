@@ -170,3 +170,31 @@ def test_provider_surrogate_output_does_not_crash_and_is_recorded(tmp_path):
     inferences = ctx.store.records_of("inference")
     assert inferences
     assert "\ud800" not in inferences[-1]["output"].get("title", "")
+
+
+def test_provider_scrub_covers_sets_and_caller_task_inputs(tmp_path):
+    # review F-P1 residual: (a) _scrub_output must cover set/frozenset (canonical
+    # serialization DOES serialize sets, so a surrogate inside one would crash the
+    # append like any container); (b) the caller-supplied task / inputs — hashed
+    # OUTSIDE the try for inference_id / input_hash — must be scrubbed too, or a
+    # surrogate there crashes the record build and suppresses the audit.
+    import json
+    from curunir_analytic.providers import _scrub_output
+    from curunir_operational.canonical import sha256
+    # (a) sets/frozensets scrub cleanly (no surrogate survives into canonical):
+    sha256(_scrub_output({"tags": {"bad\ud800"}, "f": frozenset({"x\udfff"})}))  # must not raise
+
+    # (b) a surrogate in the caller task / inputs must not crash the audit build:
+    pipeline, ctx = make_analytic(tmp_path)
+    _plant_restricted(pipeline, "SEC0000000000000009")
+    pipeline.process_new_evidence()
+    claim = _claim(ctx.store, "SEC0000000000000009")
+    provider = AnalyticalAssist(
+        package=analytical_assist_package("local-surrogate-2", "m", "1"),
+        infer_fn=lambda t, i: {"title": "ok", "supporting_claim_ids": [claim["claim_id"]]},
+        allowed_input_marking=RESTRICTED_MARK)
+    out = provider.propose(ctx, task="task-\ud800", target_kind="analytic_theme",
+                           inputs={"k": "in-\udfff"}, input_refs=(claim["claim_id"],))  # must NOT raise
+    assert out["status"] == "PROPOSED", out
+    rec = json.dumps(ctx.store.records_of("inference")[-1], ensure_ascii=False)
+    assert "\ud800" not in rec and "\udfff" not in rec       # audit written, fully scrubbed

@@ -182,16 +182,20 @@ def test_challenge_requires_a_bearer(tmp_path):
     assert client.get("/api/auth/time").status_code == 401
 
 
-def test_json_body_transport_cannot_carry_a_lone_surrogate(tmp_path):
-    # review F-W1 (primary closure): the JSON-request-body vector is shut at the
-    # transport — a lone surrogate cannot be UTF-8-encoded into an HTTP body, so
-    # the client (httpx here, a browser's fetch/TextEncoder in the field) refuses
-    # to put it on the wire. It therefore never reaches a request-body field.
+def test_ascii_escaped_surrogate_body_yields_422_not_500(tmp_path):
+    # review NEW-1: the JSON-body vector is NOT shut at the transport (the earlier
+    # F-W1 premise was wrong). JSON "\uD800" is PURE ASCII on the wire — a
+    # browser's well-formed JSON.stringify emits exactly this — json.loads
+    # restores the lone surrogate, and FastAPI's default 422 handler would echo it
+    # into a response whose UTF-8 render 500s. Unauthenticated, on every POST.
+    # The custom validation handler must scrub it to an honest 422, never a 500.
     root, actors_path, clock, report_id, version, pem_b = _build(tmp_path)
-    client = TestClient(create_app(root, actors_path, now_fn=clock.now))
-    with pytest.raises(UnicodeEncodeError):
-        client.post("/api/auth/challenge", json={"actor_id": "ghost\ud800"},
-                    headers={"Authorization": "Bearer tok-b"})
+    client = TestClient(create_app(root, actors_path, now_fn=clock.now),
+                        raise_server_exceptions=False)
+    for path in ("/api/auth/challenge", "/api/auth/authenticate"):   # required-field models
+        r = client.post(path, content=b'{"z":"\\ud800"}',           # 14 ASCII bytes, NO auth
+                        headers={"Content-Type": "application/json"})
+        assert r.status_code == 422, f"{path} -> {r.status_code}: surrogate echo 500?"
 
 
 def test_render_safe_neutralizes_a_surrogate_reaching_the_response(tmp_path):
@@ -204,3 +208,41 @@ def test_render_safe_neutralizes_a_surrogate_reaching_the_response(tmp_path):
     assert "\ud800" not in out
     assert out.encode("utf-8") == out.encode("utf-8", "strict")  # no longer raises
     assert render_safe(ValueError("bad id \udfff")).encode("utf-8")  # error path too
+
+
+def test_non_ascii_bearer_token_fails_closed_not_typeerror(tmp_path):
+    # review NEW-4 (fix site): Starlette decodes the Authorization header as
+    # latin-1, so a bearer token can carry a byte >= 0x80; secrets.compare_digest
+    # RAISES TypeError on a non-ASCII str. context_for must fail closed with an
+    # AuthError (-> 401), never let a TypeError escape to an unauthenticated 500.
+    from curunir_workbench.auth import AuthError
+    actors = tmp_path / "actors.json"
+    write_registry(actors, [{"token": "tok-a", "actor_id": "a", "roles": ["ANALYST"],
+                             "releasability": ["PUBLIC"], "organisation": "m"}])
+    reg = ActorRegistry(actors)
+    assert reg.context_for("tok-a").actor_id == "a"           # ascii control still works
+    for bad in ("caf\xe9", "\xff", "tok\x80abc"):             # latin-1 header bytes >= 0x80
+        with pytest.raises(AuthError):
+            reg.context_for(bad)
+
+
+def test_non_ascii_bearer_over_http_is_401_not_500(tmp_path):
+    # review NEW-4 (end to end): the same over the wire, unauthenticated, must be
+    # a clean 401, never a 500 + per-request stack trace on the whole API surface.
+    # httpx (the TestClient's client) refuses to ENCODE a non-ASCII header, so
+    # drive the ASGI app directly with the raw latin-1 header bytes uvicorn would
+    # hand Starlette in production (the reviewer's exact repro).
+    import asyncio
+    root, actors_path, clock, report_id, version, pem_b = _build(tmp_path)
+    app = create_app(root, actors_path, now_fn=clock.now)
+    scope = {"type": "http", "asgi": {"version": "3.0", "spec_version": "2.3"},
+             "http_version": "1.1", "method": "GET", "path": "/api/session",
+             "raw_path": b"/api/session", "query_string": b"", "root_path": "",
+             "scheme": "http", "headers": [(b"authorization", b"Bearer \xe9\xff")],
+             "client": ("test", 1), "server": ("test", 80)}
+    out = []
+    async def receive(): return {"type": "http.request", "body": b"", "more_body": False}
+    async def send(m): out.append(m)
+    asyncio.run(app(scope, receive, send))
+    status = next(m for m in out if m["type"] == "http.response.start")["status"]
+    assert status == 401

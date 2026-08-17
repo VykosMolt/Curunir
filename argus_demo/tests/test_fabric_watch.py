@@ -224,3 +224,27 @@ def test_export_replay_preserves_watch_lineage(tmp_path):
     assert len(imported.records_of("fabric_change")) == \
         len(ctx.store.records_of("fabric_change"))
     assert len(imported.records_of("fabric_watch_run")) == 2
+
+
+def test_retrieval_failure_alert_cites_change_id_not_a_possibly_dangling_run(tmp_path):
+    # review F-B1 residual: a RETRIEVAL_FAILURE change carries no manifestation
+    # evidence, so alert_from_change falls back — and must cite the change
+    # observation's OWN id (which necessarily exists), never the run_id, which a
+    # torn tail between the change appends and the WatchRun append can leave
+    # pointing at a WatchRun that was never written.
+    transport = MutableTransport(FEED_V1, "application/rss+xml")
+    ctx = _context(tmp_path, {"rss-feed-v1": transport})
+    _watch(ctx.store)
+    tick(ctx, now="2026-08-15T12:05:00+00:00")
+    transport.status, transport.error, transport.body = 503, "HTTP_503", b""
+    tick(ctx, now="2026-08-15T14:00:00+00:00")
+    failure = [r for r in ctx.store.records_of("fabric_change")
+               if r["change_type"] == "RETRIEVAL_FAILURE"][0]
+    assert not failure["evidence_manifestation_ids"]        # exercises the fallback branch
+    alert_id, created = alert_from_change(ctx.store, failure,
+                                          now="2026-08-15T15:00:00+00:00",
+                                          actor="fabric-watch", marking=MARK)
+    assert created
+    alert = [a for a in ctx.store.records_of("alert") if a["alert_id"] == alert_id][0]
+    assert failure["change_id"] in alert["evidence_refs"]
+    assert failure["run_id"] not in alert["evidence_refs"]   # never the (possibly torn) run

@@ -55,7 +55,12 @@ def alert_from_change(store: FabricStore, change_record: dict, *, severity: str 
     """Raise an evidence-bound mission alert for a watch change observation."""
     if not change_record["evidence_manifestation_ids"] and change_record["change_type"] != "RETRIEVAL_FAILURE":
         raise ValueError("change alerts must cite manifestation evidence")
-    evidence = tuple(change_record["evidence_manifestation_ids"]) or (change_record["run_id"],)
+    # fall back to the change observation's OWN id (which necessarily exists —
+    # it is the record being alerted on), never the run_id: a torn tail between
+    # the change appends and the WatchRun append can leave change_observation_ids
+    # whose run_id points at a WatchRun that was never written, and that dangling
+    # run must not become an alert's cited evidence (review F-B1 residual).
+    evidence = tuple(change_record["evidence_manifestation_ids"]) or (change_record["change_id"],)
     engine = WorkflowEngine(store)
     return engine.raise_alert({
         "rule_id": "fabric-watch-change", "rule_version": "0.1",
