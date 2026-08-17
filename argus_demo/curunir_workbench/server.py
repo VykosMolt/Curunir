@@ -43,6 +43,18 @@ from .views import (coverage_matrix, entity_dossier, entity_list, event_dossier,
 STATIC_DIR = Path(__file__).parent / "static"
 
 
+def render_safe(value) -> str:
+    """Neutralize a lone surrogate before a string reaches an HTTP-response
+    render (an error detail or an echoed field). Starlette UTF-8-encodes the
+    response body, which RAISES on a lone surrogate and turns an honest 4xx into
+    a 500. A well-formed JSON request body cannot carry a lone surrogate (the
+    client's UTF-8 body encode refuses it), so this is defense-in-depth for a
+    surrogate reaching the render from STORED data or a non-body channel — the
+    same replace-with-U+FFFD transform used at every external→record boundary
+    (review F-W1)."""
+    return str(value).encode("utf-8", "replace").decode("utf-8")
+
+
 def create_app(mission_root: str | Path, actors_path: str | Path,
                now_fn=None) -> FastAPI:
     root = Path(mission_root)
@@ -94,18 +106,23 @@ def create_app(mission_root: str | Path, actors_path: str | Path,
         authority refusals are 403, not 400."""
         from curunir_operational.missions import MissionWorkflowError
         from curunir_operational.workflow import WorkflowError
+        # an error message may interpolate a caller-supplied string carrying a
+        # lone surrogate; scrub the detail so building the error RESPONSE cannot
+        # itself 500 at Starlette's UTF-8 encode (review F-W1).
+        def _detail(error):
+            return render_safe(error)
         try:
             result = fn(*args, **kwargs)
         except Conflict as error:
-            raise HTTPException(status_code=409, detail=str(error))
+            raise HTTPException(status_code=409, detail=_detail(error))
         except NotFound as error:
-            raise HTTPException(status_code=404, detail=str(error))
+            raise HTTPException(status_code=404, detail=_detail(error))
         except PermissionError as error:
-            raise HTTPException(status_code=403, detail=str(error))
+            raise HTTPException(status_code=403, detail=_detail(error))
         except (MissionWorkflowError, WorkflowError) as error:
-            raise HTTPException(status_code=403, detail=str(error))
+            raise HTTPException(status_code=403, detail=_detail(error))
         except ValueError as error:
-            raise HTTPException(status_code=400, detail=str(error))
+            raise HTTPException(status_code=400, detail=_detail(error))
         if isinstance(result, (dict, list)):
             return MissionProjection(fresh_store(), context(request)).redact(
                 result if isinstance(result, dict) else {"items": result})
@@ -605,7 +622,10 @@ def create_app(mission_root: str | Path, actors_path: str | Path,
         # anonymous flood cannot grow the pending-challenge map (which is also
         # pruned + hard-capped server-side).
         context(request)
-        return app.state.sessions.issue_challenge(body.actor_id)
+        # scrub the client-supplied actor id: it is echoed on the 200 response,
+        # whose UTF-8 encode would otherwise 500 on a lone surrogate (review F-W1)
+        actor_id = render_safe(body.actor_id)
+        return app.state.sessions.issue_challenge(actor_id)
 
     class AuthenticateBody(BaseModel):
         actor_id: str

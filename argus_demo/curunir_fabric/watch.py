@@ -175,9 +175,13 @@ def run_watch(ctx: ExecutionContext, watch: dict, *, scheduled_time: str) -> Wat
         change_observation_ids=tuple(change.change_id for change in changes),
         next_due_time=next_due, marking=ctx.marking,
     )
-    ctx.store.append("FABRIC_WATCH_RUN_RECORDED", run, recorded_time=completed, actor=ctx.actor)
+    # append the change observations FIRST, then the WatchRun that references
+    # them by id — so a crash between the appends can never leave a WatchRun
+    # whose change_observation_ids point at records that do not exist (the mirror
+    # of the executor.finish() ordering; review F-B1).
     for change in changes:
         ctx.store.append("FABRIC_CHANGE_OBSERVED", change, recorded_time=completed, actor=ctx.actor)
+    ctx.store.append("FABRIC_WATCH_RUN_RECORDED", run, recorded_time=completed, actor=ctx.actor)
     return run
 
 

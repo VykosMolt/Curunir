@@ -201,8 +201,8 @@ class MissionDataStore:
             try:
                 cls(root)  # opens cleanly under the lock → nothing to recover
                 return {"recovered": False, "truncated_bytes": 0}
-            except StoreError:
-                pass
+            except Exception:  # noqa: BLE001 — any open failure (incl. a serialization
+                pass           # crash from a surrogate-bearing record) → try recovery
             raw = events_path.read_bytes() if events_path.exists() else b""
             complete, torn = cls._split_log(raw)
             # the recoverable case is EXACTLY a non-empty torn tail (an incomplete
@@ -583,10 +583,23 @@ class MissionDataStore:
             if hashlib.sha256(body).hexdigest() != name:
                 raise StoreError(f"export tampered: payload {name} hash mismatch")
             (new_root / "payloads" / name).write_bytes(body)
-        store = cls(new_root)
-        check = store.verify_chain()
-        if not check["valid"]:
-            raise StoreError(f"imported chain invalid at seq {check['failed_at_seq']}")
-        if store.head()["head_hash"] != manifest["head_hash"]:
-            raise StoreError("imported head hash does not match manifest")
+        try:
+            store = cls(new_root)
+            check = store.verify_chain()
+            if not check["valid"]:
+                raise StoreError(f"imported chain invalid at seq {check['failed_at_seq']}")
+            if store.head()["head_hash"] != manifest["head_hash"]:
+                raise StoreError("imported head hash does not match manifest")
+        except BaseException as error:
+            # a malformed/hostile export must not leave a permanently-unopenable
+            # store behind, and a serialization crash (a lone surrogate in a
+            # record) must surface as a typed StoreError, not a raw
+            # UnicodeEncodeError (review F-I1). Roll back the installed artifacts.
+            (new_root / "store_meta.json").unlink(missing_ok=True)
+            (new_root / "events.jsonl").unlink(missing_ok=True)
+            shutil.rmtree(new_root / "payloads", ignore_errors=True)
+            if isinstance(error, StoreError):
+                raise
+            raise StoreError(
+                f"import failed and was rolled back: {type(error).__name__}: {error}") from error
         return store

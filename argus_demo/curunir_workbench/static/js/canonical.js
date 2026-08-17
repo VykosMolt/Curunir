@@ -43,10 +43,18 @@ function canonical(value) {
     return String(value);
   }
   if (t === "string") {
-    // JSON.stringify of a lone string matches Python json.dumps(ensure_ascii=
-    // False) escaping for every well-formed (no lone-surrogate) string:
-    // quotes/backslash, the short escapes \b \t \n \f \r, other C0 controls as
-    // \u00xx, everything else (incl. all non-ASCII) literal.
+    // Refuse a lone surrogate: Python's canonical_line RAISES on one (it cannot
+    // UTF-8-encode it), so signing it here would produce bytes the verifier
+    // cannot reproduce — refuse rather than sign a divergent payload, matching
+    // the float/unsafe-int doctrine above (review F-J1). Well-formed strings
+    // match Python json.dumps(ensure_ascii=False) escaping exactly.
+    const wellFormed = typeof value.isWellFormed === "function"
+      ? value.isWellFormed()
+      : !/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(value);
+    if (!wellFormed) {
+      throw new Error("canonical: string contains a lone surrogate (the verifier " +
+                      "would compute different bytes); refuse to sign it");
+    }
     return JSON.stringify(value);
   }
   if (Array.isArray(value)) {

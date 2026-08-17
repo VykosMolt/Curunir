@@ -26,6 +26,20 @@ from .substrate import AnalyticContext, record_candidate
 InferFn = Callable[[str, Mapping[str, Any]], Mapping[str, Any]]
 
 
+def _scrub_output(value: Any) -> Any:
+    """Recursively replace lone surrogates (which cannot be UTF-8-encoded, so
+    would crash canonical serialization) with U+FFFD across an external inference
+    response — the analogue of the connector/normalize scrubs for the provider
+    boundary (review F-P1)."""
+    if isinstance(value, str):
+        return value.encode("utf-8", "replace").decode("utf-8")
+    if isinstance(value, dict):
+        return {_scrub_output(k): _scrub_output(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return type(value)(_scrub_output(item) for item in value)
+    return value
+
+
 def _input_markings(store, input_refs: tuple[str, ...]) -> list[Marking]:
     """The markings of the material objects an inference is built from —
     claims, world objects, observations, manifestations. The provider egress
@@ -163,11 +177,17 @@ class AnalyticalAssist:
         self._ensure_registered(ctx)
         started = ctx.now_fn()
         try:
-            output = dict(self.infer_fn(task, inputs))
+            # the inference provider is EXTERNAL data (the fourth such boundary,
+            # after the connector, request and normalize edges): scrub lone
+            # surrogates from its returned mapping so a malformed response cannot
+            # crash the InferenceRecord's own serialization and thereby suppress
+            # its non-repudiation record (review F-P1). The scrub is inside the
+            # try and applied BEFORE any sha256/record build.
+            output = _scrub_output(dict(self.infer_fn(task, inputs)))
             errors: tuple[str, ...] = ()
         except Exception as error:
             output = {}
-            errors = (f"{type(error).__name__}: {str(error)[:300]}",)
+            errors = (_scrub_output(f"{type(error).__name__}: {str(error)[:300]}"),)
         inference = InferenceRecord(
             inference_id=f"inf-{sha256({'m': self.package.model_id, 't': task, 'i': dict(inputs), 's': started})[:20]}",
             model_id=self.package.model_id, model_version=self.package.version,

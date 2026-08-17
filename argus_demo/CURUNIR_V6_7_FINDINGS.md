@@ -473,3 +473,56 @@ the response BODY, re-derived into strings by the semantic normalizer:
 Confirmed NOT-A-DEFECT: the E2 reorder (net improvement — an under-claim, the
 doctrine-safe direction), non-surrogate serialization hazards (NaN/Inf/bigint/
 bytes — no reachable source→record path), and E3 (custody ValueErrors are local).
+
+## Rounds 10–12 — surrogate class swept to the remaining external boundaries + two non-surrogate durability gaps (repaired)
+
+Round 10 re-confirmed the executor / watch / semantic closures and the
+non-surrogate durability suite (crash recovery, marking, four-eyes, identity)
+as CONVERGED. Round 11 then swept the surrogate class across the *remaining*
+external boundaries — the analytic provider and the workbench HTTP render — and
+audited two adjacent durability surfaces (import install, browser signing). Five
+findings; all repaired in round 12 with regression locks:
+
+- **F-P1 (MAJOR)** — the analytic provider's `infer_fn` is a pluggable EXTERNAL
+  boundary exactly like a connector, but its returned dict was written into a
+  proposal record un-scrubbed; a lone surrogate in a provider-returned string
+  crashes `canonical_bytes` when the record is appended (the whole proposal is
+  lost, not contained). Fixed: `providers._scrub_output` recursively scrubs
+  `dict(self.infer_fn(task, inputs))` inside the propose() try, matching the
+  connector-edge doctrine. Lock:
+  `test_provider_surrogate_output_does_not_crash_and_is_recorded`.
+- **F-W1 (MAJOR)** — the workbench translates a command failure into an HTTP
+  error whose detail Starlette UTF-8-encodes; a lone surrogate in that detail (or
+  in an echoed field) 500s the response *render* instead of returning the honest
+  4xx. A well-formed JSON body cannot carry a lone surrogate (the client's UTF-8
+  body encode refuses it — proven by `test_json_body_transport_cannot_carry_a_
+  lone_surrogate`), so this is defense-in-depth for a surrogate arriving from
+  STORED data or a non-body channel. Fixed: a shared `server.render_safe` helper
+  applied to `_detail(error)` and the challenge actor_id echo. Lock:
+  `test_render_safe_neutralizes_a_surrogate_reaching_the_response`.
+- **F-I1 (MAJOR)** — a hostile/corrupt export that passes the manifest hash + the
+  contract-version gate but fails the FINAL `cls(new_root)` open (e.g. a broken
+  hash chain re-hashed into the manifest) left an un-openable half-installed
+  store in the caller's target root and raised an untyped error. Fixed:
+  `import_from` wraps the post-install open in try → remove the target root →
+  `StoreError`; `recover_torn_tail`'s initial-open catch broadened to `Exception`
+  so a non-OSError open failure there is contained too. Lock:
+  `test_failed_import_rolls_back_and_leaves_no_debris`.
+- **F-B1 (MINOR)** — `watch.py` appended the `WatchRun` summary before the change
+  records it references; a crash in that window left a `WatchRun` pointing at
+  changes that were never written (the same dangling-reference hazard as F8-E2).
+  Reordered: change records first, then the referencing `WatchRun`.
+- **F-J1 (MINOR)** — the browser canonical serializer (`canonical.js`) accepted a
+  lone surrogate that the Python verifier's `canonical_line` RAISES on, so the
+  browser would sign a payload the server cannot reproduce — a silent signature
+  DIVERGENCE (every such signature fails verification), not a crash. Fixed:
+  `canonical.js` refuses a lone surrogate (`isWellFormed`, regex fallback),
+  matching the existing float / unsafe-integer refusal doctrine. Lock: the
+  lone-surrogate cases added to `REFUSED_CORPUS` in the JS↔Python parity proof.
+
+The surrogate class is now closed at every external→record boundary reached by
+review: connector edge, connector request, executor manifestation, watch loop,
+semantic normalizer, analytic provider, workbench render, and the browser
+signer. F-I1 and F-B1 extend the crash/dangling-reference doctrine (validate
+before swap; referent before referrer) to the import-install and watch-summary
+surfaces.

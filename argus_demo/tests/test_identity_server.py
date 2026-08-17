@@ -180,3 +180,27 @@ def test_challenge_requires_a_bearer(tmp_path):
     client = TestClient(create_app(root, actors_path, now_fn=clock.now))
     assert client.post("/api/auth/challenge", json={"actor_id": "analyst-b"}).status_code == 401
     assert client.get("/api/auth/time").status_code == 401
+
+
+def test_json_body_transport_cannot_carry_a_lone_surrogate(tmp_path):
+    # review F-W1 (primary closure): the JSON-request-body vector is shut at the
+    # transport — a lone surrogate cannot be UTF-8-encoded into an HTTP body, so
+    # the client (httpx here, a browser's fetch/TextEncoder in the field) refuses
+    # to put it on the wire. It therefore never reaches a request-body field.
+    root, actors_path, clock, report_id, version, pem_b = _build(tmp_path)
+    client = TestClient(create_app(root, actors_path, now_fn=clock.now))
+    with pytest.raises(UnicodeEncodeError):
+        client.post("/api/auth/challenge", json={"actor_id": "ghost\ud800"},
+                    headers={"Authorization": "Bearer tok-b"})
+
+
+def test_render_safe_neutralizes_a_surrogate_reaching_the_response(tmp_path):
+    # review F-W1 (defense in depth): should a lone surrogate reach a render
+    # string from STORED data or a non-body channel, render_safe replaces it so
+    # building the HTTP response cannot 500 at Starlette's UTF-8 encode. Exercise
+    # the ACTUAL server helper, and prove its output survives a real UTF-8 encode.
+    from curunir_workbench.server import render_safe
+    out = render_safe("unknown target ghost\ud800 tail")
+    assert "\ud800" not in out
+    assert out.encode("utf-8") == out.encode("utf-8", "strict")  # no longer raises
+    assert render_safe(ValueError("bad id \udfff")).encode("utf-8")  # error path too

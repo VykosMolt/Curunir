@@ -76,6 +76,8 @@ REFUSED_CORPUS = [
     1.5,                    # float
     1e-7,                   # Python '1e-07' vs JS '1e-7'
     9007199254740993,       # > 2**53: JS rounds to an unsafe integer -> refused
+    "lone \ud800 surrogate",  # Python canonical_line RAISES; JS must refuse too (F-J1)
+    {"k": "tail \udfff"},     # a lone surrogate nested in a value
 ]
 
 

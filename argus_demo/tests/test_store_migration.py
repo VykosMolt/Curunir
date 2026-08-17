@@ -139,3 +139,28 @@ def test_backup_rollback_restores_prior_state(tmp_path):
     # the undesired objective is not in the rolled-back mission
     assert not any(o["statement"] == "undesired change"
                    for o in rolled_back.current_objectives().values())
+
+
+def test_failed_import_rolls_back_and_leaves_no_debris(tmp_path):
+    # review F-I1: a post-install import failure must clean up the target root
+    # (no permanently-unopenable debris) and raise a typed StoreError.
+    import hashlib
+    make_workbench(tmp_path)
+    store = WorkbenchStore(tmp_path / "store")
+    backup = tmp_path / "backup"
+    store.export_to(backup)
+    events = backup / "events.jsonl"
+    lines = events.read_bytes().split(b"\n")
+    ev = json.loads(lines[0]); ev["entry_hash"] = "de" * 32   # break the chain post-install
+    lines[0] = json.dumps(ev).encode()
+    new_bytes = b"\n".join(lines)
+    events.write_bytes(new_bytes)
+    manifest_path = backup / "export_manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["events_sha256"] = hashlib.sha256(new_bytes).hexdigest()   # so it passes the hash gate
+    manifest_path.write_text(canonical_line(manifest) + "\n")
+    restored = tmp_path / "restored"
+    with pytest.raises(StoreError):
+        WorkbenchStore.import_from(backup, restored)
+    assert not (restored / "store_meta.json").exists()   # no debris
+    assert not (restored / "events.jsonl").exists()

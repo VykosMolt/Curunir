@@ -148,3 +148,25 @@ def test_cleared_provider_receives_special_evidence(tmp_path):
                            inputs={"x": "y"}, input_refs=(special_claim["claim_id"],))
     assert out["status"] == "PROPOSED", out
     assert len(called) == 1
+
+
+def test_provider_surrogate_output_does_not_crash_and_is_recorded(tmp_path):
+    # review F-P1 (MAJOR): a lone surrogate in the external provider's returned
+    # mapping must not crash the InferenceRecord's serialization and thereby
+    # suppress the invocation's own non-repudiation record.
+    pipeline, ctx = make_analytic(tmp_path)
+    _plant_restricted(pipeline, "SEC0000000000000009")
+    pipeline.process_new_evidence()
+    claim = _claim(ctx.store, "SEC0000000000000009")
+    provider = AnalyticalAssist(
+        package=analytical_assist_package("local-surrogate", "m", "1"),
+        infer_fn=lambda t, i: {"title": "bad\ud800title",
+                               "supporting_claim_ids": [claim["claim_id"]]},
+        allowed_input_marking=RESTRICTED_MARK)
+    out = provider.propose(ctx, task="t", target_kind="analytic_theme",
+                           inputs={"x": "y"}, input_refs=(claim["claim_id"],))  # must NOT raise
+    assert out["status"] == "PROPOSED", out
+    # the invocation was recorded (audit not lost), with the surrogate scrubbed
+    inferences = ctx.store.records_of("inference")
+    assert inferences
+    assert "\ud800" not in inferences[-1]["output"].get("title", "")
