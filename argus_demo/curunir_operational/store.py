@@ -584,8 +584,11 @@ class MissionDataStore:
             raise StoreError("export_manifest.json is nested too deeply; refusing") from exc
         except (ValueError, UnicodeDecodeError) as exc:
             raise StoreError("export_manifest.json is not valid interchange JSON; refusing") from exc
-        if not isinstance(manifest, dict) or not {"events_sha256", "store_meta_sha256",
+        if not isinstance(manifest, dict) or not {"events_sha256",
                                                   "head_hash", "payloads"} <= manifest.keys():
+            # NB: store_meta_sha256 is intentionally NOT required here — it has a
+            # dedicated, more-specific "manifest records no store_meta_sha256"
+            # check downstream that must remain reachable
             raise StoreError("export_manifest.json is missing required fields; refusing")
         events_bytes = (source_dir / "events.jsonl").read_bytes()
         if hashlib.sha256(events_bytes).hexdigest() != manifest["events_sha256"]:
