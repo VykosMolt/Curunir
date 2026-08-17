@@ -818,9 +818,36 @@ def _validate_sections(projection: MissionProjection,
     _validate_inbound(projection, refs=_section_refs(sections), texts=tuple(texts))
 
 
+def _validate_section_shapes(sections: Any) -> None:
+    """Enforce the report sections' structural TYPES at the command boundary, so a
+    wrong scalar type (a numeric title, a string where a list of refs is expected,
+    a non-list `sentences`) is an honest 400 — not a 500 from a later .strip() /
+    .replace() / list() / iteration on the wrong type further down the builder
+    (`sections` is typed `list[dict[str, Any]]`, so nothing else validates it;
+    review MINOR-2)."""
+    def _req(cond: bool, msg: str) -> None:
+        if not cond:
+            raise ValueError(msg)
+    _req(isinstance(sections, list), "sections must be a list")
+    for section in sections:
+        _req(isinstance(section, Mapping), "each section must be an object")
+        for key in ("kind", "title", "section_id"):
+            _req(isinstance(section.get(key, ""), str), f"section {key} must be a string")
+        _req(isinstance(section.get("sentences", []), list), "section sentences must be a list")
+        _req(isinstance(section.get("option_ids", []), list), "section option_ids must be a list")
+        for sentence in section.get("sentences", []):
+            _req(isinstance(sentence, Mapping), "each sentence must be an object")
+            for key in ("text", "status", "inference_note", "unresolved_reason",
+                        "temporal_scope", "sentence_id"):
+                _req(isinstance(sentence.get(key, ""), str), f"sentence {key} must be a string")
+            for key in ("basis_refs", "assumption_ids"):
+                _req(isinstance(sentence.get(key, []), list), f"sentence {key} must be a list")
+
+
 def create_report(ctx: CommandContext, *, title: str, question: str,
                   sections: list[Mapping[str, Any]],
                   compartments: tuple[str, ...] = ()) -> dict:
+    _validate_section_shapes(sections)
     projection = ctx.projection()
     _validate_inbound(projection, texts=(title, question))
     _validate_sections(projection, sections)
@@ -837,6 +864,7 @@ def create_report(ctx: CommandContext, *, title: str, question: str,
 def edit_report(ctx: CommandContext, report_id: str, *, expected_version: int,
                 sections: list[Mapping[str, Any]], title: str | None = None,
                 question: str | None = None, change_note: str = "") -> dict:
+    _validate_section_shapes(sections)
     projection = ctx.projection()
     current = projection.get("workbench_report", report_id)
     if current is None:

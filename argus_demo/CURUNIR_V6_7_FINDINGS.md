@@ -682,3 +682,69 @@ payload, never re-parsed), M10 (legacy `str.splitlines()` readers in
 `partition_custody`/`v3..v5_3`/`scenario`, proven unreachable from the V6.7
 product by an import-graph probe), and the F-B1 torn-tail double-observation
 (over-reporting, the safe direction).
+
+## Round 17 — reconvergence found the UNSWEPT HALVES of two round-16 fixes (2 MAJOR, repaired round 18)
+
+Round 17 confirmed every round-16 repair CORRECT at the seam it targeted, but
+returned `NOT_CONVERGED`: both round-16 MAJORs had a second reachable boundary
+the fix did not cover. All repaired round 18; a subsequent SELF-REVIEW (before
+dispatching round 19) found and closed two further unswept halves.
+
+- **MAJOR-1** — `import_from` installs the export's `events.jsonl` (and
+  `store_meta.json`) VERBATIM as bytes, so NEW-C's `canonical_line` seam never
+  runs on an imported log. A hostile export whose manifest hashes match — or a
+  backup written by pre-NEW-C code, or a perfectly legal `1e400` that `json.loads`
+  returns as `inf` — reconstructs a poisoned, chain-VALID store the record
+  projection 500s on forever, re-propagated by every later export and with delta
+  sync permanently broken. Fixed: `import_from` now validates every event AND
+  `store_meta` BY VALUE (`reject_non_finite`, which also catches `1e400`→`inf`)
+  before install, refusing a poisoned backup rather than silently reconstructing
+  it. (The delta path was already correct — `append_imported_event`
+  re-serializes through `canonical_line`.) Locks:
+  `test_import_refuses_non_finite_event_log`,
+  `test_import_refuses_non_finite_store_meta`.
+- **MAJOR-2** — the non-finite twin was open at the analytic provider:
+  `_scrub_output` handled surrogates and containers but passed non-finite floats
+  through, and the `INFERENCE_RECORDED` append sits outside containment, so a
+  non-finite from the external `infer_fn` crashed the append and LOST the
+  invocation's non-repudiation record (the non-finite half of F-P1). Fixed:
+  `_scrub_output` maps a non-finite float to `null`. Lock:
+  `test_provider_non_finite_output_is_scrubbed_and_recorded`.
+
+MINOR repaired the same round:
+
+- **MINOR-1** — the `except ValueError → Conflict` narrowing was incomplete:
+  `annotations.py` and `reports.py:_next_version` still relabelled a
+  malformed-content `ValueError` as a 409. Now both catch `StoreError` only, so a
+  content error stays 400 (only a real version conflict is 409). Lock:
+  `test_report_edit_with_surrogate_is_400_not_409`.
+- **MINOR-2** — report `sections` is a free-form `list[dict[str, Any]]`, so a
+  wrong scalar type (a numeric title, a non-list `sentences`, a string
+  `basis_refs`) reached a `.strip()`/`.replace()`/`list()` and 500ed for an
+  authenticated ANALYST across many field positions. Fixed: a
+  `_validate_section_shapes` structural guard at the command boundary (400, not
+  500). Lock: `test_malformed_report_section_is_400_not_500`.
+- **MINOR-3** — delta import raised an untyped `JSONDecodeError`/`ValueError` and
+  could apply a bundle PARTIALLY before a non-finite event aborted it mid-loop.
+  Fixed: typed `StoreError` on a malformed line, and every event is
+  non-finite-validated BEFORE any is applied (atomic). Lock:
+  `test_delta_import_refuses_non_finite_atomically`.
+
+Self-review (round 18, before dispatching the independent round) found two more
+unswept halves of the same wrong-type/twin class and closed them:
+
+- the SIGNED `payload`'s command extraction 500ed for a valid key-holder on a
+  non-dict `command` or a non-list `acknowledge_dissent` (the apply lambda's
+  `.get()`/`tuple()`); now a 400. Lock:
+  `test_signed_command_wrong_shape_is_400_not_500`.
+- `_validate_section_shapes` initially missed `sentence_id`/`section_id` (the
+  12th/13th 500 positions); a fuzz of all field positions confirmed zero 500s
+  after adding them. Lock: `test_report_sentence_id_wrong_type_is_400_not_500`.
+
+Registered bounded (unchanged / reviewer-assessed): a legacy IN-PLACE store
+already carrying a non-finite (written by pre-fix code) still opens — only the
+IMPORT of a foreign/hostile backup is guarded, deliberately, to avoid bricking an
+operator's own store on open; a ~1200-deep nested request body still hits
+Python's recursion limit in the kernel `canonical_bytes` (pre-existing, framework
+depth, authenticated); `import_from` follows a symlink-to-directory target
+(operator-supplied).

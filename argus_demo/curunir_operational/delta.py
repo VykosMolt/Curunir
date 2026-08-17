@@ -17,7 +17,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from .canonical import canonical_line, sha256, utc_now
+from .canonical import canonical_line, reject_non_finite, sha256, utc_now
 from .store import CHAIN_GENESIS, MissionDataStore, StoreError
 
 DELTA_FORMAT = "curunir-operational-delta-v1"
@@ -115,7 +115,18 @@ def import_delta_bundle(store: MissionDataStore, bundle_dir: str | Path) -> dict
         raw = (bundle_dir / "delta_events.jsonl").read_bytes().decode("utf-8")
     except UnicodeDecodeError as exc:                          # hostile bundle (M9)
         raise StoreError("delta bundle events are not valid UTF-8") from exc
-    events = [json.loads(line) for line in raw.split("\n") if line.strip()]
+    try:
+        events = [json.loads(line) for line in raw.split("\n") if line.strip()]
+    except json.JSONDecodeError as exc:                        # hostile bundle (MINOR-3)
+        raise StoreError("delta bundle has a malformed event line") from exc
+    # validate EVERY event (non-finite by value, incl. 1e400->inf) BEFORE applying
+    # any, so a poison bundle is refused atomically rather than partially applied
+    # with an untyped ValueError from canonical_line mid-loop (review MINOR-3)
+    for event in events:
+        try:
+            reject_non_finite(event)
+        except ValueError as exc:
+            raise StoreError("delta bundle contains a non-finite float (NaN/Infinity); refusing") from exc
     applied = 0
     for event in events:
         if event["seq"] <= head["event_count"]:

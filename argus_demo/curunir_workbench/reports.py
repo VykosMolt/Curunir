@@ -28,6 +28,7 @@ from curunir_operational.access import Marking
 from curunir_operational.canonical import parse_time, sha256
 
 from curunir_operational.access import marking_from_record
+from curunir_operational.store import StoreError
 
 from .contracts import (HUMAN_ONLY_DISPOSITIONS, ReportDisposition, ReportRecord,
                         ReportSection, ReportSentence)
@@ -143,8 +144,11 @@ def _next_version(store: WorkbenchStore, current: Mapping[str, Any], *,
         change_note=change_note)
     try:
         store.append("WORKBENCH_REPORT_RECORDED", record, recorded_time=now, actor=actor)
-    except ValueError as error:
-        # the store's strict next-version enforcement caught a concurrent writer
+    except StoreError as error:
+        # the store's strict next-version enforcement caught a concurrent writer.
+        # ONLY a StoreError is a conflict: a malformed-content ValueError (a
+        # non-finite float / lone surrogate refused by canonical_line) must stay a
+        # 400, not be relabelled a version conflict (review MINOR-1)
         raise ReportConflict(str(error)) from error
     return record.to_record()
 

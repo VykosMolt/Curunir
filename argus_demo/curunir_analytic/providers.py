@@ -13,6 +13,7 @@ inferences are replayed from their retained records like all other state.
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Any, Callable, Mapping
 
@@ -27,19 +28,26 @@ InferFn = Callable[[str, Mapping[str, Any]], Mapping[str, Any]]
 
 
 def _scrub_output(value: Any) -> Any:
-    """Recursively replace lone surrogates (which cannot be UTF-8-encoded, so
-    would crash canonical serialization) with U+FFFD across an external inference
-    response — the analogue of the connector/normalize scrubs for the provider
-    boundary (review F-P1)."""
+    """Neutralize BOTH halves of the not-valid-interchange-JSON class across an
+    external inference response, the analogue of the connector/normalize scrubs
+    for the provider boundary: lone surrogates (which cannot be UTF-8-encoded)
+    become U+FFFD, and non-finite floats (NaN/Infinity, which canonical_line now
+    REFUSES) become null. A malformed provider response must not crash the
+    InferenceRecord's serialization and thereby lose the invocation's own
+    non-repudiation record (review F-P1 / MAJOR-2)."""
     if isinstance(value, str):
         return value.encode("utf-8", "replace").decode("utf-8")
+    if isinstance(value, bool):
+        return value                       # bool is an int subclass; leave it be
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
     if isinstance(value, dict):
         return {_scrub_output(k): _scrub_output(v) for k, v in value.items()}
     if isinstance(value, (list, tuple)):
         return type(value)(_scrub_output(item) for item in value)
     if isinstance(value, (set, frozenset)):
-        # canonical serialization DOES serialize sets, so a surrogate inside one
-        # would crash the append just like any other container (review F-P1 resid.)
+        # canonical serialization DOES serialize sets, so a surrogate/non-finite
+        # inside one would crash the append just like any other container
         return type(value)(_scrub_output(item) for item in value)
     return value
 

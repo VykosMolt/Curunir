@@ -7,6 +7,7 @@ actor's authority itself. A forged signature is refused.
 from __future__ import annotations
 
 import hashlib
+import json
 from datetime import timedelta
 from pathlib import Path
 
@@ -313,3 +314,96 @@ def test_signed_payload_with_non_finite_is_refused_not_recorded(tmp_path):
     store = WorkbenchStore(root / "store")
     signed = [e for e in store.records_of("signed_action")] if "signed_action" in store.EVENT_TYPES.values() else []
     assert all("NaN" not in _json.dumps(e) for e in signed)         # no non-finite in any signed record
+
+
+def test_malformed_report_section_is_400_not_500(tmp_path):
+    # review MINOR-2: report `sections` is free-form list[dict[str,Any]]; a wrong
+    # scalar type must be an honest 400 for an authenticated ANALYST, not a 500
+    # from a later .strip()/.replace()/list() on the wrong type.
+    root, actors_path, clock, report_id, version, pem_b = _build(tmp_path)
+    client = TestClient(create_app(root, actors_path, now_fn=clock.now),
+                        raise_server_exceptions=False)
+    bad = [
+        [{"kind": "key_judgments", "title": 5, "sentences": []}],                       # numeric title
+        [{"kind": "key_judgments", "title": "T", "sentences": 7}],                       # sentences not a list
+        [{"kind": "key_judgments", "title": "T",
+          "sentences": [{"text": "x", "status": "SUPPORTED", "basis_refs": "no"}]}],     # basis_refs not a list
+        [{"kind": "key_judgments", "title": "T",
+          "sentences": [{"text": 9, "status": "SUPPORTED"}]}],                           # numeric text
+    ]
+    for sections in bad:
+        r = client.post("/api/commands/reports",
+                        json={"title": "T", "question": "Q", "sections": sections, "compartments": []},
+                        headers={"Authorization": "Bearer tok-a"})
+        assert r.status_code == 400, f"{sections} -> {r.status_code}: {r.text}"
+
+
+def test_report_edit_with_surrogate_is_400_not_409(tmp_path):
+    # review MINOR-1: reports.py _next_version caught bare ValueError -> 409; a
+    # malformed-CONTENT error (a lone surrogate canonical_line refuses) must be a
+    # 400, not mislabelled a version conflict the client can never win by retrying.
+    root, actors_path, clock, report_id, version, pem_b = _build(tmp_path)
+    client = TestClient(create_app(root, actors_path, now_fn=clock.now),
+                        raise_server_exceptions=False)
+    good = [{"kind": "key_judgments", "title": "T",
+             "sentences": [{"text": "ok", "status": "SUPPORTED", "basis_refs": []}]}]
+    created = client.post("/api/commands/reports",
+                          json={"title": "R2", "question": "Q", "sections": good, "compartments": []},
+                          headers={"Authorization": "Bearer tok-a"})
+    assert created.status_code == 200, created.text
+    rid = created.json()["report_id"]
+    bad = [{"kind": "key_judgments", "title": "T",
+            "sentences": [{"text": "bad \ud800 tail", "status": "SUPPORTED", "basis_refs": []}]}]
+    body = json.dumps({"expected_version": 1, "change_note": "x", "sections": bad},
+                      ensure_ascii=True).encode()          # \ud800 -> ASCII escape; server restores it
+    r = client.post(f"/api/commands/reports/{rid}/edit", content=body,
+                    headers={"Authorization": "Bearer tok-a", "Content-Type": "application/json"})
+    assert r.status_code == 400, f"{r.status_code}: {r.text}"        # 400, not 409
+
+
+def test_signed_command_wrong_shape_is_400_not_500(tmp_path):
+    # self-review of round 18: a signed command that is not an object, or whose
+    # acknowledge_dissent is not a list, must be an honest 400 — not an
+    # authenticated 500 from the apply lambda's .get()/tuple() (wrong-type class
+    # of MINOR-2, on the signed path).
+    from curunir_identity.sessions import SessionManager
+    root, actors_path, clock, report_id, version, pem_b = _build(tmp_path)
+    client = TestClient(create_app(root, actors_path, now_fn=clock.now),
+                        raise_server_exceptions=False)
+    ch = client.post("/api/auth/challenge", json={"actor_id": "analyst-b"},
+                     headers={"Authorization": "Bearer tok-b"}).json()
+    auth = client.post("/api/auth/authenticate", json={
+        "actor_id": "analyst-b", "nonce": ch["nonce"],
+        "signature": sign(pem_b, SessionManager.challenge_payload("analyst-b", ch["nonce"]))})
+    sid = auth.json()["session_id"]
+    for cmd in ({"disposition": "APPROVED", "acknowledge_dissent": 5},
+                {"disposition": "APPROVED", "acknowledge_dissent": "x"}):
+        signed = sign_action(pem_b, actor_id="analyst-b", actor_kind="HUMAN",
+                             action_type="approve_report", target_kind="workbench_report",
+                             target_id=report_id,
+                             target_version_token=f"workbench_report:{report_id}@v{version}",
+                             mission_id=MISSION, nonce=f"n-{cmd['acknowledge_dissent']}",
+                             timestamp=clock.now(), command=cmd)
+        r = client.post(f"/api/commands/reports/{report_id}/approve-signed", json={
+            "session_id": sid, "payload": signed["payload"],
+            "signature": signed["signature"], "expected_version": version})
+        assert r.status_code == 400, f"acknowledge_dissent={cmd['acknowledge_dissent']!r} -> {r.status_code}"
+
+
+def test_report_sentence_id_wrong_type_is_400_not_500(tmp_path):
+    # self-review of round 18: sentence_id / section_id were the 12th/13th field
+    # positions the MINOR-2 shape guard initially missed — a non-string id must be
+    # a 400, not a 500.
+    root, actors_path, clock, report_id, version, pem_b = _build(tmp_path)
+    client = TestClient(create_app(root, actors_path, now_fn=clock.now),
+                        raise_server_exceptions=False)
+    for sections in (
+        [{"kind": "key_judgments", "title": "T", "section_id": ["x"],
+          "sentences": [{"text": "ok", "status": "SUPPORTED"}]}],
+        [{"kind": "key_judgments", "title": "T",
+          "sentences": [{"text": "ok", "status": "SUPPORTED", "sentence_id": {"k": "v"}}]}],
+    ):
+        r = client.post("/api/commands/reports",
+                        json={"title": "T", "question": "Q", "sections": sections, "compartments": []},
+                        headers={"Authorization": "Bearer tok-a"})
+        assert r.status_code == 400, f"{sections} -> {r.status_code}"

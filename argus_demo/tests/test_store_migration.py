@@ -207,3 +207,54 @@ def test_canonical_line_refuses_non_finite_float(tmp_path):
         with pytest.raises(ValueError):
             canonical_line([1, {"deep": [bad]}])        # nested containers too
     assert canonical_line({"x": 1.5, "y": -2.0, "z": 3})  # finite is fine
+
+
+def test_import_refuses_non_finite_event_log(tmp_path):
+    # review MAJOR-1: import installs export bytes VERBATIM (bypassing the
+    # canonical_line seam), so a hostile export whose manifest hashes match — or a
+    # legal "1e400" that json.loads returns as inf — must be refused BY VALUE, not
+    # silently reconstructed into a poisoned (chain-valid) store the projection
+    # 500s on forever. And no debris in the target root.
+    import hashlib
+    def _poison(sub, mutate_line):
+        make_workbench(tmp_path / sub)
+        store = WorkbenchStore(tmp_path / sub / "store")
+        exp = tmp_path / sub / "exp"; store.export_to(exp)
+        lines = (exp / "events.jsonl").read_bytes().split(b"\n")
+        lines[0] = mutate_line(lines[0])
+        newb = b"\n".join(lines); (exp / "events.jsonl").write_bytes(newb)
+        man = json.loads((exp / "export_manifest.json").read_text())
+        man["events_sha256"] = hashlib.sha256(newb).hexdigest()
+        (exp / "export_manifest.json").write_text(canonical_line(man) + "\n")
+        dest = tmp_path / sub / "dest"
+        with pytest.raises(StoreError):
+            WorkbenchStore.import_from(exp, dest)
+        assert not dest.exists()                       # no poisoned debris
+
+    def _nan(line):
+        ev = json.loads(line); ev["record"]["score"] = float("nan")
+        return json.dumps(ev, allow_nan=True).encode()
+    def _inf(line):
+        ev = json.loads(line); ev["record"]["score"] = float("inf")
+        return json.dumps(ev, allow_nan=True).encode()
+    def _e400(line):                                    # legal RFC-8259, parses to inf
+        ev = json.loads(line); ev["record"]["score"] = 0.0
+        return json.dumps(ev).replace('"score":0.0', '"score":1e400').encode()
+    _poison("nan", _nan)
+    _poison("inf", _inf)
+    _poison("e400", _e400)
+
+
+def test_import_refuses_non_finite_store_meta(tmp_path):
+    # review MAJOR-1: store_meta is byte-copied too, so it needs the same guard.
+    import hashlib
+    make_workbench(tmp_path)
+    store = WorkbenchStore(tmp_path / "store")
+    exp = tmp_path / "exp"; store.export_to(exp)
+    meta = json.loads((exp / "store_meta.json").read_text()); meta["junk"] = float("inf")
+    newb = json.dumps(meta, allow_nan=True).encode(); (exp / "store_meta.json").write_bytes(newb)
+    man = json.loads((exp / "export_manifest.json").read_text())
+    man["store_meta_sha256"] = hashlib.sha256(newb).hexdigest()
+    (exp / "export_manifest.json").write_text(canonical_line(man) + "\n")
+    with pytest.raises(StoreError):
+        WorkbenchStore.import_from(exp, tmp_path / "dest")

@@ -13,7 +13,7 @@ from curunir_operational.geometry import Geometry
 from curunir_operational.missions import MissionWorkflow, MissionWorkflowError
 from curunir_operational.projection import Projection
 from curunir_operational.schema_registry import SchemaError, SchemaRegistry
-from curunir_operational.store import MissionDataStore
+from curunir_operational.store import MissionDataStore, StoreError
 from curunir_operational.stress import run_stress
 
 from operational_support import BASE_MARKING, HIGH_CONTEXT, RESTRICTED_MARKING, SERVICE_CONTEXT, T0, make_store, t
@@ -211,3 +211,37 @@ def test_stress_bounded_deterministic(tmp_path):
     assert result["late_ingestions"] >= 1
     assert result["determinism"]["projection_equal"] is True
     assert result["determinism"]["chain_valid"] is True
+
+
+def test_delta_import_refuses_non_finite_atomically(tmp_path):
+    # review MINOR-3: a delta bundle whose event carries a non-finite float must be
+    # refused with a TYPED StoreError and NOTHING applied (atomic) — not partially
+    # applied with an untyped ValueError from canonical_line mid-loop.
+    import hashlib, shutil
+    from curunir_operational.canonical import canonical_line, sha256
+    store, base_seq = build_two_phase_store(tmp_path)
+    store.export_to(tmp_path / "exp")
+    lines = (tmp_path / "exp" / "events.jsonl").read_text().splitlines()
+    (tmp_path / "target").mkdir(); (tmp_path / "target" / "payloads").mkdir()
+    shutil.copyfile(tmp_path / "exp" / "store_meta.json", tmp_path / "target" / "store_meta.json")
+    (tmp_path / "target" / "events.jsonl").write_text("\n".join(lines[:base_seq]) + "\n")
+    for p in (tmp_path / "exp" / "payloads").iterdir():
+        shutil.copyfile(p, tmp_path / "target" / "payloads" / p.name)
+    target = MissionDataStore(tmp_path / "target")
+    head_before = target.head()["head_hash"]
+
+    build_delta_bundle(store, tmp_path / "delta", base_seq=base_seq)
+    ev_path = tmp_path / "delta" / "delta_events.jsonl"
+    dlines = ev_path.read_bytes().split(b"\n")
+    ev = json.loads(dlines[0]); ev["record"]["score"] = float("nan")   # poison the 1st delta event
+    dlines[0] = json.dumps(ev, allow_nan=True).encode()
+    newb = b"\n".join(dlines); ev_path.write_bytes(newb)
+    man = json.loads((tmp_path / "delta" / "delta_manifest.json").read_text())
+    man["events_sha256"] = hashlib.sha256(newb).hexdigest()             # re-hash both gates
+    man["manifest_sha256"] = sha256({k: v for k, v in man.items() if k != "manifest_sha256"})
+    (tmp_path / "delta" / "delta_manifest.json").write_text(canonical_line(man) + "\n")
+    assert verify_delta_bundle(tmp_path / "delta")["valid"]             # gates pass; only the value check catches it
+
+    with pytest.raises(StoreError):
+        import_delta_bundle(target, tmp_path / "delta")
+    assert target.head()["head_hash"] == head_before                   # ATOMIC: nothing applied

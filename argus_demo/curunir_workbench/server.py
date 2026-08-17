@@ -703,6 +703,16 @@ def create_app(mission_root: str | Path, actors_path: str | Path,
                                sessions=app.state.sessions, authz=registry,
                                now_fn=_identity_now, mission_id=_mission_id())
         signed_command = body.payload.get("command", {}) if isinstance(body.payload, dict) else {}
+        # the signed command is caller-shaped: a non-dict command or a non-list
+        # acknowledge_dissent would raise AttributeError/TypeError from the apply
+        # lambda's .get()/tuple() — which run() does not translate — into an
+        # authenticated 500. Reject the shape as an honest 400 (the wrong-type
+        # class of MINOR-2, on the signed path).
+        if not isinstance(signed_command, dict):
+            raise HTTPException(status_code=400, detail="signed command must be an object")
+        _dissent = signed_command.get("acknowledge_dissent", []) or []
+        if not isinstance(_dissent, list):
+            raise HTTPException(status_code=400, detail="acknowledge_dissent must be a list")
         try:
             result = ops.apply_signed(
                 session_id=body.session_id, payload=body.payload,
@@ -716,7 +726,7 @@ def create_app(mission_root: str | Path, actors_path: str | Path,
                 apply=lambda ctx: commands.approve_report(
                     ctx, report_id, expected_version=body.expected_version,
                     note=str(signed_command.get("note", "")),
-                    acknowledge_dissent=tuple(signed_command.get("acknowledge_dissent", []) or [])))
+                    acknowledge_dissent=tuple(_dissent)))
         except SignatureRejected as error:
             raise HTTPException(status_code=401,
                                 detail=f"{error.status}: {error}")

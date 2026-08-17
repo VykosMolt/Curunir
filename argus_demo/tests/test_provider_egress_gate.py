@@ -198,3 +198,26 @@ def test_provider_scrub_covers_sets_and_caller_task_inputs(tmp_path):
     assert out["status"] == "PROPOSED", out
     rec = json.dumps(ctx.store.records_of("inference")[-1], ensure_ascii=False)
     assert "\ud800" not in rec and "\udfff" not in rec       # audit written, fully scrubbed
+
+
+def test_provider_non_finite_output_is_scrubbed_and_recorded(tmp_path):
+    # review MAJOR-2: a non-finite float from the external provider (the non-finite
+    # HALF of F-P1) must be neutralized to null, not crash the InferenceRecord
+    # append and lose the invocation's own non-repudiation record.
+    import json
+    pipeline, ctx = make_analytic(tmp_path)
+    _plant_restricted(pipeline, "SEC0000000000000009")
+    pipeline.process_new_evidence()
+    claim = _claim(ctx.store, "SEC0000000000000009")
+    provider = AnalyticalAssist(
+        package=analytical_assist_package("local-nonfinite", "m", "1"),
+        infer_fn=lambda t, i: {"title": "ok", "confidence": float("nan"),
+                               "scores": [float("inf"), 1.0],
+                               "supporting_claim_ids": [claim["claim_id"]]},
+        allowed_input_marking=RESTRICTED_MARK)
+    out = provider.propose(ctx, task="t", target_kind="analytic_theme",
+                           inputs={"x": "y"}, input_refs=(claim["claim_id"],))  # must NOT raise
+    assert out["status"] == "PROPOSED", out
+    rec = ctx.store.records_of("inference")[-1]              # audit landed
+    assert rec["output"]["confidence"] is None               # non-finite -> null
+    assert json.dumps(rec, allow_nan=False)                  # whole record re-serializes clean

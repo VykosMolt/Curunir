@@ -11,6 +11,7 @@ from argus.source_intelligence.models import digest_id
 from curunir_operational.access import Marking
 
 from curunir_operational.access import marking_from_record
+from curunir_operational.store import StoreError
 
 from .contracts import AnnotationRecord
 from .errors import NotFound
@@ -75,7 +76,10 @@ def resolve_annotation(store: WorkbenchStore, annotation_id: str, *, actor: str,
         version=current["version"] + 1)
     try:
         store.append("WORKBENCH_ANNOTATION_RECORDED", record, recorded_time=now, actor=actor)
-    except ValueError as error:
+    except StoreError as error:
+        # only a store version conflict is a 409; a malformed-content ValueError
+        # (e.g. a non-finite float / lone surrogate refused by canonical_line)
+        # must stay a 400, not be relabelled a conflict (review MINOR-1)
         raise AnnotationConflict(str(error)) from error
     return record.to_record()
 

@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from . import PACKAGE_VERSION
-from .canonical import CONTRACT_VERSION, canonical_line, parse_time, require_aware, sha256
+from .canonical import CONTRACT_VERSION, canonical_line, parse_time, reject_non_finite, require_aware, sha256
 from .contracts import Record
 
 CHAIN_GENESIS = "0" * 64
@@ -563,13 +563,42 @@ class MissionDataStore:
         # migration safety: refuse a backup written under a contract version this
         # code cannot interpret, rather than importing and silently misreading it.
         # (The store_meta is authenticated above, so its version is trustworthy.)
-        imported_contract = json.loads(store_meta_bytes.decode("utf-8")).get("contract_version")
+        imported_meta = json.loads(store_meta_bytes.decode("utf-8"))
+        try:
+            reject_non_finite(imported_meta)      # store_meta is byte-copied too (MAJOR-1)
+        except ValueError as exc:
+            raise StoreError("export store_meta contains a non-finite float; refusing") from exc
+        imported_contract = imported_meta.get("contract_version")
         if imported_contract not in COMPATIBLE_CONTRACT_VERSIONS:
             raise StoreError(
                 f"backup was written under contract version {imported_contract!r}, "
                 f"which this code ({CONTRACT_VERSION}) cannot interpret; refusing to "
                 f"import rather than silently misreading the log. Restore with "
                 f"matching code (rollback), or run a migration.")
+        # every event must be valid interchange JSON BY VALUE, not just by token.
+        # import installs the export bytes VERBATIM (a raw copy — unlike the delta
+        # path, which re-serializes each event through canonical_line), so a
+        # hostile export whose manifest hashes match, or a backup written by older
+        # code that allowed a non-finite float, would otherwise smuggle a bare
+        # NaN/Infinity — or a perfectly legal "1e400" that json.loads returns as
+        # inf — straight past the canonical_line seam and PERMANENTLY poison the
+        # restored store (a chain-valid log the record projection 500s on forever,
+        # replicated by every later export, with delta sync broken). Refuse it
+        # here, matching "a tampered backup is refused, never silently
+        # reconstructed" (review MAJOR-1). Split on \n only (the C-1 doctrine).
+        for line in events_bytes.split(b"\n"):
+            if not line.strip():
+                continue
+            try:
+                parsed_event = json.loads(line)
+            except json.JSONDecodeError as exc:
+                raise StoreError("export events.jsonl has a malformed line; refusing to import") from exc
+            try:
+                reject_non_finite(parsed_event)
+            except ValueError as exc:
+                raise StoreError(
+                    "export event log contains a non-finite float (NaN/Infinity); "
+                    "refusing to reconstruct a poisoned store") from exc
         new_root = Path(new_root)
         if new_root.exists() and not new_root.is_dir():
             # a file/symlink-to-file target would make mkdir + the rollback unlink
