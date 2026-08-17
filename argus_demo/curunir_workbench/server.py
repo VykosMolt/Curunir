@@ -121,8 +121,11 @@ def create_app(mission_root: str | Path, actors_path: str | Path,
     @app.get("/api/session")
     def session(request: Request):
         ctx = context(request)
+        # mission_id is exposed so the browser can build the canonical binding
+        # of a signed load-bearing action (it must match the server's mission).
         return {"actor_id": ctx.actor_id, "actor_kind": ctx.actor_kind,
-                "roles": list(ctx.roles), "organisation": ctx.organisation}
+                "roles": list(ctx.roles), "organisation": ctx.organisation,
+                "mission_id": store.meta.get("store_id", "curunir-workbench")}
 
     # ---- mission projections ------------------------------------------------
 
@@ -546,6 +549,49 @@ def create_app(mission_root: str | Path, actors_path: str | Path,
     def _mission_id() -> str:
         return store.meta.get("store_id", "curunir-workbench")
 
+    class EnrollBody(BaseModel):
+        public_key_hex: str
+
+    @app.post("/api/auth/enroll")
+    def cmd_enroll(request: Request, body: EnrollBody):
+        """Bootstrap: register a device's public key for the actor the BEARER
+        token authenticates. The bound actor comes from the server-resolved
+        bearer context, never the request body, so a client cannot enroll a key
+        for another actor. This is the documented root-of-trust boundary: the
+        bearer authorizes the one-time key enrolment; thereafter load-bearing
+        acts require the private key (which never leaves the browser).
+
+        One active signing key per actor (per device): a genuinely new public
+        key rotates the previous one (its past signatures stay verifiable);
+        re-enrolling the same key is idempotent."""
+        from curunir_identity.crypto import key_id_for
+        ctx = context(request)
+        try:
+            pub = body.public_key_hex.strip().lower()
+            bytes.fromhex(pub)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="public_key_hex is not hex")
+        if len(pub) != 64:  # Ed25519 raw public key is 32 bytes
+            raise HTTPException(status_code=400, detail="public key must be 32 bytes (64 hex)")
+        s = fresh_store()
+        key_registry = KeyRegistry(s, marking=_default_marking(), now_fn=_identity_now)
+        existing = key_registry.active_key_for(ctx.actor_id)
+        if existing is not None and existing["key_id"] != key_id_for(pub):
+            record = key_registry.rotate(actor_id=ctx.actor_id, new_public_key_hex=pub)
+        else:
+            record = key_registry.enroll(actor_id=ctx.actor_id,
+                                         actor_kind=ctx.actor_kind, public_key_hex=pub)
+        return {"key_id": record["key_id"], "actor_id": ctx.actor_id,
+                "actor_kind": record["actor_kind"], "status": record["status"]}
+
+    @app.get("/api/auth/time")
+    def cmd_server_time():
+        """The server's clock, so a signing client binds a timestamp sourced
+        from server time (kept within the verifier's skew bound) rather than an
+        unsynchronized browser wall clock. The signed timestamp is still bounded
+        to ±MAX_CLOCK_SKEW at verification; see F-07 residual."""
+        return {"now": _identity_now()}
+
     class ChallengeBody(BaseModel):
         actor_id: str
 
@@ -586,6 +632,7 @@ def create_app(mission_root: str | Path, actors_path: str | Path,
         ops = SignedOperations(store=s, root=root, registry=KeyRegistry(s),
                                sessions=app.state.sessions, authz=registry,
                                now_fn=_identity_now, mission_id=_mission_id())
+        signed_command = body.payload.get("command", {}) if isinstance(body.payload, dict) else {}
         try:
             result = ops.apply_signed(
                 session_id=body.session_id, payload=body.payload,
@@ -593,9 +640,13 @@ def create_app(mission_root: str | Path, actors_path: str | Path,
                 target_kind="workbench_report", target_id=report_id,
                 current_version_token=f"workbench_report:{report_id}@v{current['version']}",
                 target_marking=_default_marking(),
+                # note AND the acknowledged-dissent set come from the SIGNED
+                # command, so the four-eyes acknowledgement is exactly what the
+                # approver signed — not a value the transport could substitute.
                 apply=lambda ctx: commands.approve_report(
                     ctx, report_id, expected_version=body.expected_version,
-                    note=str(body.payload.get("command", {}).get("note", ""))))
+                    note=str(signed_command.get("note", "")),
+                    acknowledge_dissent=tuple(signed_command.get("acknowledge_dissent", []) or [])))
         except SignatureRejected as error:
             raise HTTPException(status_code=401,
                                 detail=f"{error.status}: {error}")

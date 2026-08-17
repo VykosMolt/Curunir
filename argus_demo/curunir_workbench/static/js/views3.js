@@ -2,6 +2,8 @@
 import { get, post, token } from "./api.js";
 import { badge, clip, emptyBox, errorBox, fmtTime, h, kv, pivot, refLink, table } from "./ui.js";
 import { annotationsSection, nav, render } from "./views.js";
+import { session } from "./session.js";
+import { approveReportSigned, ed25519Available } from "./identity.js";
 
 const SECTION_KINDS = ["executive_summary", "mission_question", "key_judgments",
   "current_situation", "evidence", "themes", "key_events", "stakeholders",
@@ -216,13 +218,24 @@ export async function reportView(main, params, id) {
                // the server's dissent set covers sentence/section anchors
                // across every version — the UI drives the dialog from it
                const dissent = validation.open_dissent || [];
-               await post(`/api/commands/reports/${id}/approve`, {
-                 expected_version: r.version,
-                 acknowledge_dissent: dissent.length && confirm(
-                   `${dissent.length} open dissent annotation(s) exist ` +
-                   `(${dissent.map((a) => a.author).join(", ")}). ` +
-                   "Approve WITH dissent (kept visible on the disposition)?")
-                   ? dissent.map((a) => a.annotation_id) : [] });
+               const ackIds = dissent.length && confirm(
+                 `${dissent.length} open dissent annotation(s) exist ` +
+                 `(${dissent.map((a) => a.author).join(", ")}). ` +
+                 "Approve WITH dissent (kept visible on the disposition)?")
+                 ? dissent.map((a) => a.annotation_id) : [];
+               // Load-bearing release act. Where the browser can sign (WebCrypto
+               // Ed25519 in a secure context), the approval is a real signature
+               // by the analyst's non-extractable device key over the exact
+               // report+version — genuine non-repudiation, recorded for replay.
+               // The bearer path remains only as an explicit fallback where
+               // in-browser signing is unavailable.
+               if (await ed25519Available()) {
+                 await approveReportSigned(r, session.mission_id, session.actor_id,
+                                           session.actor_kind, "", ackIds);
+               } else {
+                 await post(`/api/commands/reports/${id}/approve`, {
+                   expected_version: r.version, acknowledge_dissent: ackIds });
+               }
              }) }, "Approve (validated, human act)"),
              h("button", { onclick: act(async () => {
                const note = prompt("return-for-revision note:") || "";

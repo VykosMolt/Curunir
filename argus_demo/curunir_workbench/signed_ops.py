@@ -82,5 +82,9 @@ class SignedOperations:
             mission_id=self.mission_id, marking=target_marking)
         ctx = self._command_context(verified.session)  # also reconciles actor_kind
         outcome = apply(ctx)  # authz + command; raises before any record on refusal
-        committed = commit_action(self.store, verified, record_actor=verified.session.actor_id)
+        # stamp the attribution's clerical recorded_time fresh, AFTER the
+        # command's own (later) appends, so it never lands out of order.
+        committed = commit_action(self.store, verified,
+                                  record_actor=verified.session.actor_id,
+                                  recorded_time=self.now_fn())
         return {"signed_action": committed, "result": outcome}

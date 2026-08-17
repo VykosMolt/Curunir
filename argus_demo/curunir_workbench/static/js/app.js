@@ -1,5 +1,6 @@
 // Shell: session, navigation, hash router.
 import { get, setToken, clearToken, token } from "./api.js";
+import { setSession } from "./session.js";
 import { h } from "./ui.js";
 import * as v1 from "./views.js";
 import * as v2 from "./views2.js";
@@ -118,6 +119,7 @@ async function boot() {
     if (!token()) return false;
     try {
       const session = await get("/api/session");
+      setSession(session);
       document.getElementById("actor-badge").textContent =
         `${session.actor_id} · ${session.roles.join("/")}`;
       login.classList.add("hidden");

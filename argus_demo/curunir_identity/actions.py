@@ -162,10 +162,23 @@ def verify_action(store, registry: KeyRegistry, sessions: SessionManager, *,
     return VerifiedAction(session=session, record=record)
 
 
-def commit_action(store, verified: VerifiedAction, *, record_actor: str) -> dict[str, Any]:
+def commit_action(store, verified: VerifiedAction, *, record_actor: str,
+                  recorded_time: str | None = None) -> dict[str, Any]:
     """Record the attribution AFTER the act it authorizes has committed. Called
     by the bridge only on the command's success, so a refused act never leaves a
-    GENUINE signed-action record behind."""
+    GENUINE signed-action record behind.
+
+    `recorded_time` is the system bookkeeping time of the attribution append and
+    MUST be stamped fresh here, at commit: the command the signature authorized
+    has just appended its own (later-timestamped) events, so reusing the
+    verify-time value would append out of order and be refused by the store's
+    non-decreasing-time rule. The actor's SIGNED `timestamp` (bound in the
+    signature) is never touched — only this append's clerical recorded_time."""
+    if recorded_time is not None:
+        # SignedActionRecord is frozen; re-stamp via replace (the signature and
+        # signed timestamp are unaffected — recorded_time is not signed).
+        import dataclasses
+        verified.record = dataclasses.replace(verified.record, recorded_time=recorded_time)
     store.append("SIGNED_ACTION_RECORDED", verified.record,
                  recorded_time=verified.record.recorded_time, actor=record_actor)
     return verified.record.to_record()

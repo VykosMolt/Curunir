@@ -148,13 +148,32 @@ read views).
   kinds; a human-only gate (report approval) refuses a service signature.
   Separation of duties is a property of the logical actor, so rotating a key or
   opening a second session never yields self-approval.
-- **HTTP surface** — `POST /api/auth/challenge`, `/api/auth/authenticate`, and a
-  signed `/api/commands/reports/{id}/approve-signed` demonstrate the flow over
-  the wire. **Browser tradeoff (§16):** actor-side signing is the actor's
-  responsibility; the reference client is `curunir_identity.sign_action` (a
-  local signing agent). A browser integration would hold the key as a
-  non-extractable WebCrypto Ed25519 key — the documented remaining frontier;
-  the server side is complete and enforces the model regardless.
+- **HTTP surface** — `POST /api/auth/enroll` (bearer-bootstrapped),
+  `/api/auth/challenge`, `/api/auth/authenticate`, `GET /api/auth/time`, and a
+  signed `/api/commands/reports/{id}/approve-signed` carry the flow over the
+  wire.
+- **Browser last mile (§2) — delivered.** The real Chromium workbench performs
+  its load-bearing act (report approval) through a **non-extractable WebCrypto
+  Ed25519 device key**, generated in-page and persisted in IndexedDB: JS can ask
+  it to sign but cannot read it, so — unlike the bearer token — the credential
+  cannot be exfiltrated for offline or elsewhere use. The browser builds the
+  canonical signing bytes itself (`static/js/canonical.js`, proven
+  byte-identical to the server serializer over an adversarial corpus by
+  `tests/test_workbench_canonical_js_parity.py`) and the server independently
+  re-derives and verifies them against the real operation — what-you-see-is-
+  what-you-sign, neither side trusting the other's serialization. The bearer
+  path remains only as an explicit fallback where in-browser Ed25519 is
+  unavailable, and for read projections. **Enrollment trust boundary:** the
+  one-time enrolment of a device public key is authorized by the bearer token
+  and bound server-side to the bearer-authenticated actor (the request body
+  carries no actor id, so a client cannot enrol a key for another actor);
+  thereafter each load-bearing act requires the private key. One active signing
+  key per actor per device — a new key rotates the previous one, whose past
+  signatures stay verifiable. Proven end to end (real browser + live server) in
+  `tests/test_workbench_signed_identity_browser.py`: a genuine signed approval
+  recorded for replay, four-eyes preserved, the private key non-exportable, and
+  the wire refusing real browser-signed transplant / stale-version / wrong-actor
+  / tampered-signature attacks and a revoked-key session.
 
 ## Secrets
 
@@ -191,16 +210,18 @@ restricted markings + access control survive the boundary. Locks:
   applied without its cryptographic non-repudiation record (the command's own
   actor attribution still survives; crash-only, never attacker-triggerable).
   Full closure needs the two appends to be one atomic transaction.
-- **Signed-timestamp skew** (F-07 residual): the signed timestamp is bounded to
-  within 300s of server time; within that window the actor still chooses the
-  recorded value. Full closure needs a server-issued timestamp the client signs.
-- **Browser-side signing** is the one remaining part of cryptographic identity:
-  the server-side substrate (keys, sessions, signed actions, replay, HTTP
-  routes) is delivered and enforces the model, but the no-build browser frontend
-  does not yet hold a WebCrypto Ed25519 key and sign in-page. Until it does, the
-  reference signing client (`curunir_identity.sign_action`, a local signing
-  agent) exercises the flow; the bearer path remains for read views. This is a
-  frontend-integration limitation, not a substrate gap.
+- **Signed-timestamp skew** (F-07 residual, narrowed): the browser now sources
+  its action timestamp from the server (`GET /api/auth/time`) rather than an
+  unsynchronized wall clock, and the verifier still bounds it to within 300s of
+  server time. Within that window a hostile client could still choose the
+  recorded value; full closure needs a server-issued timestamp token the client
+  echoes and signs. Not attacker-triggerable beyond the ±300s window.
+- **Browser-side signing is delivered** (see the identity section): the real
+  workbench signs its load-bearing act with a non-extractable WebCrypto Ed25519
+  device key. The residual frontier is narrower: multi-device signing keys per
+  actor (today one active key per actor rotates the previous), and hardware-
+  backed key attestation. The bearer path remains for reads and as an explicit
+  no-WebCrypto fallback.
 - SSRF redirect-request-fires and DNS-TOCTOU windows (above).
 - Access-relative projection of mixed-marking analytic objects (above): today a
   materially-restricted-derived object is raised (and may become invisible to a
