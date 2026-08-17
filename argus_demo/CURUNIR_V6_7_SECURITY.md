@@ -113,6 +113,49 @@ still enters solely as an untrusted `ANALYTICAL_OBJECT_CANDIDATE` bound to its
 inference record, awaiting human acceptance. Lock:
 `tests/test_provider_egress_gate.py`.
 
+## Cryptographic actor identity & signed actions
+
+Real Ed25519 public-key identity (`curunir_identity`, on the `cryptography`
+library — `cryptography==44.0.0`, pinned). An actor holds a private key; the
+mission log holds only enrolled public keys and their lifecycle. This replaces
+the bearer-token trust model for load-bearing acts (the bearer path remains for
+read views).
+
+- **Key registry** (`registry.py`) — enroll / rotate / revoke / retire are
+  versioned events in the mission log, so a signature stays verifiable against
+  the exact window the key was valid; revocation stops future use without
+  voiding past signatures, and a key marked *compromised* is distrusted
+  retroactively.
+- **Authentication** (`sessions.py`) — challenge-response: the actor signs a
+  server-issued, single-use, short-lived nonce; the server verifies against the
+  enrolled public key and issues a short-lived session, re-checked against live
+  key status on every use (so a mid-session revocation stops further use). The
+  client only proves key possession; it never asserts its own identity or roles.
+- **Authorization is separate** — an authenticated actor's roles/compartments
+  come from current registry state (`auth.context_for_actor`), not the key and
+  not the client. A valid key never implies a permission.
+- **Signed actions** (`actions.py`) — a load-bearing act is signed over a
+  canonical binding of actor + kind, action type, the target and its exact
+  version token, the mission, a single-use nonce, timestamp, and the material
+  command. Verification refuses an expired/foreign session, a wrong actor or
+  mission, a replayed nonce, a stale target version, a key not valid at signing
+  time, or a signature that does not verify — before the command runs.
+- **Replay** (`replay.py`) — every recorded signed action re-verifies against
+  the key valid when it signed, distinguishing genuine / tampered / revoked-at-
+  time / unknown-key. The hash chain proves the log was not altered; the
+  signature proves authenticity — neither substitutes for the other.
+- **Service ≠ human, four-eyes preserved** — service keys are distinct actor
+  kinds; a human-only gate (report approval) refuses a service signature.
+  Separation of duties is a property of the logical actor, so rotating a key or
+  opening a second session never yields self-approval.
+- **HTTP surface** — `POST /api/auth/challenge`, `/api/auth/authenticate`, and a
+  signed `/api/commands/reports/{id}/approve-signed` demonstrate the flow over
+  the wire. **Browser tradeoff (§16):** actor-side signing is the actor's
+  responsibility; the reference client is `curunir_identity.sign_action` (a
+  local signing agent). A browser integration would hold the key as a
+  non-extractable WebCrypto Ed25519 key — the documented remaining frontier;
+  the server side is complete and enforces the model regardless.
+
 ## Secrets
 
 No external-service credentials are read on the active path. The workbench
@@ -143,14 +186,21 @@ restricted markings + access control survive the boundary. Locks:
 
 ## Known bounded limitations (not V6.7 defects)
 
-- **Cryptographic actor identity / action signing (§13–18) is NOT delivered.**
-  The venv has no asymmetric-crypto library and adding a dependency is
-  sign-off-gated. Actor identity remains the V6.6 static bearer-token registry;
-  attribution is hash-chained but not signed by actor-held keys. This is a
-  deployment-hardening limitation pending a dependency decision, not a product
-  defect. Recommended next step: enroll Ed25519 actor keys (`cryptography`),
-  challenge-response short-lived sessions, and per-action signatures verified on
-  replay.
+- **Signed-action crash window** (F-06 residual): the command commits, then the
+  signed-action record is appended; a crash between the two leaves the act
+  applied without its cryptographic non-repudiation record (the command's own
+  actor attribution still survives; crash-only, never attacker-triggerable).
+  Full closure needs the two appends to be one atomic transaction.
+- **Signed-timestamp skew** (F-07 residual): the signed timestamp is bounded to
+  within 300s of server time; within that window the actor still chooses the
+  recorded value. Full closure needs a server-issued timestamp the client signs.
+- **Browser-side signing** is the one remaining part of cryptographic identity:
+  the server-side substrate (keys, sessions, signed actions, replay, HTTP
+  routes) is delivered and enforces the model, but the no-build browser frontend
+  does not yet hold a WebCrypto Ed25519 key and sign in-page. Until it does, the
+  reference signing client (`curunir_identity.sign_action`, a local signing
+  agent) exercises the flow; the bearer path remains for read views. This is a
+  frontend-integration limitation, not a substrate gap.
 - SSRF redirect-request-fires and DNS-TOCTOU windows (above).
 - Access-relative projection of mixed-marking analytic objects (above): today a
   materially-restricted-derived object is raised (and may become invisible to a

@@ -138,6 +138,53 @@ defect on any axis.
 
 ---
 
+## Cryptographic identity (dedicated Opus-5 crypto review, §90)
+
+The Ed25519 core, canonical serialization, replay re-verification, and session
+hygiene held on first review; three MAJOR defects in the *enforcement seam*
+between the signature and the act were found and repaired.
+
+## F-05 — signed target not bound to the acted-on target ⟶ MAJOR
+- **Invariant:** a signature binds exactly what is authorized; it cannot be
+  transplanted across targets.
+- **Path:** `verify_action` checked version/mission/actor/nonce but never
+  compared the signed `target_id`/`action_type` to the operation performed, and
+  the version token was a bare integer shared across reports — so a signature
+  for report A verified and applied against report B at the same version.
+- **Repair:** `verify_action` now takes and enforces `expected_action_type`/
+  `expected_target_kind`/`expected_target_id`; the workbench version token is
+  target-scoped (`workbench_report:{id}@v{n}`). Lock: WRONG_TARGET in
+  test_identity_crypto.
+
+## F-06 — signed action recorded before authorization ⟶ MAJOR
+- **Invariant:** the signed-action log records acts that took effect, not
+  refused ones.
+- **Path:** the bridge recorded the SignedActionRecord inside `verify_action`,
+  then ran the command; a four-eyes/validation refusal still left a GENUINE
+  record and burned the nonce — fabricable non-repudiation evidence.
+- **Repair:** split into verify (no record) → apply (authorization runs) →
+  `commit_action` (record only on success). Lock: four-eyes refusal leaves no
+  signed_action. **Bounded residual:** a crash between the command committing
+  and the record append would leave an act unattributed (safe direction — never
+  an unauthorized or fabricated act); documented as a crash-recovery limitation.
+
+## F-07 — attacker-chosen signed timestamp ⟶ MAJOR
+- **Invariant:** the signed "when" reflects reality and cannot be used to
+  manipulate replay verdicts.
+- **Path:** the timestamp came entirely from the client and was never bounded to
+  server time, so an actor could backdate an act before a deadline or postdate
+  it past a later key revocation (flipping a genuine act to non-genuine).
+- **Repair:** `verify_action` rejects (CLOCK_SKEW) a timestamp deviating from
+  server time by more than 300s, and the key-validity check uses that bounded
+  value. Lock: CLOCK_SKEW in test_identity_crypto.
+
+## F-08 — dual actor_kind source ⟶ MINOR
+- The human-only gate used the workbench-registry `actor_kind` while the signed
+  record used the key-registry kind; a misconfigured mismatch could pass the
+  gate with a mis-attributed record. **Repair:** the bridge refuses
+  (ACTOR_KIND_MISMATCH) when the two disagree. Lock in
+  test_identity_signed_operations.
+
 ## Convergence
 
 Four Opus-5 rounds (descriptive count). Round 4 verdict: **CONVERGED** — the
@@ -148,9 +195,15 @@ F1/F2 remain closed; no repair-induced over-restriction. Round-4 backstop gap #1
 `material_claim_ids`, with the forecast-resolution lock restructured to a
 realistic PUBLIC-forecast-then-restricted-claim scenario that survives it.
 
+The cryptographic identity substrate then had its own dedicated Opus-5 review
+(two rounds): the Ed25519 core held; three MAJOR enforcement-seam defects
+(F-05/06/07) and one MINOR (F-08) were found and repaired, and round 2 returned
+**CONVERGED — no open Critical/Major**, with two bounded, non-attacker-triggerable
+LIMITATIONS documented (F-06 crash window, F-07 ±300s timestamp).
+
 **Open Critical/Major product defects:** none on any axis reachable via shipped
-paths. Two documented, workbench-guarded, non-shipped-reachable LIMITATIONS
-remain (see CURUNIR_V6_7_SECURITY.md): cross-analytic-object reference
-inheritance, and access-relative projection of mixed-marking objects. The
-identity gap (no cryptographic actor signing) is a documented, dependency-gated
-deployment limitation, not a reachable product defect.
+paths, across the marking, egress, provider, backup and identity work. Documented
+bounded LIMITATIONS (see CURUNIR_V6_7_SECURITY.md): cross-analytic-object
+reference inheritance and access-relative projection (both workbench-guarded,
+non-shipped-reachable); the F-06/F-07 crypto residuals; and browser-side WebCrypto
+signing (the server-side identity substrate is complete and enforces the model).

@@ -527,6 +527,92 @@ def create_app(mission_root: str | Path, actors_path: str | Path,
         return run(request, commands.reject_report, command_context(request), report_id,
                    **body.model_dump())
 
+    # ---- cryptographic identity (challenge-response + signed actions) -------
+    # Additive to the bearer path: an actor proves key possession to get a
+    # short-lived session, and load-bearing acts are signed. The server never
+    # holds a private key and never lets the client assert its own authority.
+
+    from datetime import datetime, timezone
+
+    from curunir_identity import KeyRegistry, SessionManager, SignatureRejected
+    from curunir_identity.sessions import AuthError as IdentityAuthError
+
+    from .signed_ops import SignedOperations
+
+    _identity_now = now_fn if now_fn is not None else \
+        (lambda: datetime.now(timezone.utc).isoformat())
+    app.state.sessions = SessionManager(now_fn=_identity_now)
+
+    def _mission_id() -> str:
+        return store.meta.get("store_id", "curunir-workbench")
+
+    class ChallengeBody(BaseModel):
+        actor_id: str
+
+    @app.post("/api/auth/challenge")
+    def cmd_challenge(body: ChallengeBody):
+        return app.state.sessions.issue_challenge(body.actor_id)
+
+    class AuthenticateBody(BaseModel):
+        actor_id: str
+        nonce: str
+        signature: str
+
+    @app.post("/api/auth/authenticate")
+    def cmd_authenticate(body: AuthenticateBody):
+        key_registry = KeyRegistry(fresh_store())
+        try:
+            session = app.state.sessions.authenticate(
+                key_registry, actor_id=body.actor_id, nonce=body.nonce,
+                signature_hex=body.signature)
+        except IdentityAuthError as error:
+            raise HTTPException(status_code=401, detail=str(error))
+        return {"session_id": session.session_id, "actor_id": session.actor_id,
+                "actor_kind": session.actor_kind, "expires_time": session.expires_time}
+
+    class SignedApproveBody(BaseModel):
+        session_id: str
+        payload: dict
+        signature: str
+        expected_version: int
+
+    @app.post("/api/commands/reports/{report_id}/approve-signed")
+    def cmd_report_approve_signed(request: Request, report_id: str, body: SignedApproveBody):
+        from .reports import ReportValidationError
+        s = fresh_store()
+        current = s.current_reports().get(report_id)
+        if current is None:
+            raise HTTPException(status_code=404, detail="unknown report")
+        ops = SignedOperations(store=s, root=root, registry=KeyRegistry(s),
+                               sessions=app.state.sessions, authz=registry,
+                               now_fn=_identity_now, mission_id=_mission_id())
+        try:
+            result = ops.apply_signed(
+                session_id=body.session_id, payload=body.payload,
+                signature_hex=body.signature, action_type="approve_report",
+                target_kind="workbench_report", target_id=report_id,
+                current_version_token=f"workbench_report:{report_id}@v{current['version']}",
+                target_marking=_default_marking(),
+                apply=lambda ctx: commands.approve_report(
+                    ctx, report_id, expected_version=body.expected_version,
+                    note=str(body.payload.get("command", {}).get("note", ""))))
+        except SignatureRejected as error:
+            raise HTTPException(status_code=401,
+                                detail=f"{error.status}: {error}")
+        except ReportValidationError as error:
+            return JSONResponse(status_code=422,
+                                content={"detail": "validation rejected approval",
+                                         "findings": error.findings})
+        except (Conflict,) as error:
+            raise HTTPException(status_code=409, detail=str(error))
+        except PermissionError as error:
+            raise HTTPException(status_code=403, detail=str(error))
+        # scrub the response through the AUTHENTICATED actor's own view — the
+        # crypto path carries no bearer token; authority comes from the verified
+        # session's actor, resolved server-side
+        actor_context = registry.context_for_actor(body.payload.get("actor_id", ""))
+        return MissionProjection(fresh_store(), actor_context).redact(result["result"])
+
     # ---- UI -----------------------------------------------------------------
 
     if STATIC_DIR.exists():

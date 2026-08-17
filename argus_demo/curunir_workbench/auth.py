@@ -34,13 +34,44 @@ class ActorRegistry:
         if data.get("format") != "curunir-workbench-actors-v1":
             raise ValueError(f"not an actor registry: {self.path}")
         by_token: dict[str, dict] = {}
+        by_actor: dict[str, dict] = {}
         for entry in data["actors"]:
             token = entry["token"]
             if token in by_token:
                 raise ValueError("duplicate actor token")
             by_token[token] = entry
+            by_actor[entry["actor_id"]] = entry
         self._by_token = by_token
+        self._by_actor = by_actor
         self._mtime = self.path.stat().st_mtime
+
+    def _context_for_entry(self, entry: dict) -> AccessContext:
+        return AccessContext(
+            context_id=f"wb-{entry['actor_id']}",
+            actor_id=entry["actor_id"],
+            actor_kind=entry.get("actor_kind", "HUMAN"),
+            roles=tuple(entry.get("roles", ())),
+            compartments=tuple(entry.get("compartments", ())),
+            releasability=tuple(entry.get("releasability", ())),
+            organisation=entry.get("organisation", ""),
+        )
+
+    def context_for_actor(self, actor_id: str) -> AccessContext:
+        """The AUTHORIZATION state for an actor id — roles, compartments,
+        releasability — resolved from current registry configuration, never
+        from the client. Used after cryptographic AUTHENTICATION has proven who
+        the actor is: authentication (who) and authorization (what they may do)
+        are separate, so a valid key never implies a permission, and authority
+        can change without touching the actor's key."""
+        try:
+            if self.path.stat().st_mtime != self._mtime:
+                self._load()
+        except OSError:
+            raise AuthError("actor registry unavailable")
+        entry = self._by_actor.get(actor_id)
+        if entry is None or not entry.get("enabled", True):
+            raise AuthError("unknown or disabled actor")
+        return self._context_for_entry(entry)
 
     def context_for(self, token: str | None) -> AccessContext:
         if not token:
