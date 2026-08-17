@@ -18,6 +18,7 @@ from __future__ import annotations
 from typing import Any, Mapping
 
 from argus.source_intelligence.models import digest_id
+from curunir_operational.access import inherited_marking
 from curunir_operational.workflow import WorkflowEngine
 from curunir_semantic.hypotheses import refresh_hypotheses_for_claims
 from curunir_semantic.worldmodel import IntegrationContext
@@ -288,7 +289,10 @@ def _raise_forecast_plane_alerts(ctx: AnalyticContext,
             "severity_rationale": f"forecast-plane "
                                   f"{transition['transition_type']}",
             "dedup_key": digest_id("analert", transition["transition_id"]),
-        }, marking=ctx.marking, recorded_time=ctx.now_fn(), actor=ctx.actor)
+            # the alert quotes the transition detail — it inherits the
+            # transition's marking, never a lower propagation default
+        }, marking=inherited_marking(ctx.marking, [transition.get("marking")]),
+            recorded_time=ctx.now_fn(), actor=ctx.actor)
         if created:
             raised.append(alert_id)
     return raised
@@ -337,7 +341,11 @@ def _raise_analytic_alerts(ctx: AnalyticContext, change: Mapping[str, Any],
             "severity_rationale": f"analytical {transition['transition_type']} caused "
                                   f"by semantic {change['change_class']}",
             "dedup_key": digest_id("analert", transition["transition_id"]),
-        }, marking=ctx.marking, recorded_time=ctx.now_fn(), actor=ctx.actor)
+            # the body quotes both the semantic change detail and the analytic
+            # transition detail — inherit the join of both their markings
+        }, marking=inherited_marking(
+            ctx.marking, [change.get("marking"), transition.get("marking")]),
+            recorded_time=ctx.now_fn(), actor=ctx.actor)
         if created:
             raised.append(alert_id)
     return raised

@@ -95,6 +95,66 @@ def visible(records: list[dict[str, Any]], context: AccessContext, marking_key: 
     return [r for r in records if can_view(r.get(marking_key), context)]
 
 
+# a reserved compartment no legitimate context is ever granted; its presence
+# renders a marking unviewable by everyone (can_view requires the record's
+# compartments to be a SUBSET of the context's). Never configure a context or
+# source with this compartment.
+UNJOINABLE_SEAL_COMPARTMENT = "curunir:unjoinable-seal"
+
+
+def _seal(markings: list["Marking"]) -> "Marking":
+    """The safe marking for inputs that admit no single-marking join
+    (cross-authority, or disjoint/orthogonal releasability): a **deny-all** seal.
+
+    A single Marking cannot express an orthogonal-axis conjunction — "org X AND
+    releasable to REL_A" — because releasability and organisation are alternative
+    axes in `can_view`; that impossibility is exactly why `most_restrictive`
+    raises. Any *satisfiable* single-marking seal would therefore be viewable by
+    some context that cannot view one of the inputs (a write-down). The only
+    single Marking that never under-classifies is one viewable by no one: it
+    carries the reserved unviewable compartment. The derived record still exists
+    in the log (auditable, replayable) but is withheld from every projection
+    until a human reclassifies it explicitly — matching the fail-closed
+    "classify the derived record explicitly" rule, without aborting the pass."""
+    records = [m.to_record() for m in markings]
+    compartments: set[str] = {UNJOINABLE_SEAL_COMPARTMENT}
+    caveats: list[str] = []
+    for record in records:
+        compartments |= set(record.get("compartments", ()))
+        caveats += list(record.get("caveats", ()))
+    caveats.append("SEALED_UNJOINABLE_MARKINGS")
+    return Marking(owning_authority=records[0]["owning_authority"],
+                   compartments=tuple(sorted(compartments)),
+                   releasability=(), min_role="SUPERVISOR",
+                   caveats=tuple(dict.fromkeys(caveats)))
+
+
+def inherited_marking(base: "Marking",
+                      references: "list[Marking | Mapping[str, Any] | None]") -> "Marking":
+    """The marking a derived record must carry: the high-water mark of its own
+    (or its context's) marking and every material reference whose state it
+    embeds. `references` are Markings, marking-records, or None (ignored). With
+    no resolvable reference this is `base` unchanged — a record that cites
+    nothing keeps its context marking exactly, so ordinary low-marked writes
+    are untouched.
+
+    This is TOTAL: when a derived record embeds more restricted state it raises
+    to the join, and when no safe single-marking join exists it SEALS
+    (over-restricts) rather than raising, so a background watch/propagation pass
+    never aborts on an un-joinable pair and never under-classifies. Interactive
+    command guards that must refuse loudly call `most_restrictive` directly,
+    which still raises."""
+    markings = [base]
+    for ref in references:
+        if ref is None:
+            continue
+        markings.append(ref if isinstance(ref, Marking) else marking_from_record(ref))
+    try:
+        return most_restrictive(markings)
+    except ValueError:
+        return _seal(markings)
+
+
 def most_restrictive(markings: list[Marking]) -> Marking:
     """The marking a record derived from several subjects must carry: it may
     be viewed only by a context that could view every input. Compartments

@@ -15,7 +15,8 @@ from pathlib import Path
 from typing import Any, Callable
 
 from argus.source_intelligence.models import digest_id
-from curunir_operational.access import Marking, marking_from_record, most_restrictive
+from curunir_operational.access import (Marking, inherited_marking,
+                                         marking_from_record, most_restrictive)
 from curunir_operational.workflow import WorkflowEngine
 
 from .changes import explain_change, interpret_change
@@ -248,6 +249,7 @@ class SemanticPipeline:
 
     def _raise_semantic_alerts(self, changes: list[dict[str, Any]]) -> list[str]:
         engine = WorkflowEngine(self.store)
+        claims = self.store.current_claims()
         raised = []
         for change in changes:
             if change["change_class"] in ("SEMANTICALLY_UNCHANGED",):
@@ -255,6 +257,15 @@ class SemanticPipeline:
             evidence = tuple(x for x in (change["prior_observation_id"],
                                          change["current_observation_id"],
                                          change["current_manifestation_id"]) if x)
+            # the alert body (explain_change) quotes the change detail and the
+            # affected propositions' statements; the alert inherits the change's
+            # marking and every affected claim's marking so a compartmented
+            # change never raises an alert a lower context can read
+            alert_marking = inherited_marking(
+                self.marking,
+                [change.get("marking")]
+                + [claims[cid].get("marking")
+                   for cid in change["affected_claim_ids"] if cid in claims])
             alert_id, created = engine.raise_alert({
                 "rule_id": "semantic-change", "rule_version": "0.1",
                 "trigger": explain_change(self.store, change)[:900],
@@ -264,7 +275,7 @@ class SemanticPipeline:
                 ("SOURCE_RETRACTION", "SOURCE_CORRECTION") else "HIGH",
                 "severity_rationale": f"semantic {change['change_class']} on watched source",
                 "dedup_key": digest_id("semalert", change["change_id"]),
-            }, marking=self.marking, recorded_time=self.now_fn(), actor=self.actor)
+            }, marking=alert_marking, recorded_time=self.now_fn(), actor=self.actor)
             if created:
                 raised.append(alert_id)
         return raised

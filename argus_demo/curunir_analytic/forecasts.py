@@ -20,7 +20,8 @@ import re
 from typing import Any, Iterable, Mapping
 
 from argus.source_intelligence.models import digest_id
-from curunir_operational.access import marking_from_record
+from curunir_operational.access import (Marking, inherited_marking,
+                                         marking_from_record)
 from curunir_operational.canonical import parse_time
 from curunir_semantic.contracts import ReviewItem
 from curunir_semantic.worldmodel import world_object_id
@@ -40,6 +41,41 @@ def forecast_id_for(question: str, horizon_time: str) -> str:
 def _authority_for(provenance_kind: str) -> str:
     return "ANALYST_ASSESSMENT" if provenance_kind == "ANALYST" \
         else "SUPPORTED_INFERENCE"
+
+
+def _ref_markings(store: AnalyticStore, refs: Iterable[str]) -> list[Marking]:
+    """Markings of the material records a resolution or basis-degradation
+    cites — the claim whose value a CLAIM_PREDICATE quotes, the event an
+    EVENT_OCCURRED resolves on, or the executions that established coverage — so
+    a derived forecast version or transition embedding their state can never be
+    viewed by a context that could not view the state it is about. An id that
+    resolves to no retained record contributes nothing: it names no state to
+    protect. Claims (the common, value-bearing case) resolve through the
+    current-claim index; the rarer event/execution refs fall back to a bounded
+    scan of only their own families."""
+    ids = [r for r in dict.fromkeys(refs) if r]
+    if not ids:
+        return []
+    claims = store.current_claims()
+    out: list[Marking] = []
+    unresolved: list[str] = []
+    for rid in ids:
+        claim = claims.get(rid)
+        if claim and isinstance(claim.get("marking"), dict):
+            out.append(marking_from_record(claim["marking"]))
+        else:
+            unresolved.append(rid)
+    pending = set(unresolved)
+    for family, id_field in (("activity", "activity_id"),
+                             ("fabric_execution", "execution_id")):
+        if not pending:
+            break
+        for record in store.records_of(family):
+            rid = record.get(id_field)
+            if rid in pending and isinstance(record.get("marking"), dict):
+                out.append(marking_from_record(record["marking"]))
+                pending.discard(rid)
+    return out
 
 
 def create_forecast(ctx: AnalyticContext, *, question: str, outcome_semantics: str,
@@ -94,11 +130,17 @@ def create_forecast(ctx: AnalyticContext, *, question: str, outcome_semantics: s
                 tuple(existing["basis"]["supporting_claim_ids"]) + tuple(new_supporting),
                 tuple(existing["basis"]["contradicting_claim_ids"])
                 + tuple(new_contradicting))
+            # the fold embeds the new claims' counts into the version and the
+            # transition; both inherit those claims' marking so folding
+            # restricted evidence into a lower-marked forecast cannot leak the
+            # existence of that evidence downward
+            fold_markings = _ref_markings(store, new_supporting + new_contradicting)
             folded = _reappend(ctx, existing, {"basis": basis},
                                change_reason=f"creation fold ({provenance_kind}): "
                                              f"+{len(new_supporting)}/+"
                                              f"{len(new_contradicting)} claims",
-                               history_note="CREATION_FOLD")
+                               history_note="CREATION_FOLD",
+                               reference_markings=fold_markings)
             record_transition(ctx, subject_kind="analytic_forecast",
                               subject_id=forecast_id,
                               transition_type="EVIDENCE_UPDATED",
@@ -109,7 +151,8 @@ def create_forecast(ctx: AnalyticContext, *, question: str, outcome_semantics: s
                                                   *sorted(new_supporting
                                                           + new_contradicting)),
                               evidence_refs=tuple((new_supporting
-                                                   + new_contradicting)[:5]))
+                                                   + new_contradicting)[:5]),
+                              reference_markings=fold_markings)
             return folded
         return existing
     if provenance_kind == "MODEL":
@@ -148,7 +191,8 @@ def create_forecast(ctx: AnalyticContext, *, question: str, outcome_semantics: s
 
 def _reappend(ctx: AnalyticContext, forecast: Mapping[str, Any],
               updates: dict[str, Any], change_reason: str,
-              history_note: str) -> dict[str, Any]:
+              history_note: str, *,
+              reference_markings: "list | tuple" = ()) -> dict[str, Any]:
     merged = {k: v for k, v in forecast.items() if k != "record_type"}
     merged.update(updates)
     merged["version"] = ctx.store.next_analytic_version(
@@ -156,9 +200,14 @@ def _reappend(ctx: AnalyticContext, forecast: Mapping[str, Any],
     merged["change_reason"] = change_reason
     merged["history"] = tuple(forecast["history"]) + (history_note,)
     merged["recorded_time"] = ctx.now_fn()
-    # a re-append NEVER re-classifies: the forecast keeps its own marking
-    merged["marking"] = marking_from_record(forecast["marking"]) \
+    # a re-append never re-classifies DOWN — the forecast's own marking is the
+    # floor — but a fold that embeds more restricted state (a resolution
+    # quoting a compartmented claim's value, a basis degraded by restricted
+    # evidence) raises the version to the high-water mark of that state, so the
+    # embedded value never lands in a record a lower context can read
+    own = marking_from_record(forecast["marking"]) \
         if isinstance(forecast.get("marking"), dict) else forecast["marking"]
+    merged["marking"] = inherited_marking(own, list(reference_markings))
     for key in ("assumption_ids", "indicator_ids", "resolution_evidence_refs",
                 "history"):
         merged[key] = tuple(merged[key])
@@ -286,6 +335,14 @@ def update_probability(ctx: AnalyticContext, forecast_id: str, *,
     if not (0.0 < probability < 1.0):
         raise ValueError("a forecast probability lies strictly inside (0,1)")
     old = forecast["probability"]
+    # the moved number and its stated reason may rest on restricted evidence
+    # (a SERVICE-fired indicator or a model candidate over compartmented
+    # claims); the new version and its transition inherit that evidence's
+    # marking so the movement never surfaces below the state that justified it.
+    # Via the workbench this is a no-op — the command already refused any
+    # citation above the forecast's own marking — so it only bites the
+    # background/direct callers the guard does not cover.
+    ref_markings = _ref_markings(ctx.store, evidence_refs)
     # a SERVICE-executed pre-authorization moves the NUMBER, never the review
     # standing: UPDATE_REQUIRED was raised for a human and only a human (or a
     # human-accepted candidate) clears it. And no update un-passes a passed
@@ -313,7 +370,8 @@ def update_probability(ctx: AnalyticContext, forecast_id: str, *,
                          "status": new_status},
                         change_reason=f"p {old:.2f} → {probability:.2f}: "
                                       f"{reason[:200]}",
-                        history_note=f"P:{old:.2f}->{probability:.2f}")
+                        history_note=f"P:{old:.2f}->{probability:.2f}",
+                        reference_markings=ref_markings)
     record_transition(ctx, subject_kind="analytic_forecast", subject_id=forecast_id,
                       transition_type="PROBABILITY_UPDATED",
                       detail=f"p {old:.2f} → {probability:.2f} by "
@@ -322,7 +380,8 @@ def update_probability(ctx: AnalyticContext, forecast_id: str, *,
                              f": {reason[:180]}",
                       caused_by=digest_id("pupdate", forecast_id, str(updated["version"])),
                       evidence_refs=evidence_refs[:5],
-                      from_status=forecast["status"], to_status=new_status)
+                      from_status=forecast["status"], to_status=new_status,
+                      reference_markings=ref_markings)
     if indicator_id:
         # consume the firing on this forecast the moment its effect lands —
         # never leave a window in which the same firing is redeemable again
@@ -366,11 +425,20 @@ def refresh_forecast(ctx: AnalyticContext, forecast_id: str, *,
         if horizon_passed:
             return try_machine_resolution(ctx, forecast_id)
         return forecast
+    # the refreshed version and the degradation transition summarize the basis
+    # (degraded/contradicting counts over the claim set); when any of those
+    # claims is restricted, the count itself is a restricted derivative, so the
+    # derived records inherit the basis claims' marking rather than leaking the
+    # existence of a compartmented change to a lower context
+    basis_markings = _ref_markings(
+        store, tuple(basis.supporting_claim_ids)
+        + tuple(basis.contradicting_claim_ids)) if "basis" in updates else []
     updated = _reappend(ctx, forecast, updates,
                         change_reason=f"refresh after {caused_by[:60]}: "
                                       f"{', '.join(changes) or 'horizon'}",
                         history_note=f"REFRESH:{forecast['status']}->"
-                                     f"{updates.get('status', forecast['status'])}")
+                                     f"{updates.get('status', forecast['status'])}",
+                        reference_markings=basis_markings)
     if degradation:
         finding = digest_id("fdeg", forecast_id,
                             *sorted(basis.contradicting_claim_ids),
@@ -384,7 +452,8 @@ def refresh_forecast(ctx: AnalyticContext, forecast_id: str, *,
                           caused_by=finding,
                           evidence_refs=tuple(basis.contradicting_claim_ids[:5]),
                           from_status=forecast["status"],
-                          to_status=updates.get("status", forecast["status"]))
+                          to_status=updates.get("status", forecast["status"]),
+                          reference_markings=basis_markings)
     if updates.get("status") == "HORIZON_PASSED":
         record_transition(ctx, subject_kind="analytic_forecast",
                           subject_id=forecast_id, transition_type="HORIZON_PASSED",
@@ -563,7 +632,11 @@ def try_machine_resolution(ctx: AnalyticContext, forecast_id: str) -> dict[str, 
                            f"judgment",
                     evidence_refs=(claim_id,),
                     status="OPEN", resolution_note="",
-                    recorded_time=ctx.now_fn(), marking=ctx.marking)
+                    recorded_time=ctx.now_fn(),
+                    # the item is ABOUT the (possibly restricted) claim whose
+                    # late value it quotes — it inherits the claim's marking
+                    marking=inherited_marking(ctx.marking,
+                                              _ref_markings(store, (claim_id,))))
                 store.append("REVIEW_ITEM_RECORDED", item,
                              recorded_time=item.recorded_time, actor=ctx.actor)
             return forecast
@@ -635,7 +708,9 @@ def _false_by_absence_or_wait(ctx: AnalyticContext, forecast: Mapping[str, Any],
                    f"declared coverage is achieved.",
             evidence_refs=(forecast["forecast_id"],),
             status="OPEN", resolution_note="",
-            recorded_time=ctx.now_fn(), marking=ctx.marking)
+            recorded_time=ctx.now_fn(),
+            # the gap is ABOUT the forecast — never lower than its marking
+            marking=inherited_marking(ctx.marking, [forecast["marking"]]))
         store.append("REVIEW_ITEM_RECORDED", item, recorded_time=item.recorded_time,
                      actor=ctx.actor)
     return store.current_forecasts()[forecast["forecast_id"]]
@@ -681,13 +756,19 @@ def _resolve(ctx: AnalyticContext, forecast: Mapping[str, Any], outcome: str,
              evidence_refs: tuple[str, ...], reason: str) -> dict[str, Any]:
     status = "RESOLVED_TRUE" if outcome == "TRUE" else "RESOLVED_FALSE"
     now = ctx.now_fn()
+    # the resolution reason quotes the resolving evidence (a CLAIM_PREDICATE
+    # embeds the claim's literal value); the resolved version and its
+    # transition inherit that evidence's marking so a restricted value cannot
+    # surface in a record a lower context can read
+    ref_markings = _ref_markings(ctx.store, evidence_refs)
     updated = _reappend(ctx, forecast,
                         {"status": status, "outcome": outcome,
                          "resolved_time": now,
                          "resolution_evidence_refs": evidence_refs,
                          "resolver_id": ctx.actor, "resolver_kind": "SERVICE"},
                         change_reason=reason[:280],
-                        history_note=f"{status}:machine")
+                        history_note=f"{status}:machine",
+                        reference_markings=ref_markings)
     record_transition(ctx, subject_kind="analytic_forecast",
                       subject_id=forecast["forecast_id"],
                       transition_type=status,
@@ -695,7 +776,8 @@ def _resolve(ctx: AnalyticContext, forecast: Mapping[str, Any], outcome: str,
                              f"{forecast['probability']:.2f})",
                       caused_by=digest_id("resolve", forecast["forecast_id"]),
                       evidence_refs=evidence_refs[:5],
-                      from_status=forecast["status"], to_status=status)
+                      from_status=forecast["status"], to_status=status,
+                      reference_markings=ref_markings)
     _close_coverage_gap(ctx, "forecast", forecast["forecast_id"],
                         f"forecast resolved {status}: {reason[:180]}")
     return updated
@@ -723,6 +805,10 @@ def resolve_forecast_human(ctx: AnalyticContext, forecast_id: str, *,
     status = {"TRUE": "RESOLVED_TRUE", "FALSE": "RESOLVED_FALSE",
               "VOID": "RESOLVED_VOID"}[outcome]
     now = ctx.now_fn()
+    # the human's resolution rests on the evidence it cites: the settled
+    # version and transition inherit that evidence's marking (a no-op through
+    # the workbench, which already guards the citation floor)
+    ref_markings = _ref_markings(store, evidence_refs)
     updated = _reappend(ctx, forecast,
                         {"status": status,
                          "outcome": outcome if outcome != "VOID" else "",
@@ -731,14 +817,16 @@ def resolve_forecast_human(ctx: AnalyticContext, forecast_id: str, *,
                          "resolver_id": actor_id, "resolver_kind": "HUMAN"},
                         change_reason=f"resolved {outcome} by {actor_id}: "
                                       f"{note[:200]}",
-                        history_note=f"{status}:{actor_id}")
+                        history_note=f"{status}:{actor_id}",
+                        reference_markings=ref_markings)
     record_transition(ctx, subject_kind="analytic_forecast", subject_id=forecast_id,
                       transition_type=status,
                       detail=f"{note[:220]} (final p was "
                              f"{forecast['probability']:.2f})",
                       caused_by=f"analyst:{actor_id}:resolve",
                       evidence_refs=evidence_refs[:5],
-                      from_status=forecast["status"], to_status=status)
+                      from_status=forecast["status"], to_status=status,
+                      reference_markings=ref_markings)
     _close_coverage_gap(ctx, "forecast", forecast_id,
                         f"forecast resolved {status} by {actor_id}")
     return updated

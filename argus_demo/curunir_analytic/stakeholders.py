@@ -19,11 +19,14 @@ from typing import Any, Iterable, Mapping
 
 from argus.source_intelligence.models import digest_id
 
+from curunir_operational.access import inherited_marking
+
 from .basis import compute_basis
 from .contracts import InfluenceAssertion, StakeholderAssessment, StakeholderPosition
 from .store import AnalyticStore
-from .substrate import (AnalyticContext, append_version, creation_authority,
-                        ensure_transition, open_identity_caveats,
+from .substrate import (AnalyticContext, append_version, claim_markings,
+                        creation_authority, ensure_transition,
+                        object_own_marking, open_identity_caveats,
                         record_transition, require_accepted_candidate)
 
 # relation types the world model states directly → role wording
@@ -178,7 +181,8 @@ def create_assessment(ctx: AnalyticContext, *, entity_object_id: str,
 
 def _reappend(ctx: AnalyticContext, assessment: Mapping[str, Any],
               updates: dict[str, Any], change_reason: str,
-              history_note: str) -> dict[str, Any]:
+              history_note: str, *,
+              reference_markings: "list | tuple" = ()) -> dict[str, Any]:
     from .contracts import BasisSummary
     merged = {k: v for k, v in assessment.items() if k != "record_type"}
     merged.update(updates)
@@ -187,7 +191,13 @@ def _reappend(ctx: AnalyticContext, assessment: Mapping[str, Any],
     merged["change_reason"] = change_reason
     merged["history"] = tuple(assessment["history"]) + (history_note,)
     merged["recorded_time"] = ctx.now_fn()
-    merged["marking"] = ctx.marking
+    # a re-append NEVER re-classifies DOWN: floor on the assessment's own
+    # marking so refreshing a compartmented assessment in a lower background
+    # context cannot declassify it, and raise to cover any restricted basis
+    # folded in
+    merged["marking"] = inherited_marking(
+        object_own_marking(assessment, ctx.marking),
+        list(reference_markings))
     for key in ("influence_ids", "identity_caveats", "history"):
         merged[key] = tuple(merged[key])
     positions = []
@@ -415,17 +425,25 @@ def refresh_assessment(ctx: AnalyticContext, assessment_id: str, *,
     caveats_changed = set(caveats) != set(assessment["identity_caveats"])
     if not changes and not caveats_changed:
         return assessment
+    # the refreshed version and its transitions summarize the basis claims
+    # (support/contradiction, degradation count): they inherit those claims'
+    # marking so a compartmented member's movement is never revealed through
+    # a lower-marked assessment record
+    basis_markings = claim_markings(
+        store, tuple(basis.supporting_claim_ids) + tuple(basis.contradicting_claim_ids))
     updated = _reappend(ctx, assessment,
                         {"basis": basis, "identity_caveats": caveats},
                         change_reason=f"refresh after {caused_by[:60]}",
-                        history_note="REFRESHED")
+                        history_note="REFRESHED",
+                        reference_markings=basis_markings)
     if "degradation" in changes:
         record_transition(ctx, subject_kind="stakeholder_assessment",
                           subject_id=assessment_id, transition_type="BASIS_DEGRADED",
                           detail=f"{basis.degraded_claim_count} of "
                                  f"{len(basis.supporting_claim_ids)} basis claims no "
                                  f"longer CURRENT",
-                          caused_by=caused_by)
+                          caused_by=caused_by,
+                          reference_markings=basis_markings)
     if caveats_changed:
         record_transition(ctx, subject_kind="stakeholder_assessment",
                           subject_id=assessment_id,
@@ -487,6 +505,10 @@ def assert_influence(ctx: AnalyticContext, *, source_object_id: str,
                           "target_object_id": target_object_id, "kind": kind})
     version = store.next_analytic_version("influence_assertion", influence_id)
     prior_history = tuple(existing["history"]) if existing is not None else ()
+    # a re-assertion NEVER re-classifies DOWN: floor on the assertion's own
+    # marking (a fresh assertion has none, so this is a no-op there)
+    assertion_marking = inherited_marking(
+        object_own_marking(existing or {}, ctx.marking), [ctx.marking])
     record = InfluenceAssertion(
         influence_id=influence_id, version=version,
         source_object_id=source_object_id, target_object_id=target_object_id,
@@ -498,7 +520,7 @@ def assert_influence(ctx: AnalyticContext, *, source_object_id: str,
         change_reason="reasserted" if version > 1 else "",
         history=prior_history + ((f"ASSERTED:{provenance_kind}",) if version == 1
                                  else (f"REASSERTED:v{version}",)),
-        recorded_time=ctx.now_fn(), marking=ctx.marking)
+        recorded_time=ctx.now_fn(), marking=assertion_marking)
     appended = append_version(ctx, record)
     if version == 1:
         ensure_transition(ctx, subject_kind="influence_assertion",
@@ -542,7 +564,11 @@ def supersede_influence(ctx: AnalyticContext, influence_id: str, *, reason: str,
         status="SUPERSEDED", valid_to=valid_to or ctx.now_fn(),
         change_reason=reason,
         history=tuple(existing["history"]) + (f"SUPERSEDED:{reason[:60]}",),
-        recorded_time=ctx.now_fn(), marking=ctx.marking)
+        recorded_time=ctx.now_fn(),
+        # a re-append NEVER re-classifies DOWN: floor on the assertion's own
+        # marking
+        marking=inherited_marking(
+            object_own_marking(existing, ctx.marking), [ctx.marking]))
     for key in ("claim_ids", "relationship_ids"):
         merged[key] = tuple(merged[key])
     record = InfluenceAssertion(**merged)

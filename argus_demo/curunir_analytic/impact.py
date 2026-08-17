@@ -20,11 +20,14 @@ from typing import Any, Iterable, Mapping
 
 from argus.source_intelligence.models import digest_id
 
+from curunir_operational.access import inherited_marking
+
 from .contracts import (AssumptionRecord, ImpactEdge, ImpactPath, MissionObjective,
                         ResponseOption, weakest_authority)
 from .store import AnalyticStore
 from .substrate import (AnalyticContext, DependencyIndex, append_version,
-                        ensure_transition, record_transition)
+                        claim_markings, ensure_transition, object_own_marking,
+                        record_transition)
 
 # typed relations along which deterministic exposure propagation may walk
 _PROPAGATION_RELATIONS = ("DEPENDS_ON", "SUPPLIES", "OWNS", "OPERATES",
@@ -65,7 +68,8 @@ def create_objective(ctx: AnalyticContext, *, mission_context: str, statement: s
 
 def _reappend_objective(ctx: AnalyticContext, objective: Mapping[str, Any],
                         updates: dict[str, Any], change_reason: str,
-                        history_note: str) -> dict[str, Any]:
+                        history_note: str, *,
+                        reference_markings: "list | tuple" = ()) -> dict[str, Any]:
     merged = {k: v for k, v in objective.items() if k != "record_type"}
     merged.update(updates)
     merged["version"] = ctx.store.next_analytic_version(
@@ -73,7 +77,13 @@ def _reappend_objective(ctx: AnalyticContext, objective: Mapping[str, Any],
     merged["change_reason"] = change_reason
     merged["history"] = tuple(objective["history"]) + (history_note,)
     merged["recorded_time"] = ctx.now_fn()
-    merged["marking"] = ctx.marking
+    # a re-append NEVER re-classifies DOWN: floor on the objective's own
+    # marking so exposing a compartmented objective in a lower background
+    # context cannot declassify it, and raise to cover any restricted basis
+    # (e.g. an invalidated assumption's claims) folded in
+    merged["marking"] = inherited_marking(
+        object_own_marking(objective, ctx.marking),
+        list(reference_markings))
     merged["depends_on"] = tuple(tuple(pair) for pair in merged["depends_on"])
     merged["assumption_ids"] = tuple(merged["assumption_ids"])
     record = MissionObjective(**merged)
@@ -81,7 +91,8 @@ def _reappend_objective(ctx: AnalyticContext, objective: Mapping[str, Any],
 
 
 def mark_objective_exposed(ctx: AnalyticContext, objective_id: str, *,
-                           detail: str, caused_by: str) -> dict[str, Any]:
+                           detail: str, caused_by: str,
+                           reference_markings: "list | tuple" = ()) -> dict[str, Any]:
     store = ctx.store
     objective = store.current_objectives().get(objective_id)
     if objective is None:
@@ -90,15 +101,18 @@ def mark_objective_exposed(ctx: AnalyticContext, objective_id: str, *,
         record_transition(ctx, subject_kind="mission_objective",
                           subject_id=objective_id, transition_type="EXPOSED",
                           detail=detail[:300], caused_by=caused_by,
-                          from_status="EXPOSED", to_status="EXPOSED")
+                          from_status="EXPOSED", to_status="EXPOSED",
+                          reference_markings=reference_markings)
         return objective
     updated = _reappend_objective(ctx, objective, {"status": "EXPOSED"},
                                   change_reason=detail[:200],
-                                  history_note="EXPOSED")
+                                  history_note="EXPOSED",
+                                  reference_markings=reference_markings)
     record_transition(ctx, subject_kind="mission_objective", subject_id=objective_id,
                       transition_type="EXPOSED", detail=detail[:300],
                       caused_by=caused_by,
-                      from_status=objective["status"], to_status="EXPOSED")
+                      from_status=objective["status"], to_status="EXPOSED",
+                      reference_markings=reference_markings)
     return updated
 
 
@@ -135,7 +149,11 @@ def record_assumption(ctx: AnalyticContext, *, statement: str,
                 change_reason="creation over an existing assumption folds the "
                               "new evidence/links",
                 history=tuple(existing["history"]) + ("CREATION_FOLD",),
-                recorded_time=ctx.now_fn(), marking=ctx.marking)
+                recorded_time=ctx.now_fn(),
+                # a re-append NEVER re-classifies DOWN: floor on the
+                # assumption's own marking
+                marking=inherited_marking(
+                    object_own_marking(existing, ctx.marking), [ctx.marking]))
             merged["contradicting_claim_ids"] = tuple(merged["contradicting_claim_ids"])
             appended = append_version(ctx, AssumptionRecord(**merged))
             record_transition(ctx, subject_kind="analytic_assumption",
@@ -172,12 +190,20 @@ def question_assumption(ctx: AnalyticContext, assumption_id: str, *,
     assumption = store.current_assumptions().get(assumption_id)
     if assumption is None:
         raise ValueError(f"unknown assumption: {assumption_id}")
+    # the assumption's UNCERTAIN transition summarizes its own supporting and
+    # contradicting claims' state: it inherits their marking so a
+    # compartmented claim's degradation is never revealed through a
+    # lower-marked assumption record
+    basis_markings = claim_markings(
+        store, tuple(assumption["supporting_claim_ids"])
+        + tuple(assumption["contradicting_claim_ids"]))
     if assumption["status"] == "UNCERTAIN":
         # complete a crashed run's missing transition; append nothing
         record_transition(ctx, subject_kind="analytic_assumption",
                           subject_id=assumption_id, transition_type="QUESTIONED",
                           detail=reason[:300], caused_by=caused_by,
-                          from_status="HELD", to_status="UNCERTAIN")
+                          from_status="HELD", to_status="UNCERTAIN",
+                          reference_markings=basis_markings)
         return assumption
     if assumption["status"] != "HELD":
         return assumption
@@ -186,14 +212,20 @@ def question_assumption(ctx: AnalyticContext, assumption_id: str, *,
         version=store.next_analytic_version("analytic_assumption", assumption_id),
         status="UNCERTAIN", caused_by=caused_by, change_reason=reason,
         history=tuple(assumption["history"]) + (f"QUESTIONED:{reason[:60]}",),
-        recorded_time=ctx.now_fn(), marking=ctx.marking)
+        recorded_time=ctx.now_fn(),
+        # a re-append NEVER re-classifies DOWN: floor on the assumption's own
+        # marking, raised to cover its basis claims
+        marking=inherited_marking(
+            object_own_marking(assumption, ctx.marking),
+            list(basis_markings)))
     for key in ("supporting_claim_ids", "contradicting_claim_ids", "objective_ids"):
         merged[key] = tuple(merged[key])
     record = AssumptionRecord(**merged)
     appended = append_version(ctx, record)
     record_transition(ctx, subject_kind="analytic_assumption", subject_id=assumption_id,
                       transition_type="QUESTIONED", detail=reason[:300],
-                      caused_by=caused_by, from_status="HELD", to_status="UNCERTAIN")
+                      caused_by=caused_by, from_status="HELD", to_status="UNCERTAIN",
+                      reference_markings=basis_markings)
     return appended
 
 
@@ -207,6 +239,14 @@ def invalidate_assumption(ctx: AnalyticContext, assumption_id: str, *,
     assumption = store.current_assumptions().get(assumption_id)
     if assumption is None:
         raise ValueError(f"unknown assumption: {assumption_id}")
+    # every downstream transition here summarizes this assumption's basis
+    # (support/contradiction, including the newly-cited contradicting
+    # claims): it inherits their marking so a compartmented claim's
+    # invalidation is never revealed through a lower-marked record
+    basis_markings = claim_markings(
+        store, tuple(assumption["supporting_claim_ids"])
+        + tuple(assumption["contradicting_claim_ids"])
+        + tuple(contradicting_claim_ids))
     # the version append is guarded; the dependent-marking pass below always
     # runs (every write in it is idempotent by cause), so an interruption
     # between the two is completed by re-running this call
@@ -221,7 +261,12 @@ def invalidate_assumption(ctx: AnalyticContext, assumption_id: str, *,
                 tuple(assumption["contradicting_claim_ids"]) + contradicting_claim_ids)),
             caused_by=caused_by, change_reason=reason,
             history=tuple(assumption["history"]) + (f"INVALIDATED:{reason[:60]}",),
-            recorded_time=ctx.now_fn(), marking=ctx.marking)
+            recorded_time=ctx.now_fn(),
+            # a re-append NEVER re-classifies DOWN: floor on the assumption's
+            # own marking, raised to cover its basis claims
+            marking=inherited_marking(
+                object_own_marking(assumption, ctx.marking),
+                list(basis_markings)))
         for key in ("supporting_claim_ids", "objective_ids"):
             merged[key] = tuple(merged[key])
         record = AssumptionRecord(**merged)
@@ -229,7 +274,8 @@ def invalidate_assumption(ctx: AnalyticContext, assumption_id: str, *,
     record_transition(ctx, subject_kind="analytic_assumption", subject_id=assumption_id,
                       transition_type="INVALIDATED", detail=reason[:300],
                       caused_by=caused_by, evidence_refs=contradicting_claim_ids[:5],
-                      from_status="HELD", to_status="INVALIDATED")
+                      from_status="HELD", to_status="INVALIDATED",
+                      reference_markings=basis_markings)
     index = DependencyIndex(store)
     for kind, ref in sorted(index.affected_by(assumption_ids=[assumption_id])):
         if kind == "impact_path":
@@ -237,23 +283,27 @@ def invalidate_assumption(ctx: AnalyticContext, assumption_id: str, *,
             if path and path["status"] not in ("STALE", "INVALIDATED"):
                 _restate_path(ctx, path, status="STALE",
                               change_reason=f"assumption invalidated: {reason[:120]}",
-                              history_note=f"ASSUMPTION_INVALIDATED:{assumption_id[:18]}")
+                              history_note=f"ASSUMPTION_INVALIDATED:{assumption_id[:18]}",
+                              reference_markings=basis_markings)
             record_transition(ctx, subject_kind="impact_path", subject_id=ref,
                               transition_type="ASSUMPTION_INVALIDATED",
                               detail=f"assumption {assumption['statement'][:120]!r} "
                                      f"invalidated: {reason[:150]}",
                               caused_by=caused_by,
                               evidence_refs=contradicting_claim_ids[:5],
-                              to_status="STALE")
+                              to_status="STALE",
+                              reference_markings=basis_markings)
             if path:
                 mark_objective_exposed(
                     ctx, path["objective_id"],
                     detail=f"impact path {ref[:18]} rests on invalidated assumption: "
                            f"{assumption['statement'][:140]}",
-                    caused_by=f"{caused_by}:{ref[:18]}")
+                    caused_by=f"{caused_by}:{ref[:18]}",
+                    reference_markings=basis_markings)
         elif kind == "mission_objective":
             mark_objective_exposed(
                 ctx, ref,
+                reference_markings=basis_markings,
                 detail=f"objective assumption invalidated: "
                        f"{assumption['statement'][:160]}",
                 caused_by=f"{caused_by}:{assumption_id[:18]}")
@@ -378,13 +428,21 @@ def build_path(ctx: AnalyticContext, *, objective_id: str, summary: str,
 
 
 def _restate_path(ctx: AnalyticContext, path: Mapping[str, Any], *, status: str,
-                  change_reason: str, history_note: str) -> dict[str, Any]:
+                  change_reason: str, history_note: str,
+                  reference_markings: "list | tuple" = ()) -> dict[str, Any]:
     merged = {k: v for k, v in path.items() if k != "record_type"}
     merged.update(
         version=ctx.store.next_analytic_version("impact_path", path["path_id"]),
         status=status, change_reason=change_reason,
         history=tuple(path["history"]) + (history_note,),
-        recorded_time=ctx.now_fn(), marking=ctx.marking)
+        recorded_time=ctx.now_fn(),
+        # a re-append NEVER re-classifies DOWN: floor on the path's own
+        # marking so restating a compartmented path in a lower background
+        # context cannot declassify it, and raise to cover any restricted
+        # basis (e.g. degraded/invalidated claims) it now reflects
+        marking=inherited_marking(
+            object_own_marking(path, ctx.marking),
+            list(reference_markings)))
     merged["assumption_ids"] = tuple(merged["assumption_ids"])
     edges = []
     for edge in merged["edges"]:
@@ -428,19 +486,27 @@ def refresh_path(ctx: AnalyticContext, path_id: str, *, caused_by: str) -> dict[
     finding = digest_id("stale-finding", path_id,
                         *sorted(f"{claim_id}:{state}"
                                 for _, claim_id, state in degraded))
+    # the STALE finding and its downstream transitions summarize the
+    # degraded claims: they inherit those claims' marking so a compartmented
+    # claim's degradation is never revealed through a lower-marked record
+    basis_markings = claim_markings(
+        store, tuple(claim_id for _, claim_id, _ in degraded))
     updated = path
     if path["status"] != "STALE":
         updated = _restate_path(ctx, path, status="STALE",
                                 change_reason=f"evidence degraded: {detail[:160]}",
-                                history_note="STALE:evidence")
+                                history_note="STALE:evidence",
+                                reference_markings=basis_markings)
     record_transition(ctx, subject_kind="impact_path", subject_id=path_id,
                       transition_type="STALE", detail=detail, caused_by=finding,
                       evidence_refs=tuple(claim_id for _, claim_id, _ in degraded)[:5],
-                      from_status=path["status"], to_status="STALE")
+                      from_status=path["status"], to_status="STALE",
+                      reference_markings=basis_markings)
     mark_objective_exposed(ctx, path["objective_id"],
                            detail=f"impact path {path_id[:18]} basis degraded: "
                                   f"{detail[:160]}",
-                           caused_by=f"{finding}:{path_id[:18]}")
+                           caused_by=f"{finding}:{path_id[:18]}",
+                           reference_markings=basis_markings)
     return updated
 
 
@@ -582,13 +648,18 @@ def review_response_option(ctx: AnalyticContext, option_id: str, *, accept: bool
     if option is None:
         raise ValueError(f"unknown response option: {option_id}")
     status = "ACCEPTED" if accept else "REJECTED"
+    # the decision transition summarizes the option's own claim basis: it
+    # inherits those claims' marking so a compartmented claim cited by the
+    # option is never revealed through a lower-marked decision record
+    basis_markings = claim_markings(store, option["claim_ids"])
     if option["status"] not in ("PROPOSED", "UNDER_REVIEW"):
         if option["status"] == status:
             # complete a crashed run's missing transition; append nothing
             record_transition(ctx, subject_kind="response_option",
                               subject_id=option_id, transition_type=status,
                               detail=note[:300], caused_by=f"analyst:{actor_id}",
-                              from_status="PROPOSED", to_status=status)
+                              from_status="PROPOSED", to_status=status,
+                              reference_markings=basis_markings)
             return option
         raise ValueError(f"response option {option_id[:24]} is already "
                          f"{option['status']}: a resolved option is not re-decided")
@@ -597,7 +668,12 @@ def review_response_option(ctx: AnalyticContext, option_id: str, *, accept: bool
         version=store.next_analytic_version("response_option", option_id),
         status=status, human_actor=actor_id if accept else option["human_actor"],
         change_reason=note, history=tuple(option["history"]) + (f"{status}:{actor_id}",),
-        recorded_time=ctx.now_fn(), marking=ctx.marking)
+        recorded_time=ctx.now_fn(),
+        # a re-append NEVER re-classifies DOWN: floor on the option's own
+        # marking, raised to cover its claim basis
+        marking=inherited_marking(
+            object_own_marking(option, ctx.marking),
+            list(basis_markings)))
     for key in ("prerequisites", "tradeoffs", "claim_ids"):
         merged[key] = tuple(merged[key])
     record = ResponseOption(**merged)
@@ -605,7 +681,8 @@ def review_response_option(ctx: AnalyticContext, option_id: str, *, accept: bool
     record_transition(ctx, subject_kind="response_option", subject_id=option_id,
                       transition_type=status,
                       detail=note[:300], caused_by=f"analyst:{actor_id}",
-                      from_status=option["status"], to_status=status)
+                      from_status=option["status"], to_status=status,
+                      reference_markings=basis_markings)
     return appended
 
 

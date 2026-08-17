@@ -24,13 +24,15 @@ import re
 from typing import Any, Iterable, Mapping
 
 from argus.source_intelligence.models import digest_id
+from curunir_operational.access import inherited_marking
 from curunir_semantic.worldmodel import dependence_group_for
 
 from .basis import _manifestation_index, _observation_index, _state_time, compute_basis
 from .contracts import NarrativeRecord, NarrativeVariant, PropagationEdge
 from .store import AnalyticStore
-from .substrate import (AnalyticContext, append_version, creation_authority,
-                        ensure_transition, record_transition,
+from .substrate import (AnalyticContext, append_version, claim_markings,
+                        creation_authority, ensure_transition,
+                        object_own_marking, record_transition,
                         require_accepted_candidate)
 
 _MIN_PROPOSITION_WORDS = 4  # a registry field value is not a narrative
@@ -192,7 +194,8 @@ def create_narrative(ctx: AnalyticContext, *, statement: str,
 
 def _reappend(ctx: AnalyticContext, narrative: Mapping[str, Any],
               updates: dict[str, Any], change_reason: str,
-              history_note: str) -> dict[str, Any]:
+              history_note: str, *,
+              reference_markings: "list | tuple" = ()) -> dict[str, Any]:
     from .contracts import BasisSummary
     merged = {k: v for k, v in narrative.items() if k != "record_type"}
     merged.update(updates)
@@ -201,7 +204,13 @@ def _reappend(ctx: AnalyticContext, narrative: Mapping[str, Any],
     merged["change_reason"] = change_reason
     merged["history"] = tuple(narrative["history"]) + (history_note,)
     merged["recorded_time"] = ctx.now_fn()
-    merged["marking"] = ctx.marking
+    # a re-append NEVER re-classifies DOWN: floor on the narrative's own
+    # marking so refreshing a compartmented narrative in a lower background
+    # context cannot declassify it, and raise to cover any restricted basis
+    # folded in
+    merged["marking"] = inherited_marking(
+        object_own_marking(narrative, ctx.marking),
+        list(reference_markings))
     for key in ("variant_ids", "counter_narrative_ids", "entity_ids", "history"):
         merged[key] = tuple(merged[key])
     if isinstance(merged["basis"], Mapping):
@@ -488,6 +497,10 @@ def assert_independent_adoption(ctx: AnalyticContext, narrative_id: str, *,
     from_family = dependence_group_for(manifestations[from_manifestation_id])
     to_family = dependence_group_for(manifestations[to_manifestation_id])
     version = store.next_analytic_version("propagation_edge", edge_id)
+    # a revision of an existing edge NEVER re-classifies DOWN: floor on the
+    # edge's own marking (a fresh edge has none, so this is a no-op there)
+    edge_marking = inherited_marking(
+        object_own_marking(existing_edge or {}, ctx.marking), [ctx.marking])
     record = PropagationEdge(
         edge_id=edge_id, narrative_id=narrative_id,
         from_manifestation_id=from_manifestation_id,
@@ -499,7 +512,7 @@ def assert_independent_adoption(ctx: AnalyticContext, narrative_id: str, *,
         basis_observation_ids=(),
         provenance_kind="ANALYST" if actor_kind == "HUMAN" else "MODEL",
         inference_id=inference_id, version=version,
-        recorded_time=ctx.now_fn(), marking=ctx.marking,
+        recorded_time=ctx.now_fn(), marking=edge_marking,
         # a human act consumes no candidate: never stamp (and thereby spend)
         # a caller-supplied proposal id on the ANALYST branch
         proposal_id=proposal_id if actor_kind != "HUMAN" else "")
@@ -560,9 +573,16 @@ def refresh_narrative(ctx: AnalyticContext, narrative_id: str, *,
         updates["status"] = status
     if not updates:
         return narrative
+    # the refreshed version and its transitions summarize the member claims
+    # (support/contradiction, origin): they inherit those claims' marking so
+    # a compartmented member's movement is never revealed through a
+    # lower-marked narrative record
+    basis_markings = claim_markings(
+        store, tuple(basis.supporting_claim_ids) + tuple(basis.contradicting_claim_ids))
     updated = _reappend(ctx, narrative, updates,
                         change_reason=f"refresh after {caused_by[:60]}",
-                        history_note=f"REFRESHED:{narrative['status']}->{status}")
+                        history_note=f"REFRESHED:{narrative['status']}->{status}",
+                        reference_markings=basis_markings)
     if origin_revised:
         record_transition(
             ctx, subject_kind="analytic_narrative", subject_id=narrative_id,
@@ -570,7 +590,8 @@ def refresh_narrative(ctx: AnalyticContext, narrative_id: str, *,
             detail=f"earliest observed manifestation revised to "
                    f"{earliest_manifestation[:24]} ({earliest_time[:19]}); origin "
                    f"remains earliest-OBSERVED, not proven origin",
-            caused_by=caused_by, evidence_refs=(earliest_manifestation,))
+            caused_by=caused_by, evidence_refs=(earliest_manifestation,),
+            reference_markings=basis_markings)
     if status != narrative["status"]:
         transition_type = {"CONTESTED": "CONTESTED", "DORMANT": "DORMANT",
                            "ACTIVE": "REEMERGED"}[status]
@@ -578,7 +599,8 @@ def refresh_narrative(ctx: AnalyticContext, narrative_id: str, *,
                           subject_id=narrative_id, transition_type=transition_type,
                           detail=f"status {narrative['status']} → {status}",
                           caused_by=caused_by,
-                          from_status=narrative["status"], to_status=status)
+                          from_status=narrative["status"], to_status=status,
+                          reference_markings=basis_markings)
     return updated
 
 

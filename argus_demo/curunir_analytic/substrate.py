@@ -14,11 +14,13 @@ three mechanisms instead of reimplementing them:
 """
 from __future__ import annotations
 
+import dataclasses
 from dataclasses import dataclass
 from typing import Any, Callable, Iterable, Mapping
 
 from argus.source_intelligence.models import digest_id
-from curunir_operational.access import Marking, marking_from_record
+from curunir_operational.access import (Marking, inherited_marking,
+                                         marking_from_record)
 from curunir_operational.contracts import AnalystAction, AnalyticalProposal
 
 from .contracts import AnalyticalTransition
@@ -35,24 +37,104 @@ class AnalyticContext:
     now_fn: Callable[[], str]
 
 
+def claim_markings(store: AnalyticStore, claim_ids) -> list[Marking]:
+    """Markings of the given claims — so a derived record (or a transition)
+    that embeds their state, value, or count inherits their classification and
+    can never be viewed by a context that could not view the claims."""
+    claims = store.current_claims()
+    out: list[Marking] = []
+    seen: set[str] = set()
+    for claim_id in claim_ids:
+        if not claim_id or claim_id in seen:
+            continue
+        seen.add(claim_id)
+        claim = claims.get(claim_id)
+        if claim is not None and isinstance(claim.get("marking"), dict):
+            out.append(marking_from_record(claim["marking"]))
+    return out
+
+
+def _as_mapping(value: Any) -> Mapping[str, Any]:
+    if isinstance(value, Mapping):
+        return value
+    if hasattr(value, "to_record"):
+        return value.to_record()
+    return {}
+
+
+def material_claim_ids(record) -> tuple[str, ...]:
+    """The claim ids an analytic object materially rests on — the state whose
+    marking its version must inherit. Covers every claim-bearing family (basis,
+    position, edge, assumption, episode, objective dependency); a family with no
+    claim basis returns (). This is what lets `append_version` fail closed at a
+    single chokepoint against authoring or folding restricted evidence into a
+    lower-marked object, whatever engine or caller performed the write."""
+    record = _as_mapping(record)
+    ids: list[str] = []
+    basis = _as_mapping(record.get("basis"))
+    ids += list(basis.get("supporting_claim_ids", ()))
+    ids += list(basis.get("contradicting_claim_ids", ()))
+    for key in ("claim_ids", "supporting_claim_ids", "contradicting_claim_ids",
+                "outcome_claim_ids"):
+        value = record.get(key)
+        if value:
+            ids += list(value)
+    for position in record.get("positions", ()) or ():
+        ids += list(_as_mapping(position).get("claim_ids", ()))
+    for edge in record.get("edges", ()) or ():
+        # edge basis ids may be claims, relationships or activities; claim_markings
+        # resolves only the claims, so passing all of them is safe
+        ids += list(_as_mapping(edge).get("basis_ids", ()))
+    # (kind, ref) reference lists — a forecast's proposition_refs and an
+    # objective's depends_on both point at claims by kind, exactly as
+    # DependencyIndex indexes them
+    for key in ("depends_on", "proposition_refs"):
+        for reference in record.get(key, ()) or ():
+            if isinstance(reference, (list, tuple)) and len(reference) == 2 \
+                    and reference[0] == "claim":
+                ids.append(reference[1])
+    return tuple(dict.fromkeys(i for i in ids if i))
+
+
+def object_own_marking(record: Mapping[str, Any], fallback: Marking) -> Marking:
+    """A versioned object's own marking — the floor a re-append must never sink
+    below. A re-append never re-classifies DOWN: it keeps the object's own
+    marking and only ever raises it to cover newly folded restricted state."""
+    own = record.get("marking")
+    if isinstance(own, Marking):
+        return own
+    if isinstance(own, dict):
+        return marking_from_record(own)
+    return fallback
+
+
 def record_transition(ctx: AnalyticContext, *, subject_kind: str, subject_id: str,
                       transition_type: str, detail: str, caused_by: str,
                       evidence_refs: tuple[str, ...] = (),
-                      from_status: str = "", to_status: str = "") -> dict[str, Any] | None:
+                      from_status: str = "", to_status: str = "",
+                      reference_markings: "list | tuple" = ()) -> dict[str, Any] | None:
     """Append one typed transition, idempotently: the same cause can only
     produce the same transition once, so re-running propagation after a crash
-    completes state instead of duplicating history."""
+    completes state instead of duplicating history.
+
+    A transition whose `detail` summarizes more restricted state (a resolution
+    that quotes a compartmented claim's value, a basis-degradation count over
+    restricted claims) inherits that state's marking through
+    `reference_markings`: it can never be viewed by a context that could not
+    view the state it is about. With no references this is `ctx.marking`
+    exactly, so ordinary transitions are unchanged."""
     transition_id = digest_id("antrans", subject_kind, subject_id,
                               transition_type, caused_by)
     if any(r["transition_id"] == transition_id
            for r in ctx.store.records_of("analytic_transition")):
         return None
     now = ctx.now_fn()
+    marking = inherited_marking(ctx.marking, list(reference_markings))
     record = AnalyticalTransition(
         transition_id=transition_id, subject_kind=subject_kind, subject_id=subject_id,
         transition_type=transition_type, detail=detail[:500], caused_by=caused_by,
         evidence_refs=evidence_refs, from_status=from_status, to_status=to_status,
-        recorded_time=now, marking=ctx.marking)
+        recorded_time=now, marking=marking)
     ctx.store.append("ANALYTIC_TRANSITION_RECORDED", record,
                      recorded_time=now, actor=ctx.actor)
     return record.to_record()
@@ -81,9 +163,30 @@ def ensure_transition(ctx: AnalyticContext, *, subject_kind: str, subject_id: st
 
 
 def append_version(ctx: AnalyticContext, record) -> dict[str, Any]:
-    """Append one analytical object version through its registered event type."""
-    event_type, _ = ANALYTIC_ID_FIELDS[record.RECORD_TYPE]
+    """Append one analytical object version through its registered event type.
+
+    Single-chokepoint fail-closed against declassification: a new version can
+    never be marked below the object's current version. If a re-append helper
+    passes a marking lower than the prior version's (a background refresh
+    carrying only the context marking), it is floored back up here, so a
+    compartmented object cannot be silently declassified by refreshing it in a
+    lower-marked pass — whichever engine performed the re-append."""
+    event_type, id_field = ANALYTIC_ID_FIELDS[record.RECORD_TYPE]
     now = record.recorded_time
+    # fail closed at one chokepoint, whatever engine or caller wrote this
+    # version: (1) never re-classify DOWN — floor on the object's prior marking;
+    # (2) never under-classify — raise to cover every material claim the object
+    # rests on, so authoring or folding restricted evidence into a lower-marked
+    # object cannot silently retain a weaker marking.
+    refs: list = list(claim_markings(ctx.store, material_claim_ids(record)))
+    current = ctx.store.current_analytics(record.RECORD_TYPE).get(
+        getattr(record, id_field))
+    if current is not None:
+        refs.append(object_own_marking(current, record.marking))
+    if refs:
+        floored = inherited_marking(record.marking, refs)
+        if floored.to_record() != record.marking.to_record():
+            record = dataclasses.replace(record, marking=floored)
     ctx.store.append(event_type, record, recorded_time=now, actor=ctx.actor)
     return record.to_record()
 

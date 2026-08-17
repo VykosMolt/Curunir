@@ -18,6 +18,7 @@ import re
 from typing import Any, Iterable, Mapping
 
 from argus.source_intelligence.models import digest_id
+from curunir_operational.access import inherited_marking
 
 from .contracts import ClaimStateRecord, ReviewItem, SemanticChangeRecord
 from .store import SemanticStore
@@ -124,6 +125,16 @@ def interpret_change(ctx: IntegrationContext, prior_manifestation_id: str,
     current_observations = store.observations_for_manifestation(current_manifestation_id)
 
     current_manifestation = ctx.manifestation(current_manifestation_id)
+    prior_manifestation = ctx.manifestation(prior_manifestation_id) \
+        if prior_manifestation_id else {}
+    # a change record copies the changed observation's literal value into
+    # prior_value/current_value/detail; on the watch path it is written in the
+    # pipeline's default (often PUBLIC) context, so it inherits the markings of
+    # the manifestations it diffs — a change over a compartmented manifestation
+    # can never surface its value in a record a lower context can read
+    change_marking = inherited_marking(
+        ctx.marking, [prior_manifestation.get("marking"),
+                      current_manifestation.get("marking")])
     historical_discovery = (not prior_manifestation_id
                             and current_manifestation.get("temporal_status") == "HISTORICAL")
 
@@ -179,7 +190,7 @@ def interpret_change(ctx: IntegrationContext, prior_manifestation_id: str,
             current_observation_id=(current_obs or {}).get("observation_id", ""),
             affected_object_ids=affected_objects,
             affected_claim_ids=affected_claims,
-            recorded_time=now, marking=ctx.marking,
+            recorded_time=now, marking=change_marking,
         )
         store.append("SEMANTIC_CHANGE_RECORDED", record, recorded_time=now, actor=ctx.actor)
         existing_change_ids.add(change_id)
@@ -268,10 +279,17 @@ def _propagate(ctx: IntegrationContext, change: Mapping[str, Any]) -> None:
     change_position = next((i for i, c in enumerate(all_changes)
                             if c["change_id"] == change["change_id"]),
                            len(all_changes))
+    change_marking = change.get("marking")
     for claim_id in change["affected_claim_ids"]:
         current = store.current_claims().get(claim_id)
         if current is None:
             continue
+        # the claim-state and review-item are ABOUT this claim and repeat the
+        # change detail (which may quote a restricted observation value): they
+        # inherit the join of the context, the change, and the claim's own
+        # marking, never a lower default
+        record_marking = inherited_marking(
+            ctx.marking, [change_marking, current.get("marking")])
         superseded_by_later_change = any(
             claim_id in later["affected_claim_ids"]
             and later["change_class"] in _STATE_FOR_CLASS
@@ -314,7 +332,7 @@ def _propagate(ctx: IntegrationContext, change: Mapping[str, Any]) -> None:
                     reason=change["detail"][:300],
                     caused_by=change["change_id"], superseded_by="",
                     actor_id=ctx.actor, actor_kind="SERVICE",
-                    recorded_time=now, marking=ctx.marking)
+                    recorded_time=now, marking=record_marking)
                 store.append("SEMANTIC_CLAIM_STATE_RECORDED", state,
                              recorded_time=now, actor=ctx.actor)
         item_id = digest_id("review", claim_id, change["change_id"])
@@ -325,7 +343,7 @@ def _propagate(ctx: IntegrationContext, change: Mapping[str, Any]) -> None:
                 evidence_refs=tuple(x for x in (change["prior_observation_id"],
                                                 change["current_observation_id"]) if x),
                 status="OPEN", resolution_note="",
-                recorded_time=now, marking=ctx.marking)
+                recorded_time=now, marking=record_marking)
             store.append("REVIEW_ITEM_RECORDED", item, recorded_time=now, actor=ctx.actor)
 
 

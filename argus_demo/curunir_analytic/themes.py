@@ -17,11 +17,14 @@ from typing import Any, Iterable, Mapping
 
 from argus.source_intelligence.models import digest_id
 
+from curunir_operational.access import inherited_marking
+
 from .basis import basis_changed_materially, compute_basis
 from .contracts import ThemeRecord
 from .store import AnalyticStore
-from .substrate import (AnalyticContext, append_version, creation_authority,
-                        ensure_transition, record_transition)
+from .substrate import (AnalyticContext, append_version, claim_markings,
+                        creation_authority, ensure_transition,
+                        object_own_marking, record_transition)
 
 # machine-derivable statuses; RESOLVED is an analyst act, MERGED/SPLIT are
 # restructuring outcomes
@@ -154,7 +157,8 @@ def create_theme(ctx: AnalyticContext, *, title: str, description: str = "",
 
 
 def _reappend(ctx: AnalyticContext, theme: Mapping[str, Any], updates: dict[str, Any],
-              change_reason: str, history_note: str) -> dict[str, Any]:
+              change_reason: str, history_note: str, *,
+              reference_markings: "list | tuple" = ()) -> dict[str, Any]:
     from curunir_analytic.contracts import BasisSummary
     merged = {k: v for k, v in theme.items() if k != "record_type"}
     merged.update(updates)
@@ -162,7 +166,12 @@ def _reappend(ctx: AnalyticContext, theme: Mapping[str, Any], updates: dict[str,
     merged["change_reason"] = change_reason
     merged["history"] = tuple(theme["history"]) + (history_note,)
     merged["recorded_time"] = ctx.now_fn()
-    merged["marking"] = ctx.marking
+    # a re-append NEVER re-classifies DOWN: floor on the theme's own marking so
+    # refreshing a compartmented theme in a lower background context cannot
+    # declassify it, and raise to cover any restricted basis folded in
+    merged["marking"] = inherited_marking(
+        object_own_marking(theme, ctx.marking),
+        list(reference_markings))
     for key in ("entity_ids", "event_ids", "relation_ids", "history"):
         merged[key] = tuple(merged[key])
     merged["lineage"] = tuple(tuple(pair) for pair in merged["lineage"])
@@ -230,10 +239,17 @@ def refresh_theme(ctx: AnalyticContext, theme_id: str, *, caused_by: str) -> dic
     status = _derive_status(basis, theme["status"])
     if not changes and status == theme["status"]:
         return theme
+    # the refreshed version and its transitions summarize the member claims
+    # (independent-family counts, degraded/contradiction counts): they inherit
+    # those claims' marking so a compartmented member's movement is never
+    # revealed through a lower-marked theme record
+    basis_markings = claim_markings(
+        store, tuple(basis.supporting_claim_ids) + tuple(basis.contradicting_claim_ids))
     updated = _reappend(ctx, theme, {"basis": basis, "status": status},
                         change_reason=f"refresh after {caused_by[:60]}: "
                                       f"{', '.join(changes) or 'status change'}",
-                        history_note=f"REFRESHED:{theme['status']}->{status}")
+                        history_note=f"REFRESHED:{theme['status']}->{status}",
+                        reference_markings=basis_markings)
     before_families = set(theme["basis"]["origin_families"])
     after_families = set(basis.origin_families)
     if before_families != after_families:
@@ -243,7 +259,8 @@ def refresh_theme(ctx: AnalyticContext, theme_id: str, *, caused_by: str) -> dic
             transition_type="SOURCE_DIVERSITY_CHANGED",
             detail=f"origin families {len(before_families)}→{len(after_families)}"
                    f" (+{len(gained)}/-{len(lost)}); reach alone never counts",
-            caused_by=caused_by, from_status=theme["status"], to_status=status)
+            caused_by=caused_by, from_status=theme["status"], to_status=status,
+            reference_markings=basis_markings)
     if status != theme["status"]:
         transition_type = {"CONTESTED": "CONTRADICTION_ADDED", "STALE": "STALE",
                            "ACTIVE": "STRENGTHENED", "EMERGING": "WEAKENED"}[status]
@@ -255,7 +272,8 @@ def refresh_theme(ctx: AnalyticContext, theme_id: str, *, caused_by: str) -> dic
                    f"{'y' if basis.origin_family_count == 1 else 'ies'}, "
                    f"{len(basis.contradicting_claim_ids)} contradiction(s), "
                    f"{basis.degraded_claim_count} degraded",
-            caused_by=caused_by, from_status=theme["status"], to_status=status)
+            caused_by=caused_by, from_status=theme["status"], to_status=status,
+            reference_markings=basis_markings)
     if "evidence" in changes and status == theme["status"]:
         record_transition(
             ctx, subject_kind="analytic_theme", subject_id=theme_id,
@@ -264,14 +282,16 @@ def refresh_theme(ctx: AnalyticContext, theme_id: str, *, caused_by: str) -> dic
                    f"({theme['basis']['observation_count']}→"
                    f"{basis.observation_count} observation(s), latest "
                    f"{basis.latest_time[:19]})",
-            caused_by=caused_by, from_status=theme["status"], to_status=status)
+            caused_by=caused_by, from_status=theme["status"], to_status=status,
+            reference_markings=basis_markings)
     if basis.degraded_claim_count > theme["basis"]["degraded_claim_count"]:
         record_transition(
             ctx, subject_kind="analytic_theme", subject_id=theme_id,
             transition_type="WEAKENED",
             detail=f"supporting basis degraded: {basis.degraded_claim_count} of "
                    f"{len(basis.supporting_claim_ids)} member claims no longer CURRENT",
-            caused_by=caused_by, from_status=theme["status"], to_status=status)
+            caused_by=caused_by, from_status=theme["status"], to_status=status,
+            reference_markings=basis_markings)
     return updated
 
 
