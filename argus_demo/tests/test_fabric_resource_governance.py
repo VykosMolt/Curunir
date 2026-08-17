@@ -13,9 +13,42 @@ import json
 import pytest
 
 from curunir_fabric.connectors import (ConnectorRequest, EdgarFullTextConnector,
-                                       GleifConnector, RssFeedConnector, WaybackConnector)
+                                       GleifConnector, RssFeedConnector, WaybackConnector,
+                                       WikidataConnector)
 
 pytestmark = pytest.mark.no_db
+
+
+# ---- F8-E1: a lone surrogate in a source string cannot crash serialization ---
+
+def test_source_strings_are_surrogate_scrubbed_at_the_connector_edge():
+    # review F8-E1 (CRITICAL): a source value with a lone surrogate (which cannot
+    # be UTF-8-encoded) must be scrubbed at the acquisition edge so it can never
+    # crash the store's canonical serialization anywhere downstream.
+    from curunir_fabric.connectors.base import NativeResult, scrub_surrogates
+    from curunir_operational.canonical import canonical_line
+    r = NativeResult(native_id="Q\ud800", title="t\ud834itle",
+                     identifiers=(("s", "v\udca0"),), attributes=(("a\ud800", "b"),))
+    for value in (r.native_id, r.title, r.identifiers[0][1], r.attributes[0][0]):
+        value.encode("utf-8")                       # no lone surrogate survives
+    canonical_line({"id": r.native_id, "t": r.title})  # serializes without error
+    assert scrub_surrogates(None) is None
+
+
+def test_multi_result_surrogate_response_is_serializable():
+    # the escape the prior round found: with >=2 results the surrogate id skips the
+    # single-result digest check — but the connector-edge scrub means the record
+    # still serializes (EMPTY/OK, never a propagating UnicodeEncodeError).
+    from curunir_operational.canonical import canonical_line
+    body = json.dumps({"search": [
+        {"id": "Q1", "label": "A", "match": {"language": "en", "text": "A"}},
+        {"id": "Q\ud800", "label": "B", "match": {"language": "en", "text": "B"}},
+    ]}).encode()
+    r = WikidataConnector().execute(ConnectorRequest(operation="SEARCH", value="x"),
+                                    transport=transport(body))
+    assert r.status == "OK" and len(r.results) == 2
+    for result in r.results:
+        canonical_line({"native_id": result.native_id, "title": result.title})
 
 
 def transport(body: bytes, *, status: int = 200, error: str | None = None,

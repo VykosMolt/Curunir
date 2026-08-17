@@ -62,6 +62,25 @@ class ConnectorRequest:
         return dict(self.extra)
 
 
+def scrub_surrogates(value: str | None) -> str | None:
+    """Replace lone surrogates (and any bytes that cannot round-trip through
+    UTF-8) with the Unicode replacement character. Source-supplied strings can
+    carry lone surrogates (json.loads accepts bare \\udXXX escapes; upstream
+    mojibake produces them); such a string cannot be UTF-8-encoded, so it would
+    crash the store's canonical serialization (json.dumps(...).encode()) the
+    moment ANY record containing it is appended — in the executor, in the watch
+    loop, or any other consumer. Scrubbing at the acquisition edge (here, the
+    single boundary every source string crosses) is the only place that closes
+    the class everywhere at once (review F8-E1)."""
+    if value is None:
+        return None
+    return value.encode("utf-8", "replace").decode("utf-8")
+
+
+def _scrub_pairs(pairs: tuple[tuple[str, str], ...]) -> tuple[tuple[str, str], ...]:
+    return tuple((scrub_surrogates(k), scrub_surrogates(v)) for k, v in pairs)
+
+
 @dataclass(frozen=True)
 class NativeResult:
     """One source-native record inside a response."""
@@ -72,6 +91,14 @@ class NativeResult:
     source_time: str | None = None
     identifiers: tuple[tuple[str, str], ...] = ()  # (scheme, value)
     attributes: tuple[tuple[str, str], ...] = ()
+
+    def __post_init__(self):
+        # scrub EVERY source-supplied string so a lone surrogate can never reach
+        # a record and crash its serialization downstream (review F8-E1)
+        for field in ("native_id", "title", "url", "snippet", "source_time"):
+            object.__setattr__(self, field, scrub_surrogates(getattr(self, field)))
+        object.__setattr__(self, "identifiers", _scrub_pairs(self.identifiers))
+        object.__setattr__(self, "attributes", _scrub_pairs(self.attributes))
 
 
 @dataclass(frozen=True)
@@ -100,6 +127,14 @@ class ConnectorResponse:
             raise ValueError("OK responses carry at least one result")
         if self.error_class is not None and self.error_class not in ERROR_CLASSES:
             raise ValueError(f"invalid error class: {self.error_class!r}")
+        # scrub the source-supplied strings that flow into records (error_detail,
+        # the URLs, media type, cursor, validators) so none can crash a record's
+        # serialization (review F8-E1). raw_body stays bytes (content-addressed).
+        for field in ("request_url", "final_url", "media_type", "error_detail",
+                      "next_cursor", "etag", "last_modified"):
+            object.__setattr__(self, field, scrub_surrogates(getattr(self, field)))
+        object.__setattr__(self, "redirects",
+                           tuple(scrub_surrogates(r) for r in self.redirects))
 
     def body_sha256(self) -> str:
         return hashlib.sha256(self.raw_body).hexdigest()

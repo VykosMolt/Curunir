@@ -410,3 +410,37 @@ Documented LIMITATION (pre-existing, not this campaign): the extractor's
 undeclared 200-line observation cap (`extract.py`) can read as a removal with no
 warning to trigger the truncation guard; the warning-based guard structurally
 cannot see extractor-level caps.
+
+## Round 7 — narrow F8 recheck found the CRITICAL still reachable (repaired)
+
+The round-6 provenance split guarded record CONSTRUCTION but not SERIALIZATION:
+`finish()` (which appends the records, running the store's canonical encode — the
+LAST validation a source value passes) sits outside the containment. So a
+source-supplied lone surrogate in a MULTI-result response (>=2 hits → the
+single-result digest check is skipped) reached the append and crashed it, still
+propagating + permanently stalling the watch loop, and re-detonating in
+`watch.py`'s own records. Round 8 fixes it at the true root — the acquisition
+edge every source string crosses:
+
+- **F8-E1 (CRITICAL)** — `scrub_surrogates` at the connector boundary
+  (`NativeResult.__post_init__`, `ConnectorResponse.__post_init__`) replaces lone
+  surrogates in EVERY source-supplied string with U+FFFD, so no such value can
+  reach any record — closing the class in the executor, the watch loop, and every
+  other consumer at once. `finish()`'s error_detail is scrubbed too (the
+  containment handler builds it from a raised exception that may carry a source
+  token). Locks: `test_source_strings_are_surrogate_scrubbed_at_the_connector_edge`,
+  `test_multi_result_surrogate_response_is_serializable`,
+  `test_multi_result_surrogate_does_not_abort_execution`.
+- **F8-E2 (MAJOR)** — `finish()` appended the ExecutionRecord before its
+  manifestations, so a StoreError between left a dangling manifestation_id.
+  Reordered: manifestations first, then the referencing execution record (an
+  unreferenced manifestation is benign; a dangling reference is not). Lock:
+  `test_finish_appends_manifestations_before_the_execution_record`.
+- **F8-E3 (MINOR)** — the custody catch was OSError-only; the content store's
+  local-integrity ValueErrors (digest mismatch, chain invalid) fell through and
+  defamed the source. Now caught as `_LocalStorageFault`. Lock:
+  `test_custody_valueerror_propagates_as_local_fault`.
+
+The round-6 CONSTRUCTION-side containment was confirmed correct (the date-only
+timestamp + lone-surrogate single-result escapes are genuinely contained); this
+round closed the SERIALIZATION side and the shared root (surrogate scrub).

@@ -262,6 +262,60 @@ def test_source_supplied_bad_value_is_contained_not_aborting_the_plan(ctx):
     assert "EXECUTED_WITH_RESULTS" in by_source["wikidata"]
 
 
+def test_custody_valueerror_propagates_as_local_fault(ctx):
+    # review F8-E3: custody integrity ValueErrors (digest mismatch, chain invalid)
+    # are LOCAL — they must propagate as _LocalStorageFault, not be recorded as
+    # SOURCE_FAILED.
+    from curunir_fabric.executor import _LocalStorageFault
+
+    def _boom(*args, **kwargs):
+        raise ValueError("post-copy digest mismatch")
+    ctx.custody.preserve = _boom
+    query = QuerySpec(query_id="q-cv", family="EXACT_NAME", value="Severstal", language="",
+                      script="", operation="SEARCH", source_id="wikidata",
+                      time_bounds=(None, None), origin="RULE", origin_detail="t",
+                      rationale="r", derived_from=())
+    with pytest.raises(_LocalStorageFault):
+        execute_single(ctx, query=query, source_id="wikidata")
+    assert not [r for r in ctx.store.records_of("fabric_source_status")
+                if r["source_id"] == "wikidata" and r["kind"] == "FAILURE"]
+
+
+def test_multi_result_surrogate_does_not_abort_execution(ctx):
+    # review F8-E1: a >=2-result response with a lone-surrogate native_id (which
+    # skips the single-result digest check) must NOT propagate a serialization
+    # error — the connector-edge scrub keeps every record serializable.
+    body = json.dumps({"search": [
+        {"id": "Q1", "label": "A", "match": {"language": "en", "text": "A"}},
+        {"id": "Q\ud800", "label": "B", "match": {"language": "en", "text": "B"}},
+    ]}).encode()
+    ctx.transports["wikidata-v1"] = _transport(body)
+    query = QuerySpec(query_id="q-surr", family="EXACT_NAME", value="x", language="",
+                      script="", operation="SEARCH", source_id="wikidata",
+                      time_bounds=(None, None), origin="RULE", origin_detail="t",
+                      rationale="r", derived_from=())
+    outcome = execute_single(ctx, query=query, source_id="wikidata")  # must NOT raise
+    assert outcome.execution.outcome == "EXECUTED_WITH_RESULTS"
+    # and it was durably recorded (serialized) — reopen proves the append survived
+    assert ctx.store.records_of("fabric_execution")
+
+
+def test_finish_appends_manifestations_before_the_execution_record(ctx):
+    # review F8-E2: manifestations are appended BEFORE the execution record that
+    # references them, so a failure between appends can never leave a dangling
+    # manifestation_id.
+    query = QuerySpec(query_id="q-ord", family="EXACT_NAME", value="Severstal", language="",
+                      script="", operation="SEARCH", source_id="wikidata",
+                      time_bounds=(None, None), origin="RULE", origin_detail="t",
+                      rationale="r", derived_from=())
+    out = execute_single(ctx, query=query, source_id="wikidata")
+    assert out.manifestations
+    events = ctx.store.events()
+    exec_seq = next(e["seq"] for e in events if e["record"].get("record_type") == "fabric_execution")
+    manif_seq = next(e["seq"] for e in events if e["record"].get("record_type") == "fabric_manifestation")
+    assert manif_seq < exec_seq  # manifestation committed first → no dangling reference
+
+
 def test_network_error_is_contained_and_does_not_abort_the_plan(ctx):
     # review F3-round-B: a source-side network fault (ConnectionReset/Timeout/SSL,
     # all OSError subclasses) MUST be contained as SOURCE_FAILED, not propagate and

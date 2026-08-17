@@ -29,7 +29,8 @@ class _LocalStorageFault(Exception):
     acquisition-edge containment (a full disk should stop the pass), rather than
     being recorded as SOURCE_FAILED."""
 from .connectors import BUILTIN_CONNECTORS
-from .connectors.base import ConnectorRequest, ConnectorResponse, NativeResult, SourceConnector, utc_now
+from .connectors.base import (ConnectorRequest, ConnectorResponse, NativeResult,
+                              SourceConnector, scrub_surrogates, utc_now)
 from .contracts import DiscoveryPlan, ExecutionRecord, ManifestationRecord, QuerySpec
 from .planner import eligible_sources
 from .registry import RegistryView, record_source_status
@@ -127,13 +128,16 @@ def _manifestation(ctx: ExecutionContext, *, source_id: str, connector: SourceCo
             retrieval, body, filename=filename, source_descriptor_id=source_id,
             document_type=content_class, now=response.retrieved_time,
         )
-    except OSError as error:
-        # custody preservation is a LOCAL disk write; a fault here (ENOSPC,
-        # permission) is OUR environment, not the source's. Tag it so the
-        # acquisition edge PROPAGATES it (a full disk should stop the pass, not
-        # be logged as SOURCE_FAILED) — distinct from the SOURCE-derived value
+    except (OSError, ValueError) as error:
+        # custody preservation is a LOCAL operation; a fault here is OUR
+        # environment, not the source's: OSError (ENOSPC, permission) and the
+        # content-store's own integrity ValueErrors (post-copy digest mismatch,
+        # custody-chain invalid — argus custody treats the body opaquely, so
+        # these are never source-content faults; review F8-E3). Tag it so the
+        # acquisition edge PROPAGATES it (a full/broken disk should stop the
+        # pass, not be logged as SOURCE_FAILED) — distinct from the SOURCE-value
         # validation in the ManifestationRecord build below, which stays
-        # contained (review F8-round-D: the fault boundary is data provenance).
+        # contained (the fault boundary is data provenance, F8-round-D).
         raise _LocalStorageFault(f"custody preservation failed: {error}") from error
     prior_id = None
     observation_key = f"{source_id}|{native_id or response.request_url}"
@@ -186,16 +190,24 @@ def execute_single(ctx: ExecutionContext, *, query: QuerySpec, source_id: str,
             request_url=response.request_url if response else "",
             http_status=response.http_status if response else None,
             policy_decision=policy_decision,
-            error_class=error_class, error_detail=error_detail,
+            # scrub the error detail too: on the containment path it is built from
+            # a raised exception whose message may carry a source token with a
+            # lone surrogate (review F8-E1), which would crash this very append.
+            error_class=error_class, error_detail=scrub_surrogates(error_detail),
             manifestation_ids=tuple(item.manifestation_id for item in manifestations),
             started_time=started, completed_time=completed,
             absence_semantics=ABSENCE_SEMANTICS, marking=ctx.marking,
             truncated=bool(response.truncated) if response else False,
         )
-        ctx.store.append("FABRIC_EXECUTION_RECORDED", execution, recorded_time=completed, actor=ctx.actor)
+        # append the manifestations FIRST, then the execution record that
+        # references them — so a failure between the appends can never leave an
+        # ExecutionRecord with a manifestation_id pointing at a record that does
+        # not exist (a dangling reference); an unreferenced manifestation is
+        # benign (review F8-E2).
         for manifestation in manifestations:
             ctx.store.append("FABRIC_MANIFESTATION_RECORDED", manifestation,
                              recorded_time=completed, actor=ctx.actor)
+        ctx.store.append("FABRIC_EXECUTION_RECORDED", execution, recorded_time=completed, actor=ctx.actor)
         if descriptor is not None and outcome in ("EXECUTED_WITH_RESULTS", "EXECUTED_EMPTY"):
             record_source_status(ctx.store, source_id=source_id, connector_id=connector_id,
                                  kind="SUCCESS", operation=query.operation,
