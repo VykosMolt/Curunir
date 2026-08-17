@@ -21,6 +21,13 @@ from .contracts import Record
 
 CHAIN_GENESIS = "0" * 64
 
+# Contract versions this code can correctly interpret. A store's contract_version
+# (in store_meta.json, authenticated on import) declares which contract its log
+# is written under; importing a store whose version is not here would risk
+# silently misreading records, so it is refused rather than migrated implicitly.
+# Add older versions here only alongside code that reads them correctly.
+COMPATIBLE_CONTRACT_VERSIONS = frozenset({CONTRACT_VERSION})
+
 EVENT_TYPES = {
     "SOURCE_REGISTERED": "source",
     "SCHEMA_REGISTERED": "schema_definition",
@@ -119,6 +126,81 @@ class MissionDataStore:
         (root / "store_meta.json").write_text(canonical_line(meta) + "\n", encoding="utf-8")
         (root / "events.jsonl").touch()
         return cls(root)
+
+    @classmethod
+    def recover_torn_tail(cls, root: str | Path) -> dict[str, Any]:
+        """Deterministically recover a store whose FINAL append was interrupted
+        by a crash, leaving a torn (incomplete) last line.
+
+        This is the ONLY corruption the append path can produce: a writer holds
+        the exclusive lock and does a single write+flush of one line, so a kill
+        mid-write can damage only the trailing bytes of the last line — every
+        prior event is complete and chain-valid. Recovery truncates exactly that
+        torn tail (atomically, preserving the crashed remainder as
+        ``events.jsonl.torn`` for forensics) and verifies the result opens
+        cleanly.
+
+        It REFUSES anything that is not a torn-tail crash — a complete but
+        chain-broken last line (tampering), or an unparseable line that is not
+        last (mid-file damage) — because silently altering those would hide
+        corruption. Safe and idempotent on a healthy store (recovered=False).
+
+        Returns {"recovered": bool, "truncated_bytes": int}.
+        """
+        root = Path(root)
+        if not (root / "store_meta.json").exists():
+            raise StoreError(f"not a mission data store: {root}")
+        events_path = root / "events.jsonl"
+        try:
+            cls(root)  # opens cleanly → nothing to recover
+            return {"recovered": False, "truncated_bytes": 0}
+        except StoreError as open_error:
+            first_error = open_error
+        raw = events_path.read_bytes() if events_path.exists() else b""
+        segments = raw.split(b"\n")
+        last = len(segments) - 1
+        while last >= 0 and segments[last] == b"":
+            last -= 1
+        if last < 0:
+            raise first_error  # empty/whitespace-only: not a torn tail
+        # every line before the last non-empty one must be complete JSON; if an
+        # earlier line is torn, this is mid-file damage, not a crashed tail.
+        for i in range(last):
+            if segments[i].strip() == b"":
+                continue
+            try:
+                json.loads(segments[i])
+            except json.JSONDecodeError as exc:
+                raise StoreError(
+                    f"event log has damage at line {i + 1} that is not a torn "
+                    f"tail (an earlier line is incomplete); refusing to "
+                    f"auto-recover — this is not a crash signature") from exc
+        # the last non-empty line must be the torn one; if it parses, the open
+        # failure is a chain break among complete lines = tampering.
+        try:
+            json.loads(segments[last])
+            raise StoreError(
+                "the final line is complete JSON, so the store's open failure is "
+                "not a torn-tail crash (possible tampering or a diverged chain); "
+                "refusing to auto-recover") from first_error
+        except json.JSONDecodeError:
+            pass  # confirmed torn tail
+        # byte-exact truncation: keep everything up to the start of the torn line
+        offset = sum(len(segments[i]) + 1 for i in range(last))
+        kept, torn_bytes = raw[:offset], len(raw) - sum(len(segments[i]) + 1 for i in range(last))
+        backup = events_path.with_name(events_path.name + ".torn")
+        tmp = events_path.with_name(events_path.name + ".recovering")
+        tmp.write_bytes(kept)
+        events_path.replace(backup)   # move the crashed original aside (forensics)
+        tmp.replace(events_path)      # install the truncated log
+        try:
+            cls(root)                 # verify the recovered store opens cleanly
+        except StoreError as exc:
+            backup.replace(events_path)  # roll back; original is preserved
+            raise StoreError(
+                "torn-tail truncation did not yield a clean store (damage is "
+                "deeper than the last line); original restored, not modified") from exc
+        return {"recovered": True, "truncated_bytes": torn_bytes}
 
     def _verify_link(self, event: Mapping[str, Any], *, at: str) -> None:
         """Fail closed on load and catch-up: a broken chain refuses service
@@ -401,6 +483,16 @@ class MissionDataStore:
         store_meta_bytes = (source_dir / "store_meta.json").read_bytes()
         if hashlib.sha256(store_meta_bytes).hexdigest() != manifest["store_meta_sha256"]:
             raise StoreError("export tampered: store_meta.json hash mismatch")
+        # migration safety: refuse a backup written under a contract version this
+        # code cannot interpret, rather than importing and silently misreading it.
+        # (The store_meta is authenticated above, so its version is trustworthy.)
+        imported_contract = json.loads(store_meta_bytes.decode("utf-8")).get("contract_version")
+        if imported_contract not in COMPATIBLE_CONTRACT_VERSIONS:
+            raise StoreError(
+                f"backup was written under contract version {imported_contract!r}, "
+                f"which this code ({CONTRACT_VERSION}) cannot interpret; refusing to "
+                f"import rather than silently misreading the log. Restore with "
+                f"matching code (rollback), or run a migration.")
         new_root = Path(new_root)
         if (new_root / "store_meta.json").exists():
             raise StoreError(f"refusing to import over an existing store: {new_root}")

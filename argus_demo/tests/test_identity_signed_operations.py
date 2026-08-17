@@ -176,6 +176,51 @@ def test_signed_report_approval_end_to_end(tmp_path):
     assert verify_all(store)["all_genuine"]
 
 
+def test_signed_approval_interrupted_before_commit_is_exactly_one(tmp_path, monkeypatch):
+    # V6.7 §4/§5: a crash between the approval command committing and the
+    # signed-action attribution being appended (the documented F-06 window) must
+    # leave EXACTLY ONE outcome: the approval took effect once, no GENUINE
+    # signed-action record was fabricated, and a restart+retry cannot double it.
+    root, store, clock, claim_id, actors_path = _mission(tmp_path)
+    ops, registry, sessions, authz = _ops(store, root, clock, actors_path)
+    report_id, version = _report(store, root, authz, clock, claim_id)
+    pem_b, pub_b = generate_keypair()
+    registry.enroll(actor_id="analyst-b", actor_kind="HUMAN", public_key_hex=pub_b)
+    session_b = _login(ops, registry, sessions, "analyst-b", pem_b)
+
+    # kill the process AFTER the command commits, BEFORE the signed-action append
+    import curunir_workbench.signed_ops as signed_ops_module
+
+    def _crash(*args, **kwargs):
+        raise RuntimeError("process killed before the signed-action append")
+    monkeypatch.setattr(signed_ops_module, "commit_action", _crash)
+    with pytest.raises(RuntimeError):
+        _approve(ops, session_b, pem_b, report_id=report_id, version=version, nonce="b1",
+                 apply_fn=lambda ctx: commands.approve_report(
+                     ctx, report_id, expected_version=version, note="sound"))
+
+    # restart: the durable log is authoritative
+    reopened = WorkbenchStore(root / "store")
+    report = reopened.current_reports()[report_id]
+    assert report["status"] in ("APPROVED", "APPROVED_WITH_DISSENT")  # took effect ONCE
+    assert not reopened.records_of("signed_action"), (
+        "the crash left the act unattributed by crypto (F-06, safe direction) — "
+        "never a fabricated GENUINE non-repudiation record for a partial act")
+
+    # a restart + retry cannot double-approve: the target has moved, so the same
+    # signed approval is refused (STALE_VERSION), and the report stays approved once.
+    monkeypatch.undo()
+    ops2, registry2, sessions2, authz2 = _ops(reopened, root, clock, actors_path)
+    session_b2 = _login(ops2, registry2, sessions2, "analyst-b", pem_b)
+    new_version = reopened.current_reports()[report_id]["version"]
+    with pytest.raises(PermissionError):
+        _approve(ops2, session_b2, pem_b, report_id=report_id, version=version, nonce="b2",
+                 current=_vtoken(report_id, new_version),
+                 apply_fn=lambda ctx: commands.approve_report(
+                     ctx, report_id, expected_version=new_version, note="retry"))
+    assert not reopened.records_of("signed_action")
+
+
 def test_service_identity_cannot_satisfy_human_only_approval(tmp_path):
     root, store, clock, claim_id, actors_path = _mission(tmp_path)
     ops, registry, sessions, authz = _ops(store, root, clock, actors_path)

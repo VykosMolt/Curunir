@@ -49,7 +49,13 @@ class ActorRegistry:
         return AccessContext(
             context_id=f"wb-{entry['actor_id']}",
             actor_id=entry["actor_id"],
-            actor_kind=entry.get("actor_kind", "HUMAN"),
+            # fail-closed: a partial/older entry lacking actor_kind must NOT
+            # default to the privileged HUMAN value (it gates every human-only
+            # adjudication — approval, forecast resolution, theme adjudication).
+            # SERVICE is the least-privilege default; an operator makes a human
+            # explicit. (Migration-safety: an entry written before actor_kind
+            # existed cannot silently gain human authority.)
+            actor_kind=entry.get("actor_kind", "SERVICE"),
             roles=tuple(entry.get("roles", ())),
             compartments=tuple(entry.get("compartments", ())),
             releasability=tuple(entry.get("releasability", ())),
@@ -93,7 +99,13 @@ class ActorRegistry:
         return AccessContext(
             context_id=f"wb-{entry['actor_id']}",
             actor_id=entry["actor_id"],
-            actor_kind=entry.get("actor_kind", "HUMAN"),
+            # fail-closed: a partial/older entry lacking actor_kind must NOT
+            # default to the privileged HUMAN value (it gates every human-only
+            # adjudication — approval, forecast resolution, theme adjudication).
+            # SERVICE is the least-privilege default; an operator makes a human
+            # explicit. (Migration-safety: an entry written before actor_kind
+            # existed cannot silently gain human authority.)
+            actor_kind=entry.get("actor_kind", "SERVICE"),
             roles=tuple(entry.get("roles", ())),
             compartments=tuple(entry.get("compartments", ())),
             releasability=tuple(entry.get("releasability", ())),

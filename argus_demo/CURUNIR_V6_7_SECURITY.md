@@ -233,7 +233,7 @@ timeout at the transport, the 25 MB `pdftotext` output cap, connector
 `limit ≤ 100`, plan `budget_max_requests ≤ 500`, and the ≥ 60 s watch cadence
 floor.
 
-## Failure / recovery, backup / restore
+## Failure / recovery, backup / restore (§4/§5)
 
 The mission store is an append-only hash chain (`verify_chain`) with
 content-addressed payloads. `export_to` / `import_from` provide backup and
@@ -243,6 +243,49 @@ tampered or truncated backup is refused, never silently reconstructed. Restore
 + replay reconstructs mission state with no network and no provider, and
 restricted markings + access control survive the boundary. Locks:
 `tests/test_backup_restore_marking.py`.
+
+**Crash recovery.** The append path holds an exclusive lock and does a single
+write+flush of one line, so the ONLY corruption a crash (kill, power loss) can
+produce is a torn last line — every prior event is complete and chain-valid.
+`MissionDataStore.recover_torn_tail(root)` recovers exactly that: it truncates
+the torn tail (atomically, preserving the crashed remainder as
+`events.jsonl.torn`) and verifies the result opens cleanly. It **refuses**
+anything that is not a torn-tail crash — a complete but chain-broken final line
+(tampering), or damage to an earlier line (mid-file) — so recovery never hides
+corruption. A background service can self-heal from a crash instead of wedging.
+
+**Exactly-once under crash+retry.** Multi-append load-bearing operations (a
+signed approval = disposition + version + signed-action) are not one atomic
+transaction; recovery rests on replay + the versioned-family next-version guard
++ the single-use nonce. A crash between the command commit and the signed-action
+append leaves the approval in effect ONCE with no fabricated non-repudiation
+record (the F-06 window, safe direction), and a restart+retry is refused
+(STALE_VERSION / status), never doubled. Locks:
+`tests/test_store_crash_recovery.py`,
+`test_identity_signed_operations.py::test_signed_approval_interrupted_before_commit_is_exactly_one`.
+
+## Migration / rollback & fail-closed defaults (§6)
+
+Curunír has one contract version and no schema evolution yet, so "migration" is
+additive-field backward compatibility with safe defaults (e.g. the new
+`ExecutionRecord.truncated` reads False on a pre-upgrade record), a fail-closed
+version guard (`import_from` refuses a backup whose authenticated
+`contract_version` is not in `COMPATIBLE_CONTRACT_VERSIONS`, rather than silently
+misreading it), and backup-based rollback (restore the pre-change backup; the
+original mission survives an undesired later change intact). A partial/older
+record never defaults to a MORE-privileged or MORE-visible state: a registry
+entry lacking `actor_kind` now resolves to **SERVICE** (least privilege), not the
+privileged HUMAN that gates every human-only adjudication; a record with no
+marking is viewable by no one. Locks: `tests/test_store_migration.py`.
+
+## Clean-checkout reconstruction (§7)
+
+See `CURUNIR_RECONSTRUCTION.md`. The tracked `curunir_*` product reconstructs
+from committed state plus its documented external prerequisites — the inherited
+`argus` kernel snapshot (8 enumerated modules, identified by a
+`kernel_dependency_surface_sha256`) and the pinned PyPI deps — and NOT from any
+development-machine accident. Proven in an isolated `git archive` tree with a
+working-tree-free import path by `tests/test_clean_reconstruction.py`.
 
 ## Known bounded limitations (not V6.7 defects)
 
