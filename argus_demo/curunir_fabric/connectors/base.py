@@ -19,6 +19,13 @@ from typing import Any, Callable, Mapping
 from argus.public_web_transport_v4 import retrieve_public_bytes_v4
 
 from ..contracts import OPERATIONS
+from ..net_guard import guarded_transport
+
+# the shipped default transport is egress-guarded: it refuses to fetch or to
+# ingest bytes reached through a loopback/private/link-local/metadata address,
+# closing the SSRF surface a redirecting public source would otherwise open.
+# Unit tests inject their own transport and are unaffected.
+SAFE_DEFAULT_TRANSPORT = guarded_transport(retrieve_public_bytes_v4)
 
 # transport: (url, headers, timeout, max bytes) -> transport dict (body/status/…)
 Transport = Callable[..., Mapping[str, Any]]
@@ -116,7 +123,7 @@ class SourceConnector:
                 now: str | None = None) -> ConnectorResponse:
         if request.operation not in self.operations:
             return self._unsupported(request)
-        transport = transport or retrieve_public_bytes_v4
+        transport = transport or SAFE_DEFAULT_TRANSPORT
         return self._execute(request, transport, now or utc_now())
 
     def _execute(self, request: ConnectorRequest, transport: Transport, now: str) -> ConnectorResponse:

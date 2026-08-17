@@ -323,6 +323,12 @@ def normalize_manifestation(store: SemanticStore, manifestation: dict,
     return record.to_record()
 
 
+# a bounded derivative: a pathological PDF can decompress to far more text than
+# its (already byte-capped) input, so the extracted text is capped and the cap
+# is disclosed as a warning rather than letting an unbounded blob flow downstream
+_MAX_PDF_TEXT_BYTES = 25_000_000
+
+
 def _pdf_text(data: bytes) -> tuple[str, list[tuple[str, int, int]], list[str]]:
     import subprocess
     try:
@@ -333,7 +339,13 @@ def _pdf_text(data: bytes) -> tuple[str, list[tuple[str, int, int]], list[str]]:
         raise NormalizationError("PDF_TEXT_DERIVATIVE_TOOL_UNAVAILABLE") from exc
     if result.returncode != 0 or not result.stdout.strip():
         raise NormalizationError("PDF_TEXT_DERIVATIVE_PARSE_FAILURE")
-    text = result.stdout.decode("utf-8", "replace")
+    warnings = ["ORIGINAL_PDF_BYTES_PRESERVED",
+                "DERIVATIVE_OFFSETS_NOT_ORIGINAL_PDF_BYTE_OFFSETS"]
+    stdout = result.stdout
+    if len(stdout) > _MAX_PDF_TEXT_BYTES:
+        stdout = stdout[:_MAX_PDF_TEXT_BYTES]
+        warnings.append("PDF_TEXT_DERIVATIVE_TRUNCATED_TO_BOUND")
+    text = stdout.decode("utf-8", "replace")
     pages = text.split("\f")
     if pages and not pages[-1].strip():
         pages.pop()
@@ -342,8 +354,7 @@ def _pdf_text(data: bytes) -> tuple[str, list[tuple[str, int, int]], list[str]]:
     for number, page in enumerate(pages, 1):
         regions.append((f"page:{number}", offset, offset + len(page)))
         offset += len(page) + 1
-    return "\f".join(pages), regions, ["ORIGINAL_PDF_BYTES_PRESERVED",
-                                       "DERIVATIVE_OFFSETS_NOT_ORIGINAL_PDF_BYTE_OFFSETS"]
+    return "\f".join(pages), regions, warnings
 
 
 def load_fields(store: SemanticStore, document_record: dict) -> list[tuple[str, str]]:
