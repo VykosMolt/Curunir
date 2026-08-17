@@ -221,6 +221,43 @@ def test_signed_approval_interrupted_before_commit_is_exactly_one(tmp_path, monk
     assert not reopened.records_of("signed_action")
 
 
+def test_full_mission_survives_signed_approval_crash_recovery_and_restore(tmp_path):
+    # V6.7 §14/§9 composition: a whole mission — acquisition + semantic + a
+    # claim-bound dossier + a cryptographically-signed human approval — survives
+    # a crash, torn-tail recovery, backup, restore and replay with its hash
+    # chain, signatures, report state and actor-key history all intact, and with
+    # NO network or providers.
+    root, store, clock, claim_id, actors_path = _mission(tmp_path)
+    ops, registry, sessions, authz = _ops(store, root, clock, actors_path)
+    report_id, version = _report(store, root, authz, clock, claim_id)
+    pem_b, pub_b = generate_keypair()
+    registry.enroll(actor_id="analyst-b", actor_kind="HUMAN", public_key_hex=pub_b)
+    session_b = _login(ops, registry, sessions, "analyst-b", pem_b)
+    out = _approve(ops, session_b, pem_b, report_id=report_id, version=version, nonce="b1",
+                   apply_fn=lambda ctx: commands.approve_report(
+                       ctx, report_id, expected_version=version, note="sound"))
+    assert out["result"]["status"] == "APPROVED"
+    assert verify_all(store)["all_genuine"]
+
+    # crash mid a later append (torn tail), recover, then back up + restore
+    with (root / "store" / "events.jsonl").open("ab") as handle:
+        handle.write(b'{"seq": 99999, "torn')
+    recovery = WorkbenchStore.recover_torn_tail(root / "store")
+    assert recovery["recovered"]
+    recovered = WorkbenchStore(root / "store")
+    backup = tmp_path / "backup"
+    recovered.export_to(backup)
+    restored = WorkbenchStore.import_from(backup, tmp_path / "restored")
+
+    assert restored.verify_chain()["valid"]
+    replay = verify_all(restored)                      # re-verify signatures from the log alone
+    assert replay["all_genuine"] and replay["count"] >= 1
+    assert restored.current_reports()[report_id]["status"] in ("APPROVED", "APPROVED_WITH_DISSENT")
+    assert any(r["actor_id"] == "analyst-b" for r in restored.records_of("actor_key"))
+    # the claim the dossier rests on survived with its marking
+    assert claim_id in restored.current_claims()
+
+
 def test_service_identity_cannot_satisfy_human_only_approval(tmp_path):
     root, store, clock, claim_id, actors_path = _mission(tmp_path)
     ops, registry, sessions, authz = _ops(store, root, clock, actors_path)
