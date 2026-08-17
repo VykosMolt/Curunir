@@ -379,3 +379,34 @@ active-key cap is checked outside the append lock, so concurrent enrolments can
 overshoot it by ~request-concurrency (one-shot: a second burst is fully refused,
 and there is no HTTP revoke surface to reset it). The O(K) authenticate cost thus
 returns only by a small bounded constant, never unboundedly.
+
+## Round 5 — convergence check found 1 CRITICAL in the round-4 F8 fix (repaired)
+
+The convergence recheck confirmed 4 of 5 categories sound (F4 content-cap match,
+F5 eviction ordering, the constructor version guard, the content_author guard)
+and found one CRITICAL the round-4 F8 site-scoping introduced:
+
+- **F8 availability regression (CRITICAL)** — moving the manifestation build
+  outside the containment also moved out where SOURCE-supplied values are first
+  validated. A BENIGN source value (a date-only/naive GLEIF timestamp like
+  "2026-01-01", or a lone-surrogate native id) then raised in the
+  ManifestationRecord build, OUTSIDE containment, and PROPAGATED — aborting the
+  pass and, worst of all, PERMANENTLY stopping the watch loop (the failing watch
+  never advances its schedule, so it and every watch after it never run again).
+  No attacker required. Contained throughout every prior revision; 4183091 was
+  the first where it escaped.
+
+  Root cause (across four F8 iterations): the fault domain was drawn by exception
+  TYPE then by call SITE, when the real boundary is data PROVENANCE. Fixed
+  accordingly: the manifestation build is back INSIDE the containment (so a
+  source-derived value error → SOURCE_FAILED), and ONLY the local custody-disk
+  write is tagged (`_LocalStorageFault`) so it alone propagates. Now:
+  source/content/network faults → contained SOURCE_FAILED (plan continues); a
+  local custody/OOM/store fault → propagates (stops the pass, right to). Locks:
+  `test_source_supplied_bad_value_is_contained_not_aborting_the_plan`,
+  `test_local_custody_disk_fault_propagates_not_source_failed`.
+
+Documented LIMITATION (pre-existing, not this campaign): the extractor's
+undeclared 200-line observation cap (`extract.py`) can read as a removal with no
+warning to trigger the truncation guard; the warning-based guard structurally
+cannot see extractor-level caps.

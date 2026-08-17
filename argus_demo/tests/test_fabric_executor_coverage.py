@@ -220,6 +220,8 @@ def test_local_custody_disk_fault_propagates_not_source_failed(ctx):
     # review F8-round-C: a fault on OUR side (a full CUSTODY disk during
     # manifestation preservation) must PROPAGATE, not be contained as SOURCE_FAILED
     # (which would defame the source). The transport SUCCEEDS; the local write fails.
+    from curunir_fabric.executor import _LocalStorageFault
+
     def _boom(*args, **kwargs):
         raise OSError(28, "No space left on device")
     ctx.custody.preserve = _boom
@@ -227,10 +229,37 @@ def test_local_custody_disk_fault_propagates_not_source_failed(ctx):
                       script="", operation="SEARCH", source_id="wikidata",
                       time_bounds=(None, None), origin="RULE", origin_detail="t",
                       rationale="r", derived_from=())
-    with pytest.raises(OSError):
+    with pytest.raises(_LocalStorageFault):        # our local fault propagates
         execute_single(ctx, query=query, source_id="wikidata")
     assert not [r for r in ctx.store.records_of("fabric_source_status")
                 if r["source_id"] == "wikidata" and r["kind"] == "FAILURE"]
+
+
+def test_source_supplied_bad_value_is_contained_not_aborting_the_plan(ctx):
+    # review F8-round-D (CRITICAL): a SOURCE-supplied value that fails validation
+    # in the manifestation build — here a date-only (naive) GLEIF timestamp, a
+    # BENIGN value needing no attacker — must be CONTAINED as SOURCE_FAILED, never
+    # escape to abort the plan/watch loop.
+    bad_body = json.dumps({
+        "meta": {"pagination": {"currentPage": 1, "lastPage": 1}},
+        "data": [{"id": "2534000WLRB86TSQ3245", "attributes": {
+            "lei": "2534000WLRB86TSQ3245",
+            "entity": {"legalName": {"name": "Severstal"}, "jurisdiction": "RU",
+                       "status": "ACTIVE", "otherNames": [],
+                       "legalAddress": {"city": "Cherepovets", "country": "RU"}},
+            "registration": {"status": "ISSUED", "lastUpdateDate": "2026-01-01"}}}],  # date-only, naive
+    }).encode()
+    ctx.transports["gleif-lei-v1"] = _transport(bad_body)
+    # a full plan: the bad-timestamp source is contained as SOURCE_FAILED and the
+    # remaining sources still run — the pass is NOT aborted, nothing propagates.
+    need = _need(need_id="need-badts")
+    _record_need(ctx.store, need)
+    outcomes = execute_plan(ctx, _plan(ctx, need))  # must NOT raise
+    by_source: dict[str, set[str]] = {}
+    for o in outcomes:
+        by_source.setdefault(o.execution.source_id, set()).add(o.execution.outcome)
+    assert by_source["gleif"] == {"SOURCE_FAILED"}
+    assert "EXECUTED_WITH_RESULTS" in by_source["wikidata"]
 
 
 def test_network_error_is_contained_and_does_not_abort_the_plan(ctx):

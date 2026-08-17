@@ -21,6 +21,13 @@ from argus.source_intelligence.policy import POLICY_VERSION, acquisition_eligibl
 from curunir_operational.store import StoreError
 
 from . import ABSENCE_SEMANTICS, PACKAGE_VERSION
+
+
+class _LocalStorageFault(Exception):
+    """A fault on OUR side (custody/local disk) during manifestation
+    preservation — distinct from a source/content fault. It propagates past the
+    acquisition-edge containment (a full disk should stop the pass), rather than
+    being recorded as SOURCE_FAILED."""
 from .connectors import BUILTIN_CONNECTORS
 from .connectors.base import ConnectorRequest, ConnectorResponse, NativeResult, SourceConnector, utc_now
 from .contracts import DiscoveryPlan, ExecutionRecord, ManifestationRecord, QuerySpec
@@ -115,10 +122,19 @@ def _manifestation(ctx: ExecutionContext, *, source_id: str, connector: SourceCo
         policy_version=POLICY_VERSION, created_at=response.retrieved_time,
     )
     filename = (native_id or response.request_url).replace("/", "_")[:120] or "response"
-    content, source_object, _events, _new = ctx.custody.preserve(
-        retrieval, body, filename=filename, source_descriptor_id=source_id,
-        document_type=content_class, now=response.retrieved_time,
-    )
+    try:
+        content, source_object, _events, _new = ctx.custody.preserve(
+            retrieval, body, filename=filename, source_descriptor_id=source_id,
+            document_type=content_class, now=response.retrieved_time,
+        )
+    except OSError as error:
+        # custody preservation is a LOCAL disk write; a fault here (ENOSPC,
+        # permission) is OUR environment, not the source's. Tag it so the
+        # acquisition edge PROPAGATES it (a full disk should stop the pass, not
+        # be logged as SOURCE_FAILED) — distinct from the SOURCE-derived value
+        # validation in the ManifestationRecord build below, which stays
+        # contained (review F8-round-D: the fault boundary is data provenance).
+        raise _LocalStorageFault(f"custody preservation failed: {error}") from error
     prior_id = None
     observation_key = f"{source_id}|{native_id or response.request_url}"
     for record in reversed(ctx.store.records_of("fabric_manifestation")):
@@ -209,46 +225,43 @@ def execute_single(ctx: ExecutionContext, *, query: QuerySpec, source_id: str,
     request = ConnectorRequest(operation=query.operation, value=query.value,
                                language=query.language, time_bounds=query.time_bounds)
     transport = ctx.transports.get(connector.connector_id)
-    # Contain ONLY the source/network domain — the connector call. A connector
-    # fault (hostile body that trips an unguarded parse, a malformed row, a
-    # transport/network exception incl. ConnectionReset/Timeout/SSL) must not
-    # abort the rest of the plan/watch pass: record one truthful SOURCE_FAILED and
-    # move on (a crashed search is a failure, never absence — SOURCE_FAILED is
-    # excluded from absence coverage). MemoryError / StoreError still propagate.
+    # Contain the SOURCE/CONTENT domain: the connector call AND the manifestation
+    # build (which is where SOURCE-supplied values — a malformed source timestamp,
+    # a lone-surrogate native id — are first validated). A fault from either is
+    # the source's, so record one truthful SOURCE_FAILED and move on (a crashed
+    # search is a failure, never absence). What PROPAGATES instead: MemoryError, a
+    # StoreError, and a _LocalStorageFault (a custody/local-disk fault tagged
+    # inside _manifestation) — OUR environment, which must stop the pass rather
+    # than be blamed on the source. The boundary is data PROVENANCE, not call
+    # site or exception type (review F8-round-D).
     try:
         response = connector.execute(request, transport=transport, now=ctx.now_fn())
-    except (MemoryError, StoreError):
+        outcome = _STATUS_TO_OUTCOME[response.status]
+        manifestations: tuple[ManifestationRecord, ...] = ()
+        if response.status in ("OK", "EMPTY") and response.raw_body:
+            historical = query.operation.startswith("HISTORICAL_")
+            single = response.results[0] if len(response.results) == 1 else None
+            capture_time = single.source_time if historical and single else None
+            # a multi-result response (e.g. a CDX enumeration) is identified by
+            # the target it enumerates, not left anonymous: dependence grouping
+            # and prior-version linking key on this identity
+            native_id = single.native_id if single else (
+                query.value if query.operation in ("HISTORICAL_ENUMERATE", "ENUMERATE", "POLL")
+                else "")
+            manifestations = (_manifestation(
+                ctx, source_id=source_id, connector=connector,
+                execution_id=digest_id("execution", plan_id, query.query_id, source_id, started),
+                response=response, native_id=native_id,
+                temporal_status="HISTORICAL" if historical and capture_time else "LIVE",
+                source_time=single.source_time if single else None,
+                archive_capture_time=capture_time,
+            ),)
+    except (MemoryError, StoreError, _LocalStorageFault):
         raise
     except Exception as error:  # noqa: BLE001 — source/content/network fault at the acquisition edge
         return finish("SOURCE_FAILED", error_class="CONNECTOR_ERROR",
                       error_detail=f"{type(error).__name__}: {error}"[:500],
                       policy_decision=decision.decision)
-
-    outcome = _STATUS_TO_OUTCOME[response.status]
-    # Custody preservation + manifestation build is a LOCAL operation (a disk
-    # write on OUR side). A fault here (ENOSPC, permission, store error) is OUR
-    # environment, NOT the source's — it is left OUTSIDE the containment above so
-    # it propagates honestly rather than being recorded as SOURCE_FAILED and
-    # defaming the source's health (review F8-round-C).
-    manifestations: tuple[ManifestationRecord, ...] = ()
-    if response.status in ("OK", "EMPTY") and response.raw_body:
-        historical = query.operation.startswith("HISTORICAL_")
-        single = response.results[0] if len(response.results) == 1 else None
-        capture_time = single.source_time if historical and single else None
-        # a multi-result response (e.g. a CDX enumeration) is identified by the
-        # target it enumerates, not left anonymous: dependence grouping and
-        # prior-version linking key on this identity
-        native_id = single.native_id if single else (
-            query.value if query.operation in ("HISTORICAL_ENUMERATE", "ENUMERATE", "POLL")
-            else "")
-        manifestations = (_manifestation(
-            ctx, source_id=source_id, connector=connector,
-            execution_id=digest_id("execution", plan_id, query.query_id, source_id, started),
-            response=response, native_id=native_id,
-            temporal_status="HISTORICAL" if historical and capture_time else "LIVE",
-            source_time=single.source_time if single else None,
-            archive_capture_time=capture_time,
-        ),)
 
     return finish(outcome, response=response, results=response.results,
                   manifestations=manifestations,
