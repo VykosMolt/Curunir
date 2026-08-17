@@ -2,30 +2,54 @@
 from __future__ import annotations
 
 import email.utils
-import re
 import xml.etree.ElementTree as ElementTree
+import xml.parsers.expat as expat
 from datetime import timezone
 
 from .base import ConnectorRequest, ConnectorResponse, NativeResult, SourceConnector, Transport
 
 ATOM_NS = "{http://www.w3.org/2005/Atom}"
 
+
 # The stdlib XML parser expands internal DTD entities, so a <5 KB "billion
 # laughs" feed can expand to gigabytes in-process. A DOCTYPE / internal DTD
 # subset is the ONLY vehicle for entity-expansion (and external-entity) attacks,
-# and no legitimate RSS/Atom feed needs one — so we refuse any feed that
-# declares one before handing the bytes to the parser. The whole body is scanned
-# (case-insensitively), not a fixed prolog window: a DOCTYPE must precede the
-# root element but a giant comment/whitespace preamble could otherwise push it
-# past a windowed check. Mirrors the kernel's guard on the semantic XML path.
-_XML_DTD_DECLARATION = re.compile(rb"<!\s*(?:doctype|entity)", re.IGNORECASE)
+# and no legitimate RSS/Atom feed needs one — so we refuse any feed that declares
+# one before handing the bytes to the (entity-expanding) parser.
+#
+# Detection is done by expat, NOT a byte scan: a byte-level regex misses a
+# DOCTYPE in any non-UTF-8 encoding expat accepts (UTF-16/UTF-32/BOM) and
+# false-flags the token quoted in CDATA/text. expat decodes per the XML encoding
+# declaration and its StartDoctypeDeclHandler fires ONLY on an actual DOCTYPE
+# declaration — and fires at the DOCTYPE's start, before any entity is declared
+# or referenced, so parsing stops before expansion.
+class _DTDFound(Exception):
+    pass
+
+
+class _PrologDone(Exception):
+    pass
 
 
 def _reject_dtd(body: bytes) -> None:
-    if _XML_DTD_DECLARATION.search(body):
+    parser = expat.ParserCreate()
+
+    def _on_doctype(name, system_id, public_id, has_internal_subset):
+        raise _DTDFound()
+
+    def _on_start_element(name, attrs):
+        raise _PrologDone()  # the root element began: any DOCTYPE preceded it
+
+    parser.StartDoctypeDeclHandler = _on_doctype
+    parser.StartElementHandler = _on_start_element
+    try:
+        parser.Parse(body, True)  # only ever scans the prolog (stops at the root)
+    except _DTDFound:
         raise ValueError(
-            "feed declares a DOCTYPE/ENTITY; refused before parsing "
-            "(XML entity-expansion / external-entity defense)")
+            "feed declares a DOCTYPE/DTD; refused before entity expansion "
+            "(billion-laughs / external-entity defense)")
+    except (_PrologDone, expat.ExpatError):
+        pass  # no DOCTYPE before the root, or malformed (ElementTree raises PARSE)
 
 
 def _rfc822_to_iso(value: str) -> str | None:

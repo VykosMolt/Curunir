@@ -396,7 +396,18 @@ def approve_report(store: WorkbenchStore, projection: MissionProjection,
     submitters = {d["actor_id"] for d in store.report_dispositions(report_id)
                   if d["disposition"] == "SUBMITTED"}
     content_authors = {v["author"] for v in store.report_versions(report_id)}
-    if actor in content_authors | submitters:
+    # Robust separation of duties: also take the EVENT-ENVELOPE actors of this
+    # report's version and disposition events. `submit_report` writes the
+    # IN_REVIEW version FIRST and the SUBMITTED disposition second; deriving the
+    # submitter only from the disposition would let a crash between those two
+    # appends (which loses the disposition) erase the submitter and permit a
+    # self-approval. The version-transition event's actor is the submitter and
+    # is durable append #1, so it closes that window.
+    acting = {event["actor"] for event in store.events()
+              if event["record"].get("record_type")
+              in ("workbench_report", "workbench_report_disposition")
+              and event["record"].get("report_id") == report_id}
+    if actor in content_authors | submitters | acting:
         raise PermissionError(
             "separation of duties: an analyst who authored or submitted this "
             "report cannot also approve it")

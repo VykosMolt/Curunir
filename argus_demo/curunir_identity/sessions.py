@@ -26,6 +26,7 @@ from .registry import VALID, KeyRegistry
 
 CHALLENGE_TTL_SECONDS = 120
 SESSION_TTL_SECONDS = 900  # 15 minutes
+MAX_PENDING_CHALLENGES = 4096  # bound the pending-challenge map against a flood
 
 
 class AuthError(PermissionError):
@@ -56,10 +57,24 @@ class SessionManager:
 
     # ---- authentication --------------------------------------------------
 
+    def _prune_pending(self, now: str) -> None:
+        """Drop expired pending challenges (authenticate only pops on an attempt,
+        so without this a flood of never-answered challenges would grow the map
+        without bound). Also hard-cap the map so it cannot grow unboundedly even
+        within the TTL window: evict the oldest when at the cap."""
+        cutoff = parse_time(now)
+        for nonce in [n for n, p in self._pending.items()
+                      if cutoff > parse_time(p["expires_time"])]:
+            self._pending.pop(nonce, None)
+        while len(self._pending) >= MAX_PENDING_CHALLENGES:
+            oldest = min(self._pending, key=lambda n: self._pending[n]["issued_time"])
+            self._pending.pop(oldest, None)
+
     def issue_challenge(self, actor_id: str) -> dict[str, str]:
         """A fresh single-use nonce the actor must sign to prove key
         possession. Bound to the actor and expiring quickly."""
         now = self.now_fn()
+        self._prune_pending(now)
         nonce = secrets.token_hex(32)
         self._pending[nonce] = {"actor_id": actor_id, "issued_time": now,
                                 "expires_time": self._plus(now, self.challenge_ttl)}
@@ -81,12 +96,14 @@ class SessionManager:
             raise AuthError("unknown or already-used challenge")
         if parse_time(now) > parse_time(pending["expires_time"]):
             raise AuthError("challenge expired")
-        key = registry.active_key_for(actor_id)
+        # try EVERY active key the actor holds (multi-device): the session binds
+        # to whichever key actually signed this challenge, so a second enrolled
+        # device never locks out the first.
+        payload = self.challenge_payload(actor_id, nonce)
+        key = next((k for k in registry.active_keys_for(actor_id)
+                    if verify(k["public_key"], signature_hex, payload)), None)
         if key is None:
-            raise AuthError("no active key for actor")
-        if not verify(key["public_key"], signature_hex,
-                      self.challenge_payload(actor_id, nonce)):
-            raise AuthError("challenge signature does not verify")
+            raise AuthError("no active key verifies the challenge")
         session = Session(session_id=secrets.token_hex(24), actor_id=actor_id,
                           actor_kind=key["actor_kind"], key_id=key["key_id"],
                           issued_time=now, expires_time=self._plus(now, self.session_ttl))

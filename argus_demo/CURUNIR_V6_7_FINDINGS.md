@@ -207,3 +207,106 @@ bounded LIMITATIONS (see CURUNIR_V6_7_SECURITY.md): cross-analytic-object
 reference inheritance and access-relative projection (both workbench-guarded,
 non-shipped-reachable); the F-06/F-07 crypto residuals; and browser-side WebCrypto
 signing (the server-side identity substrate is complete and enforces the model).
+
+---
+
+# V6.7 resilience continuation — adversarial review (two independent Opus-5 rounds)
+
+The continuation tranche (browser identity last mile, resource governance, crash
+recovery, migration, reconstruction, endurance) was reviewed by two independent
+Opus-5 adversarial passes with running reproducers. Both found real defects; all
+Critical/Major were repaired and locked, then the whole surface re-verified.
+
+## Identity + resource-governance review (round A)
+
+- **F1 — cross-actor signing-key hijack ⟶ CRITICAL.** `POST /api/auth/enroll`
+  (and `KeyRegistry.enroll`) keyed a key family by the public-key digest but never
+  checked ownership, so any bearer holder could retire/hijack another actor's
+  signing key by resubmitting that actor's (non-secret) public key — permanent
+  denial of the victim's signing authority + false identity-log entries. **Fix:**
+  `enroll` refuses a public key already owned by a different actor and never
+  resurrects a retired/revoked own key; the route surfaces it as 409. Locks:
+  `test_identity_server::test_enroll_refuses_cross_actor_key_hijack`.
+- **F2 — two-device self-brick ⟶ MAJOR.** The enroll route rotated on any new key,
+  so two devices of one actor ping-ponged each other into a both-keys-RETIRED
+  state (no adversary). **Fix:** a proper multi-device model — enroll ADDS an
+  active key (never rotates/retires as a side effect) and `authenticate` verifies
+  the challenge against ALL of the actor's active keys. Lock:
+  `test_two_device_keys_for_one_actor_both_authenticate`.
+- **F3/F6 — RSS DOCTYPE guard bypass / false-positive ⟶ MAJOR/MINOR.** The
+  byte-regex missed a DOCTYPE in UTF-16 (measured 45× billion-laughs expansion)
+  and false-flagged the token quoted in CDATA. **Fix:** detection via `expat`
+  (encoding-agnostic, fires only on a real declaration, stops before expansion).
+  Locks: `test_rss_utf16_billion_laughs_is_refused`,
+  `test_rss_cdata_quoting_a_doctype_is_not_a_false_positive`.
+- **F4 — truncation → semantic removal ⟶ MAJOR.** The §3 truncation exclusion
+  landed in forecast absence but NOT in `changes.interpret_change`, so a
+  byte-capped re-retrieval diffed as REMOVED_PROPOSITION / SOURCE_RETRACTION /
+  VALUE_CHANGED and could move a claim to STALE/RETRACTED. **Fix:** under a
+  truncated current manifestation every lifecycle-moving (loss/change) class is
+  reclassified to UNRESOLVED_CHANGE; additions still flow. Lock:
+  `test_truncated_re_retrieval_is_not_interpreted_as_removal_or_staleness`.
+- **F5 — unbounded/unauthenticated challenge ⟶ MAJOR.** `_pending` grew without
+  bound and `/api/auth/challenge`+`/time` were anonymous. **Fix:** prune expired +
+  hard-cap `_pending`; bearer-gate the endpoints. Lock: `test_challenge_requires_a_bearer`.
+- **F7 (canonical key sort by code point), F8 (executor infra faults propagate,
+  not SOURCE_FAILED), F9 (pivot cap bounded in memory + visible)** — MINOR, all
+  fixed and locked.
+- NOT-A-DEFECT (reviewer-verified, live-probed): the GLEIF/EDGAR/Wayback/Wikidata
+  reclassifications do not break genuine empties; the truncation exclusion at the
+  acquisition layer is complete; the recorded_time re-stamp is sound; signature
+  transplant/replay closed.
+
+## Resilience / store-durability review (round B)
+
+- **C-1 — content-triggered store corruption ⟶ CRITICAL.** The write path emits
+  U+2028/U+2029/U+0085 raw (ensure_ascii=False) but the reader used
+  `str.splitlines()`, splitting one committed event into two — any ingested text
+  with a line/paragraph separator permanently bricked the store, and recovery
+  mislabelled it as tampering. **Fix:** all readers + recovery split on `\n` ONLY
+  (shared `_split_log`). Lock: `test_unicode_line_separators_in_text_do_not_corrupt_the_store`.
+- **C-2 — recovery races a live writer ⟶ CRITICAL.** `recover_torn_tail` took no
+  lock, so the advertised background self-heal could orphan a concurrent writer's
+  committed bytes. **Fix:** recovery holds the append lock for the whole
+  read-decide-install. Lock: `test_recovery_blocks_on_the_append_lock`.
+- **C-3 — two-rename data-loss window ⟶ CRITICAL.** Install was move-then-rename
+  with a window where `events.jsonl` was absent (a crash there → silent total
+  loss, verify_chain VALID). **Fix:** COPY the crashed original aside, then ONE
+  atomic rename. Lock: `test_recovery_preserves_original_by_copy_not_move`.
+- **C-4/M-3 — four-eyes bypass on interrupted submit/approve ⟶ CRITICAL/MAJOR.**
+  Submitters/approvers were derived only from the disposition (append #2); a crash
+  losing it let the submitter self-approve. **Fix:** separation of duties also
+  takes the event-envelope actors of the report's version/disposition events (the
+  IN_REVIEW version is durable append #1). Lock:
+  `test_four_eyes_survives_a_crash_that_loses_the_submitted_disposition`.
+- **M-1/M-2 — unterminated / UTF-8-cut torn tail ⟶ MAJOR.** A committed-looking
+  line with no trailing `\n`, or a tail cutting a multi-byte char, either merged
+  into the next append or raised an uncaught UnicodeDecodeError. **Fix:** a
+  non-`\n`-terminated trailing segment is a torn (uncommitted) write, detected and
+  recovered; lines decoded per-line. Locks:
+  `test_unterminated_final_line_is_treated_as_torn_and_recovered`,
+  `test_torn_tail_cutting_utf8_sequence_recovers_without_decode_error`.
+- **M-4 — version guard bypassed by the constructor ⟶ MAJOR.** `import_from`
+  checked the contract version but a directory-copy/snapshot restore via the plain
+  constructor did not. **Fix:** `__init__` refuses an incompatible contract
+  version at every open. Lock: `test_constructor_refuses_incompatible_contract_version`.
+- **M-5 — marking laundering ⟶ MAJOR.** `marking_from_record` injected
+  `min_role=OBSERVER` for a missing value, turning a `can_view` deny into an allow
+  on round-trip. **Fix:** fail closed to the most-restrictive role. Lock:
+  `test_marking_reconstruction_does_not_launder_a_missing_min_role`.
+- **M-6 — kernel identity under-specified ⟶ MAJOR.** The kernel hash covered 8 of
+  ~31 transitively-loaded modules and the test never verified it. **Fix:** a
+  whole-tree `argus_kernel_tree_sha256`, recomputed and asserted by
+  `test_clean_reconstruction`.
+- **m-1..m-4** (MINOR): reconstruction deps completed (httpx, pdftotext); endurance
+  now verifies the ON-DISK chain, counts actual poison attempts, and tightens the
+  fd bound; recovery preserves prior forensic remainders, cleans its temp file,
+  and rolls back on any exception. All fixed.
+
+## Continuation convergence
+
+Two independent Opus-5 rounds found 4 + 4 = 8 Critical and 9 Major defects across
+the continuation surface; every one is repaired with a behavioral regression lock,
+and the full non-DB suite is green (only the two pre-existing, unrelated
+capsule-stream failures remain). A confirmatory adversarial round over the repairs
+follows.

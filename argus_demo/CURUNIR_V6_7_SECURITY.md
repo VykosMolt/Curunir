@@ -165,11 +165,17 @@ read views).
   path remains only as an explicit fallback where in-browser Ed25519 is
   unavailable, and for read projections. **Enrollment trust boundary:** the
   one-time enrolment of a device public key is authorized by the bearer token
-  and bound server-side to the bearer-authenticated actor (the request body
-  carries no actor id, so a client cannot enrol a key for another actor);
-  thereafter each load-bearing act requires the private key. One active signing
-  key per actor per device — a new key rotates the previous one, whose past
-  signatures stay verifiable. Proven end to end (real browser + live server) in
+  and bound server-side to the bearer-authenticated actor; thereafter each
+  load-bearing act requires the private key. **Multi-device by design:** an actor
+  may hold several active signing keys (one per device) and `authenticate`
+  verifies a challenge against ALL of them, so a second device never locks out
+  the first. A key id is a digest of its public key, so a key family has one
+  owner forever: enrolling a public key already owned by a DIFFERENT actor is
+  refused (no cross-actor key hijack — review F1), and enrolment never rotates or
+  retires another key as a side effect (no self-brick — review F2). Revoking one
+  device's key never affects the others. `/api/auth/challenge` (+ `/time`) are
+  bearer-gated and prune + hard-cap their pending state (review F5). Proven end to
+  end (real browser + live server) in
   `tests/test_workbench_signed_identity_browser.py`: a genuine signed approval
   recorded for replay, four-eyes preserved, the private key non-exportable, and
   the wire refusing real browser-signed transplant / stale-version / wrong-actor
@@ -212,12 +218,20 @@ body must never (a) run unbounded work or (b) be recorded as evidence.
   an empty CDX body (Wayback) classify `FAILED` — excluded from absence. Genuine
   empties still classify `EMPTY`. Locks: `test_fabric_resource_governance.py`.
 - **A hostile body cannot abort the whole pass or expand unbounded.** The
-  connector call and manifestation build are contained in `executor.py`: an
-  exception becomes one truthful `SOURCE_FAILED` record (never absence), so one
-  crashing source no longer silently skips every remaining query. The RSS parser
-  refuses any feed declaring a DOCTYPE/ENTITY before handing bytes to the
-  entity-expanding stdlib parser (billion-laughs / XXE defense, whole-body scan).
-  Malformed CDX rows are skipped individually rather than aborting.
+  connector call and manifestation build are contained in `executor.py`: a
+  content/parse exception becomes one truthful `SOURCE_FAILED` record (never
+  absence), so one crashing source no longer silently skips every remaining
+  query — while an *infrastructure* fault (OSError/MemoryError/StoreError)
+  propagates instead of being blamed on the source (review F8). The RSS parser
+  refuses any feed declaring a DOCTYPE/DTD before the entity-expanding parser,
+  detected with `expat` (encoding-agnostic — UTF-16/BOM — and firing only on a
+  real declaration, not the token quoted in CDATA; review F3/F6). Malformed CDX
+  rows are skipped individually rather than aborting.
+- **A byte-capped read is not evidence of removal, on the semantic path too.**
+  When a re-retrieved manifestation is truncated, `changes.interpret_change`
+  reclassifies every loss/change diff (REMOVED / RETRACTION / VALUE_CHANGED …) to
+  UNRESOLVED_CHANGE, so a resource limit never moves a claim to STALE/RETRACTED;
+  additions (which truncation cannot fabricate) still flow (review F4).
 - **A poison record cannot loop forever.** A manifestation that fails processing
   is auto-retried at most `MAX_PROCESSING_ATTEMPTS` (5) times — each retry can
   fork a 30 s `pdftotext`, so one unprocessable record would otherwise be an
@@ -244,15 +258,28 @@ tampered or truncated backup is refused, never silently reconstructed. Restore
 restricted markings + access control survive the boundary. Locks:
 `tests/test_backup_restore_marking.py`.
 
-**Crash recovery.** The append path holds an exclusive lock and does a single
-write+flush of one line, so the ONLY corruption a crash (kill, power loss) can
-produce is a torn last line — every prior event is complete and chain-valid.
-`MissionDataStore.recover_torn_tail(root)` recovers exactly that: it truncates
-the torn tail (atomically, preserving the crashed remainder as
-`events.jsonl.torn`) and verifies the result opens cleanly. It **refuses**
+**Crash recovery.** Every reader splits the log on `\n` ONLY (a shared
+`_split_log`), never `str.splitlines()` — canonical JSON emits U+2028/U+2029/
+U+0085 raw, and splitting on those would tear a committed event in two (review
+C-1). A healthy log ends in `\n`, so a non-`\n`-terminated trailing segment is an
+incomplete (uncommitted) final write, and a torn tail cutting a multi-byte UTF-8
+sequence is handled without an uncaught decode error (C-1/M-1/M-2). The append
+path holds an exclusive lock and does a single write+flush of one line, so the
+only corruption a crash can produce is that torn tail.
+`MissionDataStore.recover_torn_tail(root)` recovers exactly it: it **holds the
+append lock** (so a concurrent writer/self-healer cannot be orphaned — C-2),
+COPIES the crashed original aside to `events.jsonl.torn` and installs the
+truncated log with ONE atomic rename (no window where the log is absent — C-3),
+verifies the result opens, and rolls back on any exception. It **refuses**
 anything that is not a torn-tail crash — a complete but chain-broken final line
-(tampering), or damage to an earlier line (mid-file) — so recovery never hides
-corruption. A background service can self-heal from a crash instead of wedging.
+(tampering), earlier-line damage, or an incompatible contract version — so
+recovery never hides corruption. A background service self-heals instead of
+wedging.
+
+**Four-eyes survives an interrupted submit.** Report separation-of-duties takes
+the event-envelope actors of the report's version/disposition events, not only
+the SUBMITTED disposition; a crash between `submit_report`'s two appends (losing
+the disposition) can no longer let the submitter self-approve (review C-4/M-3).
 
 **Exactly-once under crash+retry.** Multi-append load-bearing operations (a
 signed approval = disposition + version + signed-action) are not one atomic
@@ -269,14 +296,17 @@ record (the F-06 window, safe direction), and a restart+retry is refused
 Curunír has one contract version and no schema evolution yet, so "migration" is
 additive-field backward compatibility with safe defaults (e.g. the new
 `ExecutionRecord.truncated` reads False on a pre-upgrade record), a fail-closed
-version guard (`import_from` refuses a backup whose authenticated
-`contract_version` is not in `COMPATIBLE_CONTRACT_VERSIONS`, rather than silently
-misreading it), and backup-based rollback (restore the pre-change backup; the
-original mission survives an undesired later change intact). A partial/older
-record never defaults to a MORE-privileged or MORE-visible state: a registry
-entry lacking `actor_kind` now resolves to **SERVICE** (least privilege), not the
-privileged HUMAN that gates every human-only adjudication; a record with no
-marking is viewable by no one. Locks: `tests/test_store_migration.py`.
+version guard (refused at EVERY open — both `import_from` and the plain
+constructor, closing the directory-copy/snapshot-restore bypass — when the
+authenticated `contract_version` is not in `COMPATIBLE_CONTRACT_VERSIONS`, review
+M-4), and backup-based rollback (restore the pre-change backup; the original
+mission survives an undesired later change intact). A partial/older record never
+defaults to a MORE-privileged or MORE-visible state: a registry entry lacking
+`actor_kind` resolves to **SERVICE** (least privilege), not the privileged HUMAN
+that gates every human-only adjudication; a record with no marking is viewable by
+no one; and reconstructing a marking with a missing `min_role` fails closed to
+the MOST restrictive role, never OBSERVER (no laundering of a `can_view` deny
+into an allow, review M-5). Locks: `tests/test_store_migration.py`.
 
 ## Clean-checkout reconstruction (§7)
 
@@ -313,10 +343,10 @@ documented scale limitation below, not a lifecycle defect.
   echoes and signs. Not attacker-triggerable beyond the ±300s window.
 - **Browser-side signing is delivered** (see the identity section): the real
   workbench signs its load-bearing act with a non-extractable WebCrypto Ed25519
-  device key. The residual frontier is narrower: multi-device signing keys per
-  actor (today one active key per actor rotates the previous), and hardware-
-  backed key attestation. The bearer path remains for reads and as an explicit
-  no-WebCrypto fallback.
+  device key, and multiple device keys per actor are now supported. The residual
+  frontier is hardware-backed key attestation and an out-of-band (non-bearer)
+  root of trust for the first enrolment. The bearer path remains for reads and as
+  an explicit no-WebCrypto fallback.
 - SSRF redirect-request-fires and DNS-TOCTOU windows (above).
 - Access-relative projection of mixed-marking analytic objects (above): today a
   materially-restricted-derived object is raised (and may become invisible to a

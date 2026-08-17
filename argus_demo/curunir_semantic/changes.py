@@ -147,6 +147,19 @@ def interpret_change(ctx: IntegrationContext, prior_manifestation_id: str,
     else:
         differences = classify_pairwise(prior_observations, current_observations,
                                         current_text)
+        if current_manifestation.get("truncated"):
+            # a byte-capped current manifestation is INCOMPLETE, so any diff that
+            # concludes content was removed or changed (vs the prior full read)
+            # may be a truncation artifact — the content could be in the unseen
+            # tail. Reclassify every lifecycle-moving (loss/change) class to
+            # UNRESOLVED_CHANGE, so a resource limit never becomes evidence of
+            # deletion / retraction / staleness. Additions are trustworthy (a cut
+            # can only hide content, never add it) and pass through unchanged.
+            # (V6.7 §3, review finding F4.)
+            for difference in differences:
+                if difference["change_class"] in _STATE_FOR_CLASS:
+                    difference["change_class"] = "UNRESOLVED_CHANGE"
+                    difference["truncated_current"] = True
 
     existing_changes = {r["change_id"]: r for r in store.records_of("semantic_change")}
     existing_change_ids = set(existing_changes)
@@ -207,6 +220,13 @@ def _detail(difference: Mapping[str, Any]) -> str:
         return (f"{difference['truncated_count']} further differences were not "
                 f"individually interpreted (record cap); first keys: "
                 f"{difference['truncated_keys']}")
+    if difference["change_class"] == "UNRESOLVED_CHANGE" and difference.get("truncated_current"):
+        base = (f"{current_obs['subject_ref']} {current_obs['attribute']}"
+                if current_obs else
+                f"{prior_obs['subject_ref']} {prior_obs['attribute']}") if (prior_obs or current_obs) else "difference"
+        return (f"{base}: the current manifestation was byte-capped (truncated), "
+                f"so this apparent removal/change is not interpreted as evidence "
+                f"of deletion or staleness — a partial read is not the whole source")
     if prior_obs and current_obs:
         return (f"{current_obs['subject_ref']} {current_obs['attribute']}: "
                 f"{prior_obs['value'][:120]!r} → {current_obs['value'][:120]!r}")

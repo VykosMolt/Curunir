@@ -40,25 +40,39 @@ sovereignty manifest):
 - `argus.prospective.research.offline_official_ingestion` — the kernel XML guard
 - `argus.extract` — `propose_mentions`
 
+These are the modules the product imports **directly**; importing
+`argus.source_intelligence.models` runs `argus/source_intelligence/__init__.py`
+(which re-exports its submodules), so the product transitively loads ~31 kernel
+modules at runtime. To identify the mounted snapshot completely — not just the
+directly-imported surface — the kernel is pinned by a hash over its **entire
+tree** (every `.py` file, path + content, sorted):
+
+```
+argus_kernel_tree_sha256 = 4c173df7412952b8318b7838a06ee991638fd9144eee2be36232c64aecfb7906
+```
+
 The kernel ships as a **separate versioned tarball snapshot**, mounted at
-`argus_demo/argus/`. Its dependency-surface identity (sha256 over the 8 module
-files above, sorted) at this product revision is:
-
-```
-kernel_dependency_surface_sha256 = 734b367096d9c37388dc66d88d3193e810fa8be393074f377ae0d0a52804269d
-```
-
-Pin/verify this hash when mounting the snapshot; a mismatch means the kernel the
-product was built against is not the one being mounted. (Do not vendor the kernel
-into this repo — it is a large inherited codebase owned elsewhere; mounting the
-identified snapshot is the supported model.)
+`argus_demo/argus/`. Pin/verify this whole-tree hash when mounting the snapshot;
+a mismatch means the kernel the product was built against is not the one being
+mounted. `tests/test_clean_reconstruction.py` recomputes it over the mounted
+tree and refuses to proceed on a mismatch. (Do not vendor the kernel into this
+repo — it is a large inherited codebase owned elsewhere; mounting the identified
+snapshot is the supported model.)
 
 ### 2. Python runtime dependencies (PyPI, pinned in the untracked `requirements.txt`)
 
 Imported by the tracked product: **`cryptography`** (Ed25519 identity — pinned
 `cryptography==44.0.0`, added with sign-off this programme), **`fastapi`**,
-**`uvicorn`**, **`pydantic`** (the workbench HTTP boundary). `playwright` is an
-optional test-only dependency for the browser E2E journeys. Python ≥ 3.12.
+**`uvicorn`**, **`pydantic`**, **`httpx`** (the workbench HTTP boundary +
+`demo_mission`). `playwright` is an optional test-only dependency for the browser
+E2E journeys. Python ≥ 3.12. The pins live in the (untracked) `requirements.txt`
+— reproduction step 3 needs that file (or the equivalent pins here) alongside the
+tracked source.
+
+One **external binary** is on a live path: **`pdftotext`** (poppler-utils),
+invoked for PDF text extraction. It is optional (a missing binary is recorded as
+a bounded processing failure, never absence), but a full-fidelity reconstruction
+should install poppler-utils.
 
 ### 3. Infrastructure / config (untracked, only some paths need them)
 
@@ -71,7 +85,7 @@ product runs file-backed without it; those tests skip), `.env.example`, `docs/`,
 
 1. `git clone` / `git archive` the repository → the tracked `curunir_*` product.
 2. Mount the `argus` kernel snapshot at `argus_demo/argus/` and verify its
-   `kernel_dependency_surface_sha256`.
+   `argus_kernel_tree_sha256`.
 3. Create a Python ≥ 3.12 environment and install the pinned deps
    (`cryptography==44.0.0`, `fastapi`, `uvicorn`, `pydantic`; `playwright` for
    browser tests).

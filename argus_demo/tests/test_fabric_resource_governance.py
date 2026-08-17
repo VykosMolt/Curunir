@@ -117,6 +117,33 @@ def test_rss_doctype_after_large_comment_is_still_refused():
     assert r.error_class == "PARSE"
 
 
+def test_rss_utf16_billion_laughs_is_refused():
+    # a byte-level scan misses a DOCTYPE in UTF-16; expat decodes first and still
+    # refuses it before any expansion (review finding F3).
+    big = "X" * 100_000
+    xml = ('<?xml version="1.0" encoding="UTF-16"?>\n'
+           '<!DOCTYPE r [<!ENTITY a "%s"><!ENTITY b "%s">]>\n'
+           '<rss><channel><item><title>&b;</title></item></channel></rss>\n' % (big, "&a;" * 90))
+    body = b'\xff\xfe' + xml.encode("utf-16-le")
+    r = RssFeedConnector().execute(ConnectorRequest(operation="FETCH", value="http://x/feed"),
+                                   transport=transport(body))
+    assert r.status == "FAILED"
+    assert r.error_class == "PARSE"
+
+
+def test_rss_cdata_quoting_a_doctype_is_not_a_false_positive():
+    # a legitimate feed whose content quotes <!DOCTYPE in CDATA must still parse
+    # (review finding F6 — expat only flags a REAL declaration, not text).
+    body = (b'<?xml version="1.0"?><rss><channel>'
+            b'<item><title>XXE writeup</title><link>http://x/1</link><guid>g1</guid>'
+            b'<description><![CDATA[example: <!DOCTYPE x [<!ENTITY e SYSTEM "file:///etc/passwd">]>]]></description>'
+            b'</item></channel></rss>')
+    r = RssFeedConnector().execute(ConnectorRequest(operation="FETCH", value="http://x/feed"),
+                                   transport=transport(body))
+    assert r.status == "OK"
+    assert r.results[0].title == "XXE writeup"
+
+
 def test_rss_benign_feed_still_parses():
     body = (b'<?xml version="1.0"?><rss><channel>'
             b'<item><title>Hello</title><link>http://x/1</link>'

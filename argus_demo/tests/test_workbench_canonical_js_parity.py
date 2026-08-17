@@ -53,6 +53,10 @@ PARITY_CORPUS = [
     {"z": {"y": {"x": [3, 2, 1]}}},                 # nested, list order preserved
     {"k": ["s", True, None, 7, {"nested": "obj"}]},
     {"": "empty key", "unicode-key-ключ": "v"},
+    # astral-plane keys: JS UTF-16 code-unit sort diverges from Python's
+    # code-point sort unless the serializer compares code points (review F7)
+    {"\U0001F600": 2, "￿": 1, "z": 3},
+    {"\U0001F680": "a", "\U0001F600": "b", "m": "c"},
     {"actor_id": "analyst-a", "nonce": "abc123",
      "purpose": "curunir-authenticate"},            # exact challenge payload
     {"actor_id": "analyst-b", "actor_kind": "HUMAN",

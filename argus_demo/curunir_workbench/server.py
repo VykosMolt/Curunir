@@ -564,7 +564,6 @@ def create_app(mission_root: str | Path, actors_path: str | Path,
         One active signing key per actor (per device): a genuinely new public
         key rotates the previous one (its past signatures stay verifiable);
         re-enrolling the same key is idempotent."""
-        from curunir_identity.crypto import key_id_for
         ctx = context(request)
         try:
             pub = body.public_key_hex.strip().lower()
@@ -575,28 +574,36 @@ def create_app(mission_root: str | Path, actors_path: str | Path,
             raise HTTPException(status_code=400, detail="public key must be 32 bytes (64 hex)")
         s = fresh_store()
         key_registry = KeyRegistry(s, marking=_default_marking(), now_fn=_identity_now)
-        existing = key_registry.active_key_for(ctx.actor_id)
-        if existing is not None and existing["key_id"] != key_id_for(pub):
-            record = key_registry.rotate(actor_id=ctx.actor_id, new_public_key_hex=pub)
-        else:
+        # add this device's key as one of the actor's active keys; the registry
+        # refuses a public key already owned by a DIFFERENT actor (no cross-actor
+        # key hijack) and never rotates/retires another key as a side effect.
+        try:
             record = key_registry.enroll(actor_id=ctx.actor_id,
                                          actor_kind=ctx.actor_kind, public_key_hex=pub)
+        except ValueError as error:
+            raise HTTPException(status_code=409, detail=str(error))
         return {"key_id": record["key_id"], "actor_id": ctx.actor_id,
                 "actor_kind": record["actor_kind"], "status": record["status"]}
 
     @app.get("/api/auth/time")
-    def cmd_server_time():
+    def cmd_server_time(request: Request):
         """The server's clock, so a signing client binds a timestamp sourced
         from server time (kept within the verifier's skew bound) rather than an
         unsynchronized browser wall clock. The signed timestamp is still bounded
-        to ±MAX_CLOCK_SKEW at verification; see F-07 residual."""
+        to ±MAX_CLOCK_SKEW at verification; see F-07 residual. Bearer-gated so it
+        is not an open, unauthenticated endpoint."""
+        context(request)
         return {"now": _identity_now()}
 
     class ChallengeBody(BaseModel):
         actor_id: str
 
     @app.post("/api/auth/challenge")
-    def cmd_challenge(body: ChallengeBody):
+    def cmd_challenge(request: Request, body: ChallengeBody):
+        # bearer-gated: only an authenticated actor may mint challenges, so an
+        # anonymous flood cannot grow the pending-challenge map (which is also
+        # pruned + hard-capped server-side).
+        context(request)
         return app.state.sessions.issue_challenge(body.actor_id)
 
     class AuthenticateBody(BaseModel):

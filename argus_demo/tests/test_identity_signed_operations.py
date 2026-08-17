@@ -258,6 +258,41 @@ def test_full_mission_survives_signed_approval_crash_recovery_and_restore(tmp_pa
     assert claim_id in restored.current_claims()
 
 
+def test_four_eyes_survives_a_crash_that_loses_the_submitted_disposition(tmp_path, monkeypatch):
+    # review C-4/M-3 (CRITICAL/MAJOR): submit_report writes the IN_REVIEW version
+    # then the SUBMITTED disposition. A crash between them must NOT let the
+    # submitter self-approve — the version-transition event's actor (durable
+    # append #1) keeps the submitter in the separation-of-duties set.
+    root, store, clock, claim_id, actors_path = _mission(tmp_path)
+    authz = ActorRegistry(actors_path)
+    # analyst-a drafts; analyst-b submits (a different actor)
+    ctx_a = _cc(store, root, authz, "analyst-a", clock)
+    sections = [{"kind": "key_judgments", "title": "KJ", "sentences": [
+        {"text": "Acme holds an ISSUED registration.", "status": "SUPPORTED",
+         "basis_refs": [claim_id]}]}]
+    report = commands.create_report(ctx_a, title="R", question="?", sections=sections)
+    rid = report["report_id"]
+
+    # crash between submit's two appends: the SUBMITTED disposition is lost
+    import curunir_workbench.reports as reports_mod
+
+    def _crash_disposition(*args, **kwargs):
+        raise RuntimeError("killed before the SUBMITTED disposition append")
+    monkeypatch.setattr(reports_mod, "_disposition", _crash_disposition)
+    ctx_b = _cc(store, root, authz, "analyst-b", clock)
+    with pytest.raises(RuntimeError):
+        commands.submit_report(ctx_b, rid, expected_version=1)
+    monkeypatch.undo()
+
+    reopened = WorkbenchStore(root / "store")
+    assert reopened.current_reports()[rid]["status"] == "IN_REVIEW"        # submission took effect
+    assert not reopened.report_dispositions(rid)                            # but no disposition record
+    # analyst-b (the submitter) still cannot approve their own submission
+    ctx_b2 = _cc(reopened, root, authz, "analyst-b", clock)
+    with pytest.raises(PermissionError, match="separation of duties"):
+        commands.approve_report(ctx_b2, rid, expected_version=2)
+
+
 def test_service_identity_cannot_satisfy_human_only_approval(tmp_path):
     root, store, clock, claim_id, actors_path = _mission(tmp_path)
     ops, registry, sessions, authz = _ops(store, root, clock, actors_path)

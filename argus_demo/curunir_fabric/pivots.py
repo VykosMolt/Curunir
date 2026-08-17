@@ -10,6 +10,7 @@ can continue from what it found.
 """
 from __future__ import annotations
 
+from dataclasses import replace
 from urllib.parse import urlparse
 
 from argus.source_intelligence.models import digest_id
@@ -42,19 +43,28 @@ def propose_pivots(store: FabricStore, outcome: ExecutionResult, *, subject: str
     if not outcome.manifestations:
         return []
     evidence = tuple(item.manifestation_id for item in outcome.manifestations)
-    pivots: list[PivotEdge] = []
+    # dedup AND cap inline so a source-controlled response never materialises an
+    # unbounded proposal list in memory (only the appends were bounded before).
+    seen: dict[str, PivotEdge] = {}
+    capped = [False]
 
     def add(from_kind: str, from_ref: str, to_kind: str, to_ref: str,
             pivot_type: str, rationale: str) -> None:
         if not to_ref or from_ref == to_ref:
             return
-        pivots.append(PivotEdge(
-            pivot_id=digest_id("pivot", from_kind, from_ref, to_kind, to_ref, pivot_type),
+        pivot_id = digest_id("pivot", from_kind, from_ref, to_kind, to_ref, pivot_type)
+        if pivot_id in seen:
+            return
+        if len(seen) >= MAX_PIVOTS_PER_RESPONSE:
+            capped[0] = True
+            return
+        seen[pivot_id] = PivotEdge(
+            pivot_id=pivot_id,
             from_kind=from_kind, from_ref=from_ref, to_kind=to_kind, to_ref=to_ref,
             pivot_type=pivot_type, rationale=rationale,
             evidence_manifestation_ids=evidence,
             origin="RULE", status="PROPOSED", created_time=now, marking=marking,
-        ))
+        )
 
     for result in outcome.results:
         for scheme, value in result.identifiers:
@@ -77,11 +87,16 @@ def propose_pivots(store: FabricStore, outcome: ExecutionResult, *, subject: str
                 add("ENTITY", subject, "ENTITY", value, "ALIAS_OF",
                     f"{key} recorded on {result.native_id}")
 
-    deduped: dict[str, PivotEdge] = {}
-    for pivot in pivots:
-        deduped.setdefault(pivot.pivot_id, pivot)
-    # bound the appends a single response can drive (source-controlled fan-out)
-    recorded = list(deduped.values())[:MAX_PIVOTS_PER_RESPONSE]
+    recorded = list(seen.values())
+    if capped[0] and recorded:
+        # the cap fired: the last recorded proposal carries a visible note so the
+        # truncation is not silent. Pivots are advisory PROPOSED candidates for a
+        # human and 500 is generous, so dropping the tail is low-harm; the note
+        # tells an operator the response held more candidates than were recorded.
+        recorded[-1] = replace(
+            recorded[-1],
+            rationale=f"{recorded[-1].rationale} [pivot proposals for this "
+                      f"response were capped at {MAX_PIVOTS_PER_RESPONSE}]")
     for pivot in recorded:
         store.append("FABRIC_PIVOT_RECORDED", pivot, recorded_time=now, actor=actor)
     return recorded

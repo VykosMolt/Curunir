@@ -14,6 +14,18 @@
 // (undefined) — so the browser never signs a payload it cannot serialize
 // identically to the verifier.
 
+// Compare two strings by Unicode code point (Array.from iterates code points,
+// surrogate-pair-aware), matching Python's string ordering used by sort_keys.
+function codePointCompare(a, b) {
+  const ca = Array.from(a), cb = Array.from(b);
+  const n = Math.min(ca.length, cb.length);
+  for (let i = 0; i < n; i++) {
+    const d = ca[i].codePointAt(0) - cb[i].codePointAt(0);
+    if (d !== 0) return d;
+  }
+  return ca.length - cb.length;
+}
+
 function canonical(value) {
   if (value === null) return "null";
   const t = typeof value;
@@ -41,8 +53,12 @@ function canonical(value) {
     return "[" + value.map(canonical).join(",") + "]";
   }
   if (t === "object") {
-    // reject non-plain objects that would not round-trip as JSON maps
-    const keys = Object.keys(value).sort(); // code-unit sort == Python sort_keys for ASCII keys
+    // Sort keys by Unicode CODE POINT, to match Python's sort_keys (which
+    // compares strings by code point). The default JS .sort() compares UTF-16
+    // code UNITS, which diverges for astral-plane (>= U+10000) keys — harmless
+    // for today's fixed-ASCII signed payloads, but a latent trap for any future
+    // signed command carrying a data-keyed map (review finding F7).
+    const keys = Object.keys(value).sort(codePointCompare);
     const parts = [];
     for (const k of keys) {
       const v = value[k];

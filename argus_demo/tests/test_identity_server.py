@@ -100,7 +100,7 @@ def test_http_challenge_authenticate_and_signed_approval(tmp_path):
     client = TestClient(app)
 
     # 1. challenge
-    ch = client.post("/api/auth/challenge", json={"actor_id": "analyst-b"}).json()
+    ch = client.post("/api/auth/challenge", json={"actor_id": "analyst-b"}, headers={"Authorization": "Bearer tok-b"}).json()
     assert ch["nonce"]
     # 2. the client signs the challenge with its private key
     from curunir_identity.sessions import SessionManager
@@ -125,7 +125,58 @@ def test_http_challenge_authenticate_and_signed_approval(tmp_path):
     assert resp.json()["status"] == "APPROVED"
 
     # a forged signature is refused (401)
-    ch2 = client.post("/api/auth/challenge", json={"actor_id": "analyst-b"}).json()
+    ch2 = client.post("/api/auth/challenge", json={"actor_id": "analyst-b"}, headers={"Authorization": "Bearer tok-b"}).json()
     forged = client.post("/api/auth/authenticate", json={
         "actor_id": "analyst-b", "nonce": ch2["nonce"], "signature": "00" * 64})
     assert forged.status_code == 401
+
+
+def _challenge_auth(client, actor_id, pem, token):
+    from curunir_identity.sessions import SessionManager
+    ch = client.post("/api/auth/challenge", json={"actor_id": actor_id},
+                     headers={"Authorization": f"Bearer {token}"}).json()
+    return client.post("/api/auth/authenticate", json={
+        "actor_id": actor_id, "nonce": ch["nonce"],
+        "signature": sign(pem, SessionManager.challenge_payload(actor_id, ch["nonce"]))})
+
+
+def test_enroll_refuses_cross_actor_key_hijack(tmp_path):
+    # review F1 (CRITICAL): a bearer holder must NOT be able to enrol / hijack a
+    # key already owned by another actor by resubmitting that actor's PUBLIC key.
+    root, actors_path, clock, report_id, version, pem_b = _build(tmp_path)
+    client = TestClient(create_app(root, actors_path, now_fn=clock.now))
+    reg = KeyRegistry(WorkbenchStore(root / "store"))
+    pub_b = reg.active_keys_for("analyst-b")[0]["public_key"]
+    key_id_b = reg.active_keys_for("analyst-b")[0]["key_id"]
+
+    # analyst-a submits analyst-b's public key → refused, no cross-actor effect
+    r = client.post("/api/auth/enroll", json={"public_key_hex": pub_b},
+                    headers={"Authorization": "Bearer tok-a"})
+    assert r.status_code == 409, r.text
+
+    reg2 = KeyRegistry(WorkbenchStore(root / "store"))
+    assert reg2.current(key_id_b)["actor_id"] == "analyst-b"      # still owned by b
+    assert reg2.current(key_id_b)["status"] == "ACTIVE"           # not retired
+    assert _challenge_auth(client, "analyst-b", pem_b, "tok-b").status_code == 200  # b still signs
+
+
+def test_two_device_keys_for_one_actor_both_authenticate(tmp_path):
+    # review F2 (MAJOR): a second enrolled device must not brick the first.
+    root, actors_path, clock, report_id, version, pem_b = _build(tmp_path)
+    client = TestClient(create_app(root, actors_path, now_fn=clock.now))
+    pem2, pub2 = generate_keypair()
+    r = client.post("/api/auth/enroll", json={"public_key_hex": pub2},
+                    headers={"Authorization": "Bearer tok-b"})
+    assert r.status_code == 200, r.text
+    # both device keys authenticate; neither locks the other out
+    assert _challenge_auth(client, "analyst-b", pem_b, "tok-b").status_code == 200
+    assert _challenge_auth(client, "analyst-b", pem2, "tok-b").status_code == 200
+    assert _challenge_auth(client, "analyst-b", pem_b, "tok-b").status_code == 200  # first still live
+
+
+def test_challenge_requires_a_bearer(tmp_path):
+    # review F5: the challenge endpoint is no longer an anonymous, unbounded path
+    root, actors_path, clock, report_id, version, pem_b = _build(tmp_path)
+    client = TestClient(create_app(root, actors_path, now_fn=clock.now))
+    assert client.post("/api/auth/challenge", json={"actor_id": "analyst-b"}).status_code == 401
+    assert client.get("/api/auth/time").status_code == 401

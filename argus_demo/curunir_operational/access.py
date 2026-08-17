@@ -13,6 +13,10 @@ from typing import Any, Mapping
 
 ROLE_RANK = {"OBSERVER": 0, "ANALYST": 1, "SUPERVISOR": 2}
 ACTOR_KINDS = ("HUMAN", "SERVICE")
+# a partial/foreign record missing min_role is treated as the MOST restrictive
+# role — never OBSERVER — so reconstructing a marking cannot launder a can_view
+# deny (which fail-closes on a missing min_role) into an allow.
+_MOST_RESTRICTIVE_ROLE = max(ROLE_RANK, key=ROLE_RANK.get)
 
 
 @dataclass(frozen=True)
@@ -38,8 +42,12 @@ class Marking:
 
 
 def marking_from_record(record: Mapping[str, Any]) -> Marking:
+    # min_role fails closed on a missing value (M-5): never default to the
+    # least-restrictive OBSERVER, which would make a re-marked partial record
+    # viewable where the raw record was correctly denied.
     return Marking(record["owning_authority"], tuple(record.get("compartments", ())),
-                   tuple(record.get("releasability", ())), record.get("min_role", "OBSERVER"),
+                   tuple(record.get("releasability", ())),
+                   record.get("min_role") or _MOST_RESTRICTIVE_ROLE,
                    tuple(record.get("caveats", ())))
 
 

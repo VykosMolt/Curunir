@@ -194,6 +194,25 @@ def test_connector_exception_is_contained_as_source_failed(ctx):
     assert "RuntimeError" in outcome.execution.error_detail
 
 
+def _oserror_transport(*, url, request_headers, timeout_seconds, maximum_bytes):
+    raise OSError("disk full")  # OUR environment, not the source's fault
+
+
+def test_infrastructure_fault_propagates_not_attributed_to_source(ctx):
+    # review F8: an OSError/MemoryError/StoreError must propagate, NOT be recorded
+    # as SOURCE_FAILED (which would defame the source's health).
+    ctx.transports["gleif-lei-v1"] = _oserror_transport
+    query = QuerySpec(query_id="q-io", family="EXACT_NAME", value="Severstal", language="",
+                      script="", operation="SEARCH", source_id="gleif",
+                      time_bounds=(None, None), origin="RULE", origin_detail="t",
+                      rationale="r", derived_from=())
+    with pytest.raises(OSError):
+        execute_single(ctx, query=query, source_id="gleif")
+    # no SOURCE_FAILED / FAILURE status was recorded against the source
+    assert not [r for r in ctx.store.records_of("fabric_source_status")
+                if r["source_id"] == "gleif" and r["kind"] == "FAILURE"]
+
+
 def test_one_bad_source_does_not_abort_the_plan(ctx):
     # §7.3: one crashing source must not silently skip every remaining query.
     need = _need(need_id="need-boom")

@@ -14,6 +14,7 @@ alone. See CURUNIR_RECONSTRUCTION.md.
 """
 from __future__ import annotations
 
+import hashlib
 import os
 import shutil
 import subprocess
@@ -26,6 +27,21 @@ pytestmark = pytest.mark.no_db
 
 REPO_PKG = Path(__file__).resolve().parent.parent          # …/argus_demo
 HAVE_GIT = shutil.which("git") is not None
+
+# the documented identity of the mounted kernel snapshot (CURUNIR_RECONSTRUCTION.md).
+# A whole-tree hash so it identifies the ENTIRE snapshot, not just the directly
+# imported surface (the product transitively loads ~31 kernel modules).
+KERNEL_TREE_SHA256 = "4c173df7412952b8318b7838a06ee991638fd9144eee2be36232c64aecfb7906"
+
+
+def _tree_sha256(root: Path) -> str:
+    h = hashlib.sha256()
+    for p in sorted(q for q in root.rglob("*.py") if "__pycache__" not in q.parts):
+        h.update(p.relative_to(root).as_posix().encode())
+        h.update(b"\0")
+        h.update(p.read_bytes())
+        h.update(b"\0")
+    return h.hexdigest()
 
 
 def _git_root() -> Path | None:
@@ -103,6 +119,14 @@ def test_product_reconstructs_from_tracked_state_plus_documented_kernel(tmp_path
     if not (REPO_PKG / "argus").is_dir():
         pytest.skip("argus kernel snapshot not present to mount")
     shutil.copytree(REPO_PKG / "argus", recon_pkg / "argus")
+
+    # the mounted kernel must BE the documented, identified snapshot — a
+    # whole-tree hash covering every module the product transitively loads, not
+    # just the directly-imported surface (review M-6).
+    mounted_hash = _tree_sha256(recon_pkg / "argus")
+    assert mounted_hash == KERNEL_TREE_SHA256, (
+        f"mounted kernel snapshot does not match the documented identity:\n"
+        f"  expected {KERNEL_TREE_SHA256}\n  got      {mounted_hash}")
 
     # 4. run the reconstruction in the isolated tree, with a clean import path
     #    (PYTHONPATH empty; the script inserts ONLY the reconstructed pkg dir).

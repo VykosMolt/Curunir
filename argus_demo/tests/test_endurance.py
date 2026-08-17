@@ -104,27 +104,38 @@ def test_sustained_operation_stays_coherent(tmp_path, capsys):
     (custody / "sha256" / pdig[:2] / pdig[2:4] / pdig).unlink()
 
     rss0, fd0 = _rss_kb(), _fd_count()
+    fd_samples = []
+    poison_attempts = 0
     latencies = []
     for i in range(CYCLES):
         t0 = time.perf_counter()
         _plant(store, custody, now, _gleif_body(i), f"lei/ENDUR{i:04d}")  # collection
-        pipeline.process_new_evidence()                                    # semantic
+        result = pipeline.process_new_evidence()                           # semantic
+        # count ACTUAL processing attempts on the poison (not just review records)
+        if any(p["manifestation_id"] == poison_id for p in result["processed"]):
+            poison_attempts += 1
         _ = store.current_objectives()                                     # operator read
         create_objective(actx, mission_context="endur", statement=f"objective {i}")  # write
         latencies.append(time.perf_counter() - t0)
+        if i % 20 == 0:
+            fd_samples.append(_fd_count())
     rss1, fd1 = _rss_kb(), _fd_count()
 
     # ---- coherence invariants ----
-    assert store.verify_chain()["valid"], "hash chain must stay valid under sustained load"
-    # no descriptor leak (a handful of slack for the interpreter)
-    assert fd1 <= fd0 + 8, f"file-descriptor leak: {fd0} -> {fd1}"
-    # the poison manifestation was retried at most the cap, not every cycle
-    poison_failures = [r for r in store.records_of("review_item")
-                       if r.get("subject_id") == poison_id and r["kind"] == "PROCESSING_FAILED"]
-    assert len(poison_failures) <= MAX_PROCESSING_ATTEMPTS, \
-        f"poison retry storm: {len(poison_failures)} attempts over {CYCLES} cycles"
-    # every cycle's real work landed exactly once (no duplication)
-    assert len([o for o in store.current_objectives().values()
+    assert store.verify_chain()["valid"], "in-memory chain must stay valid under load"
+    # DURABILITY: reopen the store from the ON-DISK log (full replay from scratch)
+    # and re-verify — proves the persisted log, not just the in-process instance.
+    reopened = WorkbenchStore(root)
+    assert reopened.verify_chain()["valid"], "on-disk chain must replay valid"
+    assert reopened.head() == store.head(), "on-disk head must match in-memory"
+    # no descriptor leak: fd stays in a tight band, not growing with the log
+    assert max(fd_samples + [fd1]) <= fd0 + 3, \
+        f"file-descriptor growth: {fd0} -> samples {fd_samples} -> {fd1}"
+    # the poison was auto-retried at most the cap, not every cycle (no storm)
+    assert poison_attempts <= MAX_PROCESSING_ATTEMPTS, \
+        f"poison retry storm: {poison_attempts} attempts over {CYCLES} cycles"
+    # every cycle's real work landed exactly once (no duplication), on disk too
+    assert len([o for o in reopened.current_objectives().values()
                 if o["mission_context"] == "endur"]) == CYCLES
     # the run stayed usable (a generous wall-clock budget for this bounded size)
     assert sum(latencies) < 90.0, f"endurance run too slow: {sum(latencies):.1f}s"

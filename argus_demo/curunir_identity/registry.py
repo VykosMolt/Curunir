@@ -61,15 +61,29 @@ class KeyRegistry:
 
     def enroll(self, *, actor_id: str, actor_kind: str, public_key_hex: str,
                now: str | None = None) -> dict[str, Any]:
-        """Enroll a public key for an actor (idempotent by key id). The key id
-        is a digest of the public key, so it can never be claimed for a
-        different key."""
+        """Enroll a public key as an ACTIVE signing key for an actor. An actor
+        may hold several active keys (one per device); revoking one never
+        affects the others.
+
+        A key id is a digest of the public key, so a key family has ONE owner
+        forever: enrolling a public key already enrolled to a DIFFERENT actor is
+        refused (a bearer cannot hijack another actor's key by resubmitting their
+        public key). Re-enrolling one's own ACTIVE key is idempotent; re-enrolling
+        one's own retired/revoked key is refused (enroll a fresh key) so an
+        enrolment can never silently resurrect a retired or compromised key."""
         now = now or (self._now_fn() if self._now_fn else None)
         if now is None:
             raise ValueError("enroll needs a timestamp")
         key_id = key_id_for(public_key_hex)
-        if self.current(key_id) is not None:
-            return self.current(key_id)
+        existing = self.current(key_id)
+        if existing is not None:
+            if existing["actor_id"] != actor_id:
+                raise ValueError(
+                    "public key is already enrolled to a different actor")
+            if existing["status"] == "ACTIVE":
+                return existing  # idempotent re-enrolment of an own active key
+            raise ValueError(
+                f"this key is {existing['status']} for {actor_id}; enroll a fresh key")
         return self._append(ActorKeyRecord(
             key_id=key_id, version=1, actor_id=actor_id, actor_kind=actor_kind,
             public_key=public_key_hex, status="ACTIVE", enrolled_time=now,
@@ -148,12 +162,20 @@ class KeyRegistry:
 
     # ---- lookups ---------------------------------------------------------
 
+    def active_keys_for(self, actor_id: str) -> list[dict]:
+        """ALL currently-ACTIVE keys for an actor (one per enrolled device).
+        Authentication verifies a challenge signature against each, so a second
+        device never invalidates the first."""
+        keys = [self.current(kid) for kid in
+                {r["key_id"] for r in self.store.records_of("actor_key")
+                 if r["actor_id"] == actor_id}]
+        return [k for k in keys if k and k["status"] == "ACTIVE"]
+
     def active_key_for(self, actor_id: str) -> dict | None:
-        """The one ACTIVE key currently enrolled for an actor (latest wins)."""
-        active = [self.current(kid) for kid in
-                  {r["key_id"] for r in self.store.records_of("actor_key")
-                   if r["actor_id"] == actor_id}]
-        active = [k for k in active if k and k["status"] == "ACTIVE"]
+        """The latest ACTIVE key for an actor (latest wins). Prefer
+        active_keys_for for authentication; this is for callers that need a
+        single representative key (e.g. rotate)."""
+        active = self.active_keys_for(actor_id)
         return max(active, key=lambda k: k["enrolled_time"]) if active else None
 
     def public_key_of(self, key_id: str) -> str | None:

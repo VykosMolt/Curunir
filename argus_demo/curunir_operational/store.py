@@ -12,6 +12,7 @@ from __future__ import annotations
 import hashlib
 import json
 import shutil
+import time
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -83,6 +84,15 @@ class MissionDataStore:
         if not meta_path.exists():
             raise StoreError(f"not a mission data store: {self.root}")
         self.meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        # migration safety at EVERY open (not only import_from): a store written
+        # under a contract this code cannot interpret is refused rather than
+        # silently misread — closes the directory-copy / snapshot-restore path
+        # that bypasses import_from's guard.
+        if self.meta.get("contract_version") not in COMPATIBLE_CONTRACT_VERSIONS:
+            raise StoreError(
+                f"store contract version {self.meta.get('contract_version')!r} is "
+                f"not compatible with this code ({CONTRACT_VERSION}); refusing to "
+                f"open rather than misread the log")
         self._events: list[dict[str, Any]] = []
         self._head_hash = CHAIN_GENESIS
         self._last_recorded: str | None = None
@@ -97,21 +107,40 @@ class MissionDataStore:
         if self.events_path.exists():
             raw = self.events_path.read_bytes()
             self._file_offset = len(raw)
-            lines = raw.decode("utf-8").splitlines()
-            for number, line in enumerate(lines, start=1):
+            complete, torn = self._split_log(raw)
+            # a healthy log ends in \n; a non-empty trailing segment is an
+            # incomplete final write (a torn tail) — fail loud so recover_torn_tail
+            # handles it, never accept it as committed state.
+            if torn.strip():
+                raise StoreError(
+                    f"event log ends with a torn line ({self.events_path}); the "
+                    f"final append did not complete (no terminating newline). "
+                    f"Recover with recover_torn_tail(); all prior events remain "
+                    f"valid under the hash chain.")
+            for number, line in enumerate(complete, start=1):
                 if not line.strip():
                     continue
                 try:
-                    event = json.loads(line)
-                except json.JSONDecodeError as exc:
-                    if number == len(lines):
-                        raise StoreError(
-                            f"event log ends with a torn line ({self.events_path}:{number}); the final append "
-                            f"did not complete. Recover by truncating the incomplete last line; all prior "
-                            f"events remain valid under the hash chain.") from exc
-                    raise StoreError(f"event log corrupt at line {number} ({self.events_path})") from exc
+                    event = json.loads(line)  # bytes → UTF-8 handled by json
+                except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+                    raise StoreError(
+                        f"event log corrupt at line {number} ({self.events_path})") from exc
                 self._verify_link(event, at=f"{self.events_path}:{number}")
                 self._index(event)
+
+    @staticmethod
+    def _split_log(raw: bytes) -> tuple[list[bytes], bytes]:
+        """Split a raw event log into complete (\n-terminated) line-bytes and a
+        trailing torn remainder. Splits on b"\\n" ONLY — never str.splitlines(),
+        which ALSO breaks on U+2028/U+2029/U+0085 that appear raw in canonical
+        JSON string values (ensure_ascii=False), which would otherwise split one
+        committed event into two unparseable pieces. A healthy log ends in \\n,
+        so the trailing segment is b"" when intact and the incomplete final
+        write when torn."""
+        if not raw:
+            return [], b""
+        parts = raw.split(b"\n")
+        return parts[:-1], parts[-1]
 
     @classmethod
     def create(cls, root: str | Path, store_id: str, created_time: str) -> "MissionDataStore":
@@ -147,60 +176,70 @@ class MissionDataStore:
 
         Returns {"recovered": bool, "truncated_bytes": int}.
         """
+        import fcntl
         root = Path(root)
         if not (root / "store_meta.json").exists():
             raise StoreError(f"not a mission data store: {root}")
         events_path = root / "events.jsonl"
-        try:
-            cls(root)  # opens cleanly → nothing to recover
-            return {"recovered": False, "truncated_bytes": 0}
-        except StoreError as open_error:
-            first_error = open_error
-        raw = events_path.read_bytes() if events_path.exists() else b""
-        segments = raw.split(b"\n")
-        last = len(segments) - 1
-        while last >= 0 and segments[last] == b"":
-            last -= 1
-        if last < 0:
-            raise first_error  # empty/whitespace-only: not a torn tail
-        # every line before the last non-empty one must be complete JSON; if an
-        # earlier line is torn, this is mid-file damage, not a crashed tail.
-        for i in range(last):
-            if segments[i].strip() == b"":
-                continue
+        # Hold the SAME exclusive lock the append path uses, for the whole
+        # read-decide-install: a live writer (a concurrent self-healer IS a
+        # process) cannot then be mid-append while we truncate/rename, which
+        # would orphan its committed bytes. A crashed writer's lock was released
+        # on death, so recovery still proceeds.
+        with (root / ".append.lock").open("w") as lock_handle:
+            fcntl.flock(lock_handle, fcntl.LOCK_EX)
             try:
-                json.loads(segments[i])
-            except json.JSONDecodeError as exc:
+                cls(root)  # opens cleanly under the lock → nothing to recover
+                return {"recovered": False, "truncated_bytes": 0}
+            except StoreError:
+                pass
+            raw = events_path.read_bytes() if events_path.exists() else b""
+            complete, torn = cls._split_log(raw)
+            # the recoverable case is EXACTLY a non-empty torn tail (an incomplete
+            # final write, i.e. a log not ending in \n). Anything else — a
+            # complete-but-unparseable line, a chain break among complete lines,
+            # an incompatible contract version — is not a torn-tail crash.
+            if not torn.strip():
                 raise StoreError(
-                    f"event log has damage at line {i + 1} that is not a torn "
-                    f"tail (an earlier line is incomplete); refusing to "
-                    f"auto-recover — this is not a crash signature") from exc
-        # the last non-empty line must be the torn one; if it parses, the open
-        # failure is a chain break among complete lines = tampering.
-        try:
-            json.loads(segments[last])
-            raise StoreError(
-                "the final line is complete JSON, so the store's open failure is "
-                "not a torn-tail crash (possible tampering or a diverged chain); "
-                "refusing to auto-recover") from first_error
-        except json.JSONDecodeError:
-            pass  # confirmed torn tail
-        # byte-exact truncation: keep everything up to the start of the torn line
-        offset = sum(len(segments[i]) + 1 for i in range(last))
-        kept, torn_bytes = raw[:offset], len(raw) - sum(len(segments[i]) + 1 for i in range(last))
-        backup = events_path.with_name(events_path.name + ".torn")
-        tmp = events_path.with_name(events_path.name + ".recovering")
-        tmp.write_bytes(kept)
-        events_path.replace(backup)   # move the crashed original aside (forensics)
-        tmp.replace(events_path)      # install the truncated log
-        try:
-            cls(root)                 # verify the recovered store opens cleanly
-        except StoreError as exc:
-            backup.replace(events_path)  # roll back; original is preserved
-            raise StoreError(
-                "torn-tail truncation did not yield a clean store (damage is "
-                "deeper than the last line); original restored, not modified") from exc
-        return {"recovered": True, "truncated_bytes": torn_bytes}
+                    "store does not open and has no torn tail (no incomplete "
+                    "final write) to recover; this is not a crash signature "
+                    "(corruption, tampering, or an incompatible version) — "
+                    "refusing to auto-recover")
+            # every complete line must parse; an earlier unparseable line is
+            # mid-file damage beyond the torn tail.
+            for i, line in enumerate(complete):
+                if not line.strip():
+                    continue
+                try:
+                    json.loads(line)
+                except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+                    raise StoreError(
+                        f"damage at line {i + 1} beyond the torn tail; refusing "
+                        f"to auto-recover — this is not a crash signature") from exc
+            # byte-exact: keep everything up to and including the last \n
+            kept = raw[: len(raw) - len(torn)]
+            backup = events_path.with_name(events_path.name + ".torn")
+            if backup.exists():  # never clobber an earlier crash's forensic remainder
+                backup = events_path.with_name(f"{events_path.name}.torn.{int(time.time())}")
+            tmp = events_path.with_name(events_path.name + ".recovering")
+            # install atomically: COPY the crashed original aside first (so
+            # events.jsonl is never absent — a crash here leaves the torn
+            # original in place, re-recoverable), then ONE atomic rename.
+            try:
+                shutil.copyfile(events_path, backup)
+                tmp.write_bytes(kept)
+                tmp.replace(events_path)
+            except BaseException:
+                tmp.unlink(missing_ok=True)
+                raise
+            try:
+                cls(root)  # verify the recovered store opens cleanly
+            except BaseException as exc:
+                shutil.copyfile(backup, events_path)  # restore original; never leave worse
+                raise StoreError(
+                    "torn-tail truncation did not yield a clean store (damage is "
+                    "deeper than the last line); original restored, not modified") from exc
+            return {"recovered": True, "truncated_bytes": len(torn)}
 
     def _verify_link(self, event: Mapping[str, Any], *, at: str) -> None:
         """Fail closed on load and catch-up: a broken chain refuses service
@@ -222,19 +261,19 @@ class MissionDataStore:
         with self.events_path.open("rb") as handle:
             handle.seek(self._file_offset)
             tail = handle.read()
-        lines = tail.decode("utf-8").splitlines()
-        for number, line in enumerate(lines, start=1):
+        complete, torn = self._split_log(tail)
+        if torn.strip():
+            raise StoreError(
+                f"event log ends with a torn line ({self.events_path}); another "
+                f"writer's final append did not complete. Recover with "
+                f"recover_torn_tail(); all prior events remain valid under the "
+                f"hash chain.")
+        for line in complete:
             if not line.strip():
                 continue
             try:
                 event = json.loads(line)
-            except json.JSONDecodeError as exc:
-                if number == len(lines):
-                    raise StoreError(
-                        f"event log ends with a torn line ({self.events_path}); another "
-                        f"writer's final append did not complete. Recover by truncating "
-                        f"the incomplete last line; all prior events remain valid under "
-                        f"the hash chain.") from exc
+            except (json.JSONDecodeError, UnicodeDecodeError) as exc:
                 raise StoreError(f"event log corrupt during catch-up ({self.events_path})") from exc
             self._verify_link(event, at=f"catch-up seq {event.get('seq')}")
             if event.get("seq") != len(self._events) + 1:

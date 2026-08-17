@@ -18,6 +18,8 @@ from argus.source_intelligence.custody import SourceCustodyStore
 from argus.source_intelligence.models import RetrievalAttempt, digest_id
 from argus.source_intelligence.policy import POLICY_VERSION, acquisition_eligible, classify_access
 
+from curunir_operational.store import StoreError
+
 from . import ABSENCE_SEMANTICS, PACKAGE_VERSION
 from .connectors import BUILTIN_CONNECTORS
 from .connectors.base import ConnectorRequest, ConnectorResponse, NativeResult, SourceConnector, utc_now
@@ -235,7 +237,12 @@ def execute_single(ctx: ExecutionContext, *, query: QuerySpec, source_id: str,
                 source_time=single.source_time if single else None,
                 archive_capture_time=capture_time,
             ),)
-    except Exception as error:  # noqa: BLE001 — deliberate acquisition-edge containment
+    except (OSError, MemoryError, StoreError):
+        # an infrastructure fault (disk full, out of memory, a store error) is
+        # OUR environment, NOT the source's fault — propagate it honestly rather
+        # than recording SOURCE_FAILED and defaming the source's health (F8).
+        raise
+    except Exception as error:  # noqa: BLE001 — hostile-content containment at the acquisition edge
         return finish("SOURCE_FAILED", error_class="CONNECTOR_ERROR",
                       error_detail=f"{type(error).__name__}: {error}"[:500],
                       policy_decision=decision.decision)

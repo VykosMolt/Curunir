@@ -45,6 +45,18 @@ def test_missing_marking_is_not_viewable(tmp_path):
     assert can_view(None, ctx) is False
 
 
+def test_marking_reconstruction_does_not_launder_a_missing_min_role(tmp_path):
+    # review M-5: reconstructing a partial marking (no min_role) must NOT lower it
+    # to OBSERVER and turn a can_view deny into an allow.
+    from curunir_operational.access import marking_from_record
+    ctx = AccessContext("c", "a", "HUMAN", ("OBSERVER",), releasability=("PUBLIC",))
+    partial = {"owning_authority": "auth", "releasability": ["PUBLIC"]}  # no min_role
+    assert can_view(partial, ctx) is False                 # raw: fail-closed
+    remade = marking_from_record(partial)
+    assert remade.min_role == "SUPERVISOR"                 # most restrictive, not OBSERVER
+    assert can_view(remade.to_record(), ctx) is False      # still denied after round-trip
+
+
 # ---- additive-field backward compatibility ---------------------------------
 
 def test_old_execution_record_without_truncated_replays_safely(tmp_path):

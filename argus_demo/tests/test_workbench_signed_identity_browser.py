@@ -191,11 +191,11 @@ async ({reportId, version, actorId, actorKind, missionId, overrides, tamper, pos
   const rawPub = new Uint8Array(await crypto.subtle.exportKey('raw', kp.publicKey));
   const hex = (u8)=>Array.from(u8).map(b=>b.toString(16).padStart(2,'0')).join('');
   await jpost('/api/auth/enroll', {public_key_hex: hex(rawPub)}, true);
-  const ch = (await jpost('/api/auth/challenge', {actor_id: actorId}, false)).body;
+  const ch = (await jpost('/api/auth/challenge', {actor_id: actorId}, true)).body;
   const chSig = hex(new Uint8Array(await crypto.subtle.sign({name:'Ed25519'}, kp.privateKey,
       canonicalBytes({purpose:'curunir-authenticate', actor_id: actorId, nonce: ch.nonce}))));
   const auth = (await jpost('/api/auth/authenticate', {actor_id: actorId, nonce: ch.nonce, signature: chSig}, false)).body;
-  const now = (await (await fetch('/api/auth/time')).json()).now;
+  const now = (await (await fetch('/api/auth/time', {headers:{'Authorization':'Bearer '+bearer}})).json()).now;
   let payload = {
     actor_id: actorId, actor_kind: actorKind, action_type: 'approve_report',
     target_kind: 'workbench_report', target_id: reportId,
@@ -285,7 +285,7 @@ def test_revoked_key_blocks_signed_action(browser, env):
       // stash the CryptoKey (non-extractable, structured-cloneable) for reuse
       const db = await new Promise((res,rej)=>{const q=indexedDB.open('revoke-test',1);q.onupgradeneeded=()=>q.result.createObjectStore('k');q.onsuccess=()=>res(q.result);q.onerror=()=>rej(q.error);});
       await new Promise((res,rej)=>{const t=db.transaction('k','readwrite').objectStore('k').put(kp.privateKey,'pk');t.onsuccess=()=>res();t.onerror=()=>rej(t.error);});
-      const ch = (await jpost('/api/auth/challenge', {actor_id:'analyst-b'}, false)).body;
+      const ch = (await jpost('/api/auth/challenge', {actor_id:'analyst-b'}, true)).body;
       const chSig = hex(new Uint8Array(await crypto.subtle.sign({name:'Ed25519'}, kp.privateKey,
           canonicalBytes({purpose:'curunir-authenticate', actor_id:'analyst-b', nonce: ch.nonce}))));
       const auth = (await jpost('/api/auth/authenticate', {actor_id:'analyst-b', nonce: ch.nonce, signature: chSig}, false)).body;
@@ -308,10 +308,11 @@ def test_revoked_key_blocks_signed_action(browser, env):
     out = page.evaluate(r"""
     async ({reportId, version, missionId, sessionId}) => {
       const { canonicalBytes } = await import('/static/js/canonical.js');
+      const bearer = sessionStorage.getItem('curunir-token');
       const hex = (u8)=>Array.from(u8).map(b=>b.toString(16).padStart(2,'0')).join('');
       const db = await new Promise((res,rej)=>{const q=indexedDB.open('revoke-test',1);q.onsuccess=()=>res(q.result);q.onerror=()=>rej(q.error);});
       const pk = await new Promise((res,rej)=>{const t=db.transaction('k','readonly').objectStore('k').get('pk');t.onsuccess=()=>res(t.result);t.onerror=()=>rej(t.error);});
-      const now = (await (await fetch('/api/auth/time')).json()).now;
+      const now = (await (await fetch('/api/auth/time', {headers:{'Authorization':'Bearer '+bearer}})).json()).now;
       const payload = {actor_id:'analyst-b', actor_kind:'HUMAN', action_type:'approve_report',
         target_kind:'workbench_report', target_id: reportId,
         target_version_token:`workbench_report:${reportId}@v${version}`, mission_id: missionId,
