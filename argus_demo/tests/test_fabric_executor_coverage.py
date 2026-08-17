@@ -194,23 +194,43 @@ def test_connector_exception_is_contained_as_source_failed(ctx):
     assert "RuntimeError" in outcome.execution.error_detail
 
 
-def _oserror_transport(*, url, request_headers, timeout_seconds, maximum_bytes):
-    raise OSError("disk full")  # OUR environment, not the source's fault
+def _memoryerror_transport(*, url, request_headers, timeout_seconds, maximum_bytes):
+    raise MemoryError("out of memory")  # genuinely-unrecoverable environment fault
 
 
-def test_infrastructure_fault_propagates_not_attributed_to_source(ctx):
-    # review F8: an OSError/MemoryError/StoreError must propagate, NOT be recorded
-    # as SOURCE_FAILED (which would defame the source's health).
-    ctx.transports["gleif-lei-v1"] = _oserror_transport
-    query = QuerySpec(query_id="q-io", family="EXACT_NAME", value="Severstal", language="",
+def _network_error_transport(*, url, request_headers, timeout_seconds, maximum_bytes):
+    raise ConnectionResetError("peer reset")  # an OSError SUBCLASS: a SOURCE fault
+
+
+def test_unrecoverable_infra_fault_propagates_not_attributed_to_source(ctx):
+    # review F8: a genuinely-unrecoverable environment fault (MemoryError/
+    # StoreError) propagates, NOT recorded as SOURCE_FAILED.
+    ctx.transports["gleif-lei-v1"] = _memoryerror_transport
+    query = QuerySpec(query_id="q-mem", family="EXACT_NAME", value="Severstal", language="",
                       script="", operation="SEARCH", source_id="gleif",
                       time_bounds=(None, None), origin="RULE", origin_detail="t",
                       rationale="r", derived_from=())
-    with pytest.raises(OSError):
+    with pytest.raises(MemoryError):
         execute_single(ctx, query=query, source_id="gleif")
-    # no SOURCE_FAILED / FAILURE status was recorded against the source
     assert not [r for r in ctx.store.records_of("fabric_source_status")
                 if r["source_id"] == "gleif" and r["kind"] == "FAILURE"]
+
+
+def test_network_error_is_contained_and_does_not_abort_the_plan(ctx):
+    # review F3-round-B: a source-side network fault (ConnectionReset/Timeout/SSL,
+    # all OSError subclasses) MUST be contained as SOURCE_FAILED, not propagate and
+    # skip every remaining query.
+    need = _need(need_id="need-net")
+    _record_need(ctx.store, need)
+    ctx.transports["gleif-lei-v1"] = _network_error_transport
+    plan = _plan(ctx, need)
+    outcomes = execute_plan(ctx, plan)  # must complete every query×source pair
+    by_source: dict[str, set[str]] = {}
+    for outcome in outcomes:
+        by_source.setdefault(outcome.execution.source_id, set()).add(outcome.execution.outcome)
+    assert by_source["gleif"] == {"SOURCE_FAILED"}                 # contained, truthful
+    assert "EXECUTED_WITH_RESULTS" in by_source["wikidata"]        # remaining sources ran
+    assert "sec-edgar" in by_source
 
 
 def test_one_bad_source_does_not_abort_the_plan(ctx):

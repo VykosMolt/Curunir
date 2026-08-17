@@ -109,6 +109,22 @@ def _affected(store: SemanticStore, observations: Iterable[Mapping[str, Any] | N
     return tuple(sorted(object_ids)), tuple(sorted(claim_ids))
 
 
+def _current_read_truncated(store, current_manifestation: Mapping[str, Any],
+                            current_manifestation_id: str) -> bool:
+    """Was the CURRENT read incomplete? True for a transport byte cap
+    (manifestation.truncated) OR the semantic normalizer's own caps (field /
+    region / pdf-text), which surface as `*TRUNCATED*` document warnings and are
+    otherwise invisible to the diff (review F4-round-B)."""
+    if current_manifestation.get("truncated"):
+        return True
+    from .normalize import normalized_document_id  # local: avoid import cycle
+    document_id = normalized_document_id(current_manifestation_id)
+    document = next((d for d in store.records_of("semantic_document")
+                     if d["document_id"] == document_id), None)
+    return bool(document) and any(
+        "TRUNCATED" in str(warning) for warning in document.get("warnings", ()))
+
+
 def interpret_change(ctx: IntegrationContext, prior_manifestation_id: str,
                      current_manifestation_id: str, *, watch_id: str = "",
                      fabric_change_id: str = "", current_text: str = "",
@@ -147,17 +163,20 @@ def interpret_change(ctx: IntegrationContext, prior_manifestation_id: str,
     else:
         differences = classify_pairwise(prior_observations, current_observations,
                                         current_text)
-        if current_manifestation.get("truncated"):
-            # a byte-capped current manifestation is INCOMPLETE, so any diff that
-            # concludes content was removed or changed (vs the prior full read)
-            # may be a truncation artifact — the content could be in the unseen
-            # tail. Reclassify every lifecycle-moving (loss/change) class to
+        if _current_read_truncated(store, current_manifestation, current_manifestation_id):
+            # the current manifestation is INCOMPLETE (a transport byte cap OR the
+            # normalizer's own field/region/pdf caps — review F4-round-B), so any
+            # diff that concludes content was removed or CHANGED vs the prior full
+            # read may be a truncation artifact — the content could be in the
+            # unseen tail. Reclassify every lifecycle-moving loss/change class to
             # UNRESOLVED_CHANGE, so a resource limit never becomes evidence of
-            # deletion / retraction / staleness. Additions are trustworthy (a cut
-            # can only hide content, never add it) and pass through unchanged.
-            # (V6.7 §3, review finding F4.)
+            # deletion / retraction / staleness. A pure ADDITION (no prior) is
+            # trustworthy — a cut can only HIDE content, never add it — so it
+            # passes through unchanged (this correctly keeps a source-correction
+            # that is an addition; review finding 8). (V6.7 §3, review F4.)
             for difference in differences:
-                if difference["change_class"] in _STATE_FOR_CLASS:
+                if difference["change_class"] in _STATE_FOR_CLASS \
+                        and difference.get("prior") is not None:
                     difference["change_class"] = "UNRESOLVED_CHANGE"
                     difference["truncated_current"] = True
 

@@ -28,6 +28,12 @@ UNKNOWN = "UNKNOWN"
 
 _COMPROMISE_TAG = "COMPROMISED"
 
+# An actor may enrol several device keys, but authentication verifies a challenge
+# against EVERY active key, so the count must be bounded — otherwise an enrol
+# flood makes authenticate O(K) work per attempt (review F2-round-B). A small cap
+# covers realistic multi-device use; revoke an old device to add a new one.
+MAX_ACTIVE_KEYS_PER_ACTOR = 8
+
 
 class KeyRegistry:
     def __init__(self, store, *, actor: str = "identity-registry",
@@ -84,6 +90,12 @@ class KeyRegistry:
                 return existing  # idempotent re-enrolment of an own active key
             raise ValueError(
                 f"this key is {existing['status']} for {actor_id}; enroll a fresh key")
+        # a genuinely new key: bound the actor's active-key count so authenticate
+        # (which verifies against every active key) cannot be flooded into O(K).
+        if len(self.active_keys_for(actor_id)) >= MAX_ACTIVE_KEYS_PER_ACTOR:
+            raise ValueError(
+                f"actor already has the maximum {MAX_ACTIVE_KEYS_PER_ACTOR} active "
+                f"signing keys; revoke an old device before enrolling a new one")
         return self._append(ActorKeyRecord(
             key_id=key_id, version=1, actor_id=actor_id, actor_kind=actor_kind,
             public_key=public_key_hex, status="ACTIVE", enrolled_time=now,
@@ -141,11 +153,15 @@ class KeyRegistry:
         now = now or (self._now_fn() if self._now_fn else None)
         old = self.active_key_for(actor_id)
         new_key_id = key_id_for(new_public_key_hex)
-        if old is not None and old["key_id"] != new_key_id:
-            self._transition(old["key_id"], "RETIRED", "rotated", now)
+        # Enroll the new key FIRST: if it is owned by another actor or is a
+        # retired/revoked own key, enroll raises BEFORE the old key is retired, so
+        # a failed rotate never bricks the actor (review finding 7). (An actor at
+        # the active-key cap must revoke a device before rotating; fail-safe.)
         record = self.enroll(actor_id=actor_id,
                              actor_kind=old["actor_kind"] if old else "HUMAN",
                              public_key_hex=new_public_key_hex, now=now)
+        if old is not None and old["key_id"] != new_key_id:
+            self._transition(old["key_id"], "RETIRED", "rotated", now)
         if old is not None and record["supersedes_key_id"] == "" \
                 and record["version"] == 1 and old["key_id"] != new_key_id:
             # stamp the supersession on the fresh enrollment

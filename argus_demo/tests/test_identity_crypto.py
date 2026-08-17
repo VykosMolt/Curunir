@@ -318,3 +318,27 @@ def test_service_actor_is_distinct_from_human(tmp_path):
     # the recorded action carries SERVICE — a human-only gate (enforced by the
     # command layer on actor_kind) can distinguish it and refuse
     assert store.records_of("signed_action")[0]["actor_kind"] == "SERVICE"
+
+
+def test_active_key_cap_bounds_enrollment_and_auth_work(tmp_path):
+    # review finding 5 (F2-round-B): an actor's active-key count is bounded, so
+    # an enrol flood cannot make authenticate O(K).
+    from curunir_identity.registry import MAX_ACTIVE_KEYS_PER_ACTOR
+    from curunir_identity import generate_keypair, sign
+    store, clock, registry, sessions = _fixture(tmp_path)
+    pems = []
+    for _ in range(MAX_ACTIVE_KEYS_PER_ACTOR):
+        pem, pub = generate_keypair()
+        registry.enroll(actor_id="analyst-a", actor_kind="HUMAN", public_key_hex=pub)
+        pems.append(pem)
+    assert len(registry.active_keys_for("analyst-a")) == MAX_ACTIVE_KEYS_PER_ACTOR
+    # the next new key is refused
+    _, over = generate_keypair()
+    with pytest.raises(ValueError, match="maximum"):
+        registry.enroll(actor_id="analyst-a", actor_kind="HUMAN", public_key_hex=over)
+    # every enrolled device key still authenticates (multi-device, no lock-out)
+    for pem in (pems[0], pems[-1]):
+        ch = sessions.issue_challenge("analyst-a")
+        sig = sign(pem, sessions.challenge_payload("analyst-a", ch["nonce"]))
+        assert sessions.authenticate(registry, actor_id="analyst-a",
+                                     nonce=ch["nonce"], signature_hex=sig)

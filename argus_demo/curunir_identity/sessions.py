@@ -27,6 +27,7 @@ from .registry import VALID, KeyRegistry
 CHALLENGE_TTL_SECONDS = 120
 SESSION_TTL_SECONDS = 900  # 15 minutes
 MAX_PENDING_CHALLENGES = 4096  # bound the pending-challenge map against a flood
+MAX_SESSIONS = 8192            # bound the live-session map (resolve only pops on use)
 
 
 class AuthError(PermissionError):
@@ -104,11 +105,23 @@ class SessionManager:
                     if verify(k["public_key"], signature_hex, payload)), None)
         if key is None:
             raise AuthError("no active key verifies the challenge")
+        # prune expired sessions + hard-cap the map: resolve() only pops on use,
+        # so without this a session flood would grow it without bound (review F5b).
+        self._prune_sessions(now)
         session = Session(session_id=secrets.token_hex(24), actor_id=actor_id,
                           actor_kind=key["actor_kind"], key_id=key["key_id"],
                           issued_time=now, expires_time=self._plus(now, self.session_ttl))
         self._sessions[session.session_id] = session
         return session
+
+    def _prune_sessions(self, now: str) -> None:
+        cutoff = parse_time(now)
+        for session_id in [s for s, sess in self._sessions.items()
+                           if cutoff > parse_time(sess.expires_time)]:
+            self._sessions.pop(session_id, None)
+        while len(self._sessions) >= MAX_SESSIONS:
+            oldest = min(self._sessions, key=lambda s: self._sessions[s].issued_time)
+            self._sessions.pop(oldest, None)
 
     # ---- resolution ------------------------------------------------------
 

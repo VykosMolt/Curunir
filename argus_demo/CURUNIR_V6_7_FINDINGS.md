@@ -310,3 +310,42 @@ the continuation surface; every one is repaired with a behavioral regression loc
 and the full non-DB suite is green (only the two pre-existing, unrelated
 capsule-stream failures remain). A confirmatory adversarial round over the repairs
 follows.
+
+## Confirmatory round over the repairs (round 2)
+
+An independent confirmatory Opus-5 pass attacked the repairs. It confirmed 6 of 8
+categories sound under running probes (store torn-detection/byte-math, the C-2
+recovery lock, the M-4 version guard, F1 enroll + its race, F3/F6 RSS, F7
+canonical) and found repair-induced or residual defects, all now fixed:
+
+- **Four-eyes over-restriction (MAJOR)** — already fixed before the round landed
+  (commit 4eabe46): the SoD set now takes only IN_REVIEW version-event actors +
+  SUBMITTED-disposition actors, so a reviewer who returned a report for revision
+  can still approve the revision.
+- **C-3 rollback still non-atomic (MAJOR)** — the install was atomic but the
+  ROLLBACK rewrote the live log with a plain `copyfile`, re-opening the silent-loss
+  window. Fixed: validate the truncated content in memory (`_verify_kept`) BEFORE
+  touching the file, so the swap always yields a clean store and no rollback
+  exists; a partial/failed install cleans up and leaves events.jsonl untouched.
+- **F8 aborted the plan on network faults (MAJOR)** — `except (OSError, …)` caught
+  ConnectionReset/Timeout/SSL (all OSError subclasses = source faults). Narrowed to
+  `MemoryError`/`StoreError` only; network/disk OSErrors stay contained as
+  SOURCE_FAILED (one bad source never aborts the pass).
+- **F4 only covered the transport cap (MAJOR)** — the normalizer's own field/region/
+  pdf caps truncate with `manifestation.truncated == False`. `interpret_change` now
+  keys on the document's `*TRUNCATED*` warnings too (`_current_read_truncated`).
+- **F2 unbounded active keys ⟶ O(K) authenticate (MAJOR)** — added a per-actor
+  active-key cap (`MAX_ACTIVE_KEYS_PER_ACTOR`); enrolment refuses beyond it.
+- **F5 left `_sessions` unbounded (MINOR)** — sessions are now pruned + capped like
+  `_pending`.
+- **`rotate` self-brick (MINOR)** — enrolls the new key before retiring the old, so
+  a failed rotate never bricks the actor.
+- **Truncation suppressed additive source-corrections (MINOR)** — the reclassify
+  now skips pure additions (`prior is None`), so a correction visible in the read
+  prefix still flows.
+- Stale enroll docstring corrected.
+
+Round-2 repairs each carry a regression lock (durability C-3-refuse, executor
+network-contained + MemoryError-propagates, identity active-key-cap, normalizer-
+truncation, four-eyes reviewer-may-approve-revision). Full non-DB suite green
+(only the two pre-existing capsule failures).

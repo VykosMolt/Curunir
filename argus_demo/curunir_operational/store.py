@@ -218,28 +218,56 @@ class MissionDataStore:
                         f"to auto-recover — this is not a crash signature") from exc
             # byte-exact: keep everything up to and including the last \n
             kept = raw[: len(raw) - len(torn)]
+            # Validate the truncated content BEFORE touching the live file, so the
+            # swap always yields a clean store and NO rollback is ever needed
+            # (a rollback would itself be a non-atomic rewrite of the live log —
+            # the exact silent-loss window we are closing). If deeper damage is
+            # found, refuse with events.jsonl completely untouched.
+            try:
+                cls._verify_kept(kept)
+            except Exception as exc:
+                raise StoreError(
+                    "torn-tail truncation would not yield a clean store (damage "
+                    "is deeper than the last line); events.jsonl left untouched") from exc
             backup = events_path.with_name(events_path.name + ".torn")
             if backup.exists():  # never clobber an earlier crash's forensic remainder
-                backup = events_path.with_name(f"{events_path.name}.torn.{int(time.time())}")
+                backup = events_path.with_name(f"{events_path.name}.torn.{int(time.time_ns())}")
             tmp = events_path.with_name(events_path.name + ".recovering")
-            # install atomically: COPY the crashed original aside first (so
-            # events.jsonl is never absent — a crash here leaves the torn
-            # original in place, re-recoverable), then ONE atomic rename.
+            # write the validated truncated log to a temp file, copy the crashed
+            # original aside for forensics, then swap in with ONE atomic rename.
+            # On any failure before the rename the live log is untouched; the temp
+            # and (possibly partial) forensic copy are cleaned up.
             try:
-                shutil.copyfile(events_path, backup)
                 tmp.write_bytes(kept)
+                shutil.copyfile(events_path, backup)
                 tmp.replace(events_path)
             except BaseException:
                 tmp.unlink(missing_ok=True)
+                backup.unlink(missing_ok=True)
                 raise
-            try:
-                cls(root)  # verify the recovered store opens cleanly
-            except BaseException as exc:
-                shutil.copyfile(backup, events_path)  # restore original; never leave worse
-                raise StoreError(
-                    "torn-tail truncation did not yield a clean store (damage is "
-                    "deeper than the last line); original restored, not modified") from exc
             return {"recovered": True, "truncated_bytes": len(torn)}
+
+    @classmethod
+    def _verify_kept(cls, raw: bytes) -> None:
+        """Validate a candidate truncated log (chain-linkage + entry hashes) in
+        memory, without touching any file or needing the payload store. Raises on
+        any torn tail, unparseable line, broken link or hash mismatch."""
+        complete, torn = cls._split_log(raw)
+        if torn.strip():
+            raise StoreError("candidate log still ends in a torn line")
+        head = CHAIN_GENESIS
+        for number, line in enumerate(complete, start=1):
+            if not line.strip():
+                continue
+            event = json.loads(line)  # JSONDecodeError/UnicodeDecodeError propagate
+            if event.get("prev_hash") != head:
+                raise StoreError(f"candidate log chain broken at line {number}")
+            recomputed = _entry_hash(event["seq"], event["event_type"],
+                                     event["recorded_time"], event["actor"],
+                                     event["record"], event["prev_hash"])
+            if event.get("entry_hash") != recomputed:
+                raise StoreError(f"candidate log entry hash mismatch at line {number}")
+            head = event["entry_hash"]
 
     def _verify_link(self, event: Mapping[str, Any], *, at: str) -> None:
         """Fail closed on load and catch-up: a broken chain refuses service

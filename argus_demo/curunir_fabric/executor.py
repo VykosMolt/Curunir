@@ -237,12 +237,15 @@ def execute_single(ctx: ExecutionContext, *, query: QuerySpec, source_id: str,
                 source_time=single.source_time if single else None,
                 archive_capture_time=capture_time,
             ),)
-    except (OSError, MemoryError, StoreError):
-        # an infrastructure fault (disk full, out of memory, a store error) is
-        # OUR environment, NOT the source's fault — propagate it honestly rather
-        # than recording SOURCE_FAILED and defaming the source's health (F8).
+    except (MemoryError, StoreError):
+        # a genuinely-unrecoverable environment fault (out of memory, a store
+        # error) is OURS, not the source's, AND cannot safely continue — propagate
+        # it rather than recording SOURCE_FAILED. NOTE: OSError is deliberately
+        # NOT here — its subclasses are the source-side network faults
+        # (ConnectionReset/Timeout/SSL/gaierror), which MUST stay contained so one
+        # crashing source does not abort the whole plan (§7.3, review F3-round-B).
         raise
-    except Exception as error:  # noqa: BLE001 — hostile-content containment at the acquisition edge
+    except Exception as error:  # noqa: BLE001 — source/content fault containment at the acquisition edge
         return finish("SOURCE_FAILED", error_class="CONNECTOR_ERROR",
                       error_detail=f"{type(error).__name__}: {error}"[:500],
                       policy_decision=decision.decision)

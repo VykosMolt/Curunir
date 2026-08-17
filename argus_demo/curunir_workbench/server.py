@@ -561,9 +561,10 @@ def create_app(mission_root: str | Path, actors_path: str | Path,
         bearer authorizes the one-time key enrolment; thereafter load-bearing
         acts require the private key (which never leaves the browser).
 
-        One active signing key per actor (per device): a genuinely new public
-        key rotates the previous one (its past signatures stay verifiable);
-        re-enrolling the same key is idempotent."""
+        An actor may hold several active device keys (multi-device), bounded by a
+        per-actor cap; enrolment ADDS a key (it never rotates/retires another as a
+        side effect), refuses a key owned by a different actor, and is idempotent
+        for an already-enrolled own active key."""
         ctx = context(request)
         try:
             pub = body.public_key_hex.strip().lower()

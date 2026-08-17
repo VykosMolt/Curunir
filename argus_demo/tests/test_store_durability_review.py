@@ -96,6 +96,31 @@ def test_recovery_preserves_original_by_copy_not_move(tmp_path):
     assert len(torns) >= 2                          # earlier remainder kept
 
 
+# ---- C-3 (round 2): invalid truncated content is refused, log left untouched --
+
+def test_recovery_refuses_and_leaves_log_untouched_when_truncation_is_invalid(tmp_path):
+    # a torn tail PLUS deeper damage (a chain-broken but parseable earlier line):
+    # recovery must validate the truncated content BEFORE any write and, on
+    # failure, leave events.jsonl byte-identical (no silent shortening).
+    import json as _json
+    root = _store(tmp_path)
+    events = root / "events.jsonl"
+    lines = events.read_bytes().split(b"\n")
+    lines = [l for l in lines if l.strip()]
+    assert len(lines) > 4
+    victim = _json.loads(lines[2])
+    victim["entry_hash"] = "de" * 32                      # valid JSON, broken chain
+    lines[2] = _json.dumps(victim).encode()
+    corrupted = b"\n".join(lines) + b"\n" + b'{"torn'     # + a torn tail
+    events.write_bytes(corrupted)
+    before = events.read_bytes()
+
+    with pytest.raises(StoreError):
+        WorkbenchStore.recover_torn_tail(root)
+    assert events.read_bytes() == before                  # untouched: no silent loss
+    assert not list(root.glob("events.jsonl.torn*"))      # no forensic file minted
+
+
 # ---- C-2: recovery serializes against a live writer via the append lock -------
 
 def test_recovery_blocks_on_the_append_lock(tmp_path):

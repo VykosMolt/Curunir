@@ -82,6 +82,38 @@ def test_truncated_re_retrieval_is_not_interpreted_as_removal_or_staleness(tmp_p
                 if s.get("state") in ("STALE", "RETRACTED", "SUPERSEDED")]
 
 
+def test_normalizer_field_cap_truncation_is_not_interpreted_as_removal(tmp_path, monkeypatch):
+    # review finding 4 (F4-round-B): the SEMANTIC normalizer's own caps (field /
+    # region / pdf) truncate a read while the manifestation's transport `truncated`
+    # flag stays False. That incomplete read must ALSO not diff as removal.
+    import curunir_semantic.normalize as norm
+    from curunir_semantic.normalize import normalized_document_id
+    pipeline = make_pipeline(tmp_path, start_minute=1)
+    v1 = plant_manifestation(pipeline, source_id="gleif", native_id="lei/ACMELEI000000000001",
+                             body=_gleif("ACTIVE"), media_type="application/json",
+                             retrieval_time="2026-08-17T12:05:00+00:00")
+    pipeline.process_new_evidence()                       # v1 normalized in FULL
+
+    monkeypatch.setattr(norm, "MAX_FIELDS", 3)            # now the field table is capped tiny
+    v2 = plant_manifestation(pipeline, source_id="gleif", native_id="lei/ACMELEI000000000001",
+                             body=_gleif("LAPSED"), media_type="application/json",
+                             retrieval_time="2026-08-17T14:00:00+00:00")
+    pipeline.process_new_evidence()                       # v2 normalized TRUNCATED (field cap)
+
+    v2rec = next(m for m in pipeline.store.records_of("fabric_manifestation")
+                 if m["manifestation_id"] == v2["manifestation_id"])
+    assert v2rec["truncated"] is False                   # the transport flag is the blind spot
+    doc = next(d for d in pipeline.store.records_of("semantic_document")
+               if d["document_id"] == normalized_document_id(v2["manifestation_id"]))
+    assert any("TRUNCATED" in w for w in doc["warnings"])  # but the document says truncated
+
+    changes = interpret_change(pipeline.context(), v1["manifestation_id"], v2["manifestation_id"])
+    classes = {c["change_class"] for c in changes}
+    assert not (classes & {"REMOVED_PROPOSITION", "RELATION_REMOVED", "SOURCE_RETRACTION",
+                           "VALUE_CHANGED", "ROLE_CHANGED", "ENTITY_ATTRIBUTE_CHANGED"}), \
+        f"a normalizer-truncated read must not assert removal/change: {classes}"
+
+
 def test_poison_manifestation_retry_is_bounded(tmp_path):
     pipeline = make_pipeline(tmp_path, start_minute=1)
     m = plant_manifestation(pipeline, source_id="gleif", native_id="poison",
