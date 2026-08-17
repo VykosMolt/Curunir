@@ -2,12 +2,30 @@
 from __future__ import annotations
 
 import email.utils
+import re
 import xml.etree.ElementTree as ElementTree
 from datetime import timezone
 
 from .base import ConnectorRequest, ConnectorResponse, NativeResult, SourceConnector, Transport
 
 ATOM_NS = "{http://www.w3.org/2005/Atom}"
+
+# The stdlib XML parser expands internal DTD entities, so a <5 KB "billion
+# laughs" feed can expand to gigabytes in-process. A DOCTYPE / internal DTD
+# subset is the ONLY vehicle for entity-expansion (and external-entity) attacks,
+# and no legitimate RSS/Atom feed needs one — so we refuse any feed that
+# declares one before handing the bytes to the parser. The whole body is scanned
+# (case-insensitively), not a fixed prolog window: a DOCTYPE must precede the
+# root element but a giant comment/whitespace preamble could otherwise push it
+# past a windowed check. Mirrors the kernel's guard on the semantic XML path.
+_XML_DTD_DECLARATION = re.compile(rb"<!\s*(?:doctype|entity)", re.IGNORECASE)
+
+
+def _reject_dtd(body: bytes) -> None:
+    if _XML_DTD_DECLARATION.search(body):
+        raise ValueError(
+            "feed declares a DOCTYPE/ENTITY; refused before parsing "
+            "(XML entity-expansion / external-entity defense)")
 
 
 def _rfc822_to_iso(value: str) -> str | None:
@@ -36,6 +54,7 @@ def _text(node: ElementTree.Element | None) -> str:
 
 
 def parse_feed_items(body: bytes) -> list[NativeResult]:
+    _reject_dtd(body)  # billion-laughs / XXE defense before the expanding parser
     root = ElementTree.fromstring(body)
     items: list[NativeResult] = []
     if root.tag == "rss":

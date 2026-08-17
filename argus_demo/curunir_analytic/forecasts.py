@@ -517,13 +517,27 @@ def _absence_coverage_satisfied(store: AnalyticStore, rule: Mapping[str, Any],
         for plan in store.records_of("fabric_discovery_plan"):
             for query in plan.get("queries", ()):
                 query_values[query["query_id"]] = query.get("value", "")
+    # A byte-capped (truncated) retrieval did NOT see the whole source, so it
+    # cannot establish absence: the sought thing may be in the unseen tail.
+    # Exclude any execution whose acquired manifestation was truncated, so a
+    # resource limit never becomes proof of absence (V6.7 §3). Recorded on the
+    # execution when known; cross-referenced to the manifestations for records
+    # written before the execution carried the flag.
+    truncated_mids = {m["manifestation_id"] for m in
+                      store.records_of("fabric_manifestation") if m.get("truncated")}
     successes: dict[str, list[str]] = {}
     unattributed: dict[str, int] = {}
+    degraded: dict[str, int] = {}
     for execution in store.records_of("fabric_execution"):
         if execution["outcome"] not in ("EXECUTED_WITH_RESULTS", "EXECUTED_EMPTY"):
             continue
         if not execution.get("completed_time") \
                 or parse_time(execution["completed_time"]) < parse_time(since):
+            continue
+        if execution.get("truncated") or any(
+                mid in truncated_mids for mid in execution.get("manifestation_ids", ())):
+            degraded[execution["source_id"]] = \
+                degraded.get(execution["source_id"], 0) + 1
             continue
         if subject_values and not _execution_touches_subject(
                 execution, subject_values, query_values):
@@ -545,7 +559,12 @@ def _absence_coverage_satisfied(store: AnalyticStore, rule: Mapping[str, Any],
         parts = []
         for source_id in missing_required:
             filtered = unattributed.get(source_id, 0)
-            if filtered:
+            truncated_count = degraded.get(source_id, 0)
+            if truncated_count:
+                parts.append(f"{source_id} searched {truncated_count} time(s) but "
+                             f"the retrieval was byte-capped (truncated); a partial "
+                             f"read cannot establish absence")
+            elif filtered:
                 parts.append(f"{source_id} searched {filtered} time(s) but no "
                              f"execution attributable to the subject")
             else:

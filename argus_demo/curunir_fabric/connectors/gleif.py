@@ -68,6 +68,15 @@ class GleifConnector(SourceConnector):
             payload = json.loads(raw["body"].decode("utf-8"))
         except (ValueError, UnicodeDecodeError) as exc:
             return self._failed(request, url, raw, now=now, error_class="PARSE", error_detail=str(exc))
+        # A source-side error/throttle answers HTTP 200 with a JSON:API error
+        # document ({"errors": [...]}) or a body with no `data` member at all.
+        # That is a FAILED retrieval, NOT an empty result set — classifying it
+        # EMPTY would let a throttled source masquerade as evidence of absence.
+        if not isinstance(payload, dict) or ("data" not in payload):
+            detail = (f"source-declared errors: {str(payload.get('errors'))[:200]}"
+                      if isinstance(payload, dict) and payload.get("errors")
+                      else "response is not a valid JSON:API document (no data member)")
+            return self._failed(request, url, raw, now=now, error_class="HTTP", error_detail=detail)
         data = payload.get("data")
         items = data if isinstance(data, list) else ([data] if data else [])
         results = tuple(_record_result(item) for item in items)

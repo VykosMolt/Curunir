@@ -259,6 +259,33 @@ def test_false_by_absence_is_coverage_gated(tmp_path):
     assert "exec-cov-1" in resolved["resolution_evidence_refs"]
 
 
+def test_truncated_search_does_not_resolve_false_by_absence(tmp_path):
+    # V6.7 §7.1: a byte-capped (truncated) retrieval did not see the whole
+    # source, so it cannot establish absence — a resource limit must never
+    # become proof of absence (a RESOLVED_FALSE forecast).
+    pipeline, ctx = make_analytic(tmp_path)
+    by_predicate = _seed(pipeline, ctx)
+    forecast = _forecast(ctx, by_predicate, probability=0.35,
+                         expected="NEVER_SO", horizon="2026-08-17T12:04:00+00:00")
+    refresh_forecast(ctx, forecast["forecast_id"], caused_by="tick")
+    # the declared source was searched but the retrieval was TRUNCATED
+    execution = ExecutionRecord(
+        execution_id="exec-trunc-1", plan_id="", query_id="q1", source_id="gleif",
+        connector_id="gleif-lei-v1", connector_version="1", operation="LOOKUP",
+        outcome="EXECUTED_EMPTY", result_count=0,
+        request_url="https://api.gleif.org/api/v1/lei-records/ACMELEI000000000001",
+        http_status=200, policy_decision="ALLOW", error_class=None,
+        error_detail="", manifestation_ids=(),
+        started_time=ctx.now_fn(), completed_time=ctx.now_fn(),
+        absence_semantics="ABSENCE_IS_UNKNOWN_NOT_NONEXISTENCE", marking=MARK,
+        truncated=True)
+    ctx.store.append("FABRIC_EXECUTION_RECORDED", execution,
+                     recorded_time=ctx.now_fn(), actor="t")
+    resolved = try_machine_resolution(ctx, forecast["forecast_id"])
+    assert resolved["status"] != "RESOLVED_FALSE", \
+        "a truncated search must not resolve a forecast FALSE by absence"
+
+
 def test_human_resolution_requires_evidence_and_human(tmp_path):
     pipeline, ctx = make_analytic(tmp_path)
     by_predicate = _seed(pipeline, ctx)

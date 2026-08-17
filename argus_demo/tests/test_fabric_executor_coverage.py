@@ -27,7 +27,10 @@ MARK = Marking(owning_authority="test-fabric", releasability=("PUBLIC",))
 WIKIDATA_BODY = json.dumps({"search": [
     {"id": "Q4416184", "label": "Severstal", "description": "Russian steel company",
      "concepturi": "http://www.wikidata.org/entity/Q4416184"}]}).encode()
-EMPTY_SEARCH_BODY = json.dumps({"search": []}).encode()
+# a REALISTIC genuine-empty EDGAR full-text-search response: the success-shape
+# `hits` container present, zero hits. (A container-less / error-envelope 200 is
+# a source failure, not an empty result set — locked separately.)
+EMPTY_SEARCH_BODY = json.dumps({"hits": {"hits": [], "total": {"value": 0}}}).encode()
 GLEIF_BODY = json.dumps({
     "meta": {"pagination": {"currentPage": 1, "lastPage": 1}},
     "data": [{"id": "2534000WLRB86TSQ3245", "attributes": {
@@ -169,6 +172,41 @@ def test_policy_refusal_never_reaches_the_network(tmp_path):
     assert outcome.execution.outcome == "POLICY_REFUSED"
     assert outcome.execution.policy_decision == "NOT_PUBLIC"
     assert calls == [], "policy refusal must precede any network activity"
+
+
+def _raising_transport(*, url, request_headers, timeout_seconds, maximum_bytes):
+    # simulates a connector/transport fault on a hostile body (unguarded parse,
+    # recursion, malformed row) that would otherwise propagate and abort the pass
+    raise RuntimeError("connector boom")
+
+
+def test_connector_exception_is_contained_as_source_failed(ctx):
+    # §7.3: an exception out of the connector must not propagate; it is contained
+    # to one truthful SOURCE_FAILED record (never absence evidence).
+    ctx.transports["gleif-lei-v1"] = _raising_transport
+    query = QuerySpec(query_id="q-x", family="EXACT_NAME", value="Severstal", language="",
+                      script="", operation="SEARCH", source_id="gleif",
+                      time_bounds=(None, None), origin="RULE", origin_detail="t",
+                      rationale="r", derived_from=())
+    outcome = execute_single(ctx, query=query, source_id="gleif")  # must NOT raise
+    assert outcome.execution.outcome == "SOURCE_FAILED"
+    assert outcome.execution.error_class == "CONNECTOR_ERROR"
+    assert "RuntimeError" in outcome.execution.error_detail
+
+
+def test_one_bad_source_does_not_abort_the_plan(ctx):
+    # §7.3: one crashing source must not silently skip every remaining query.
+    need = _need(need_id="need-boom")
+    _record_need(ctx.store, need)
+    ctx.transports["gleif-lei-v1"] = _raising_transport
+    plan = _plan(ctx, need)
+    outcomes = execute_plan(ctx, plan)  # must complete every query×source pair
+    by_source: dict[str, set[str]] = {}
+    for outcome in outcomes:
+        by_source.setdefault(outcome.execution.source_id, set()).add(outcome.execution.outcome)
+    assert by_source["gleif"] == {"SOURCE_FAILED"}
+    assert "EXECUTED_WITH_RESULTS" in by_source["wikidata"]  # remaining sources still ran
+    assert "sec-edgar" in by_source                          # and reached edgar too
 
 
 def test_source_failure_is_recorded_with_status_event(ctx):

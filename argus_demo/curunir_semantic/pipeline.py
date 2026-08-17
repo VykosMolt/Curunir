@@ -30,6 +30,16 @@ def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+# A permanently-unprocessable manifestation (unsupported format, corrupt custody
+# bytes, an adversarial document that times out `pdftotext`) must not be
+# re-attempted on every pass forever — each retry can fork a 30 s subprocess, so
+# a single poison record becomes an unbounded work loop. After this many failed
+# attempts the manifestation is no longer auto-retried; its OPEN
+# PROCESSING_FAILED review item still stands for a human (auto-retry exhaustion
+# is a resource limit, never "the document was processed").
+MAX_PROCESSING_ATTEMPTS = 5
+
+
 @dataclass
 class SemanticPipeline:
     store: SemanticStore
@@ -48,18 +58,38 @@ class SemanticPipeline:
     def _failure_item_id(self, manifestation_id: str) -> str:
         return digest_id("review-processing", manifestation_id)
 
+    def _processing_attempts(self) -> dict[str, int]:
+        """Failed processing attempts per manifestation, resetting on a
+        successful re-process (RESOLVED). Bounds auto-retry: at
+        MAX_PROCESSING_ATTEMPTS a poison manifestation is no longer re-attempted
+        (its OPEN item still stands for a human). Counted from the append-only
+        review-item history, so it survives restart/replay."""
+        counts: dict[str, int] = {}
+        for record in self.store.records_of("review_item"):
+            if record["kind"] != "PROCESSING_FAILED":
+                continue
+            mid = record["subject_id"]
+            counts[mid] = 0 if record["status"] == "RESOLVED" else counts.get(mid, 0) + 1
+        return counts
+
     def _record_processing_failure(self, manifestation_id: str, stage: str,
                                    error: Exception, marking=None) -> None:
         """A pipeline failure is durable state, never a silently dropped
-        exception: the manifestation stays queued for retry until resolved.
-        The failure item is ABOUT the manifestation, so it inherits the
-        manifestation's marking, never a lower pipeline default."""
+        exception: the manifestation stays queued for retry until resolved OR
+        the bounded attempt budget is exhausted. The failure item is ABOUT the
+        manifestation, so it inherits the manifestation's marking, never a lower
+        pipeline default."""
         from .contracts import ReviewItem
         item_id = self._failure_item_id(manifestation_id)
-        detail = f"{stage} failed: {type(error).__name__}: {str(error)[:300]}"
-        latest = self.store.latest_by_id("review_item", "item_id").get(item_id)
-        if latest is not None and latest["status"] == "OPEN" and latest["detail"] == detail:
-            return  # an identical failure is already queued; retries do not stack items
+        attempts = self._processing_attempts().get(manifestation_id, 0)
+        if attempts >= MAX_PROCESSING_ATTEMPTS:
+            return  # auto-retry budget spent; the OPEN item already stands, no
+            #         further appends (bounds both retries and log growth)
+        attempt_no = attempts + 1
+        detail = (f"{stage} failed (attempt {attempt_no}/{MAX_PROCESSING_ATTEMPTS}): "
+                  f"{type(error).__name__}: {str(error)[:300]}")
+        if attempt_no >= MAX_PROCESSING_ATTEMPTS:
+            detail += " — auto-retry exhausted; manual intervention required"
         item = ReviewItem(
             item_id=item_id, kind="PROCESSING_FAILED",
             subject_kind="fabric_manifestation", subject_id=manifestation_id,
@@ -147,8 +177,15 @@ class SemanticPipeline:
         open_failures = {r["subject_id"]
                          for r in self.store.latest_by_id("review_item", "item_id").values()
                          if r["kind"] == "PROCESSING_FAILED" and r["status"] == "OPEN"}
+        # a manifestation that has failed MAX_PROCESSING_ATTEMPTS times is no
+        # longer auto-retried (its OPEN review item still stands for a human), so
+        # one poison record cannot drive an unbounded retry/subprocess loop.
+        attempts = self._processing_attempts()
+        exhausted = {mid for mid, count in attempts.items() if count >= MAX_PROCESSING_ATTEMPTS}
         for manifestation in self.store.records_of("fabric_manifestation"):
             manifestation_id = manifestation["manifestation_id"]
+            if manifestation_id in exhausted:
+                continue
             if normalized_document_id(manifestation_id) in known \
                     and manifestation_id not in open_failures:
                 continue

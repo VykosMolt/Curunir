@@ -47,7 +47,16 @@ class EdgarFullTextConnector(SourceConnector):
             payload = json.loads(raw["body"].decode("utf-8"))
         except (ValueError, UnicodeDecodeError) as exc:
             return self._failed(request, url, raw, now=now, error_class="PARSE", error_detail=str(exc))
-        hits = ((payload.get("hits") or {}).get("hits")) or []
+        # A source error/throttle 200 lacks the `hits` container the success
+        # shape always carries. Treat that as FAILED, not as an empty result set
+        # — an EMPTY would be counted as evidence of absence downstream. A valid
+        # container with zero hits remains a legitimate EMPTY.
+        if not isinstance(payload, dict) or not isinstance(payload.get("hits"), dict):
+            detail = (f"source-declared error: {str(payload.get('error'))[:200]}"
+                      if isinstance(payload, dict) and payload.get("error")
+                      else "EDGAR response missing hits container (source error or throttle)")
+            return self._failed(request, url, raw, now=now, error_class="HTTP", error_detail=detail)
+        hits = (payload["hits"].get("hits")) or []
         results = []
         for hit in hits[: request.limit]:
             source = hit.get("_source") or {}

@@ -192,6 +192,47 @@ parse with the stdlib. No acquired content reaches a model today (provider seam
 unwired), so there is no live prompt-injection surface; the structural
 candidate-binding contract already constrains any future provider output.
 
+## Resource governance & limit-truthfulness (§3)
+
+The acquisition edge fetches attacker-influenced bytes and drives downstream
+absence reasoning, so a resource limit, a source-side throttle, or a hostile
+body must never (a) run unbounded work or (b) be recorded as evidence.
+
+- **A resource limit is never evidence of absence.** A byte-capped (truncated)
+  retrieval did not see the whole source, so it is excluded from absence
+  coverage: `forecasts.py::_absence_coverage_satisfied` drops any execution
+  flagged `truncated` (now carried on `ExecutionRecord`, and cross-referenced to
+  the manifestations for older records), and says so in the coverage
+  explanation. A truncated search can no longer resolve a forecast FALSE. Lock:
+  `test_analytic_forecasts.py::test_truncated_search_does_not_resolve_false_by_absence`.
+- **A source-side error/throttle 200 is a failure, not an empty result set.**
+  `EMPTY` (which legitimately feeds absence) now means the connector positively
+  parsed a well-formed response with zero matches. A JSON:API `errors` document
+  or a body with no `data` (GLEIF), a body with no `hits` container (EDGAR), or
+  an empty CDX body (Wayback) classify `FAILED` — excluded from absence. Genuine
+  empties still classify `EMPTY`. Locks: `test_fabric_resource_governance.py`.
+- **A hostile body cannot abort the whole pass or expand unbounded.** The
+  connector call and manifestation build are contained in `executor.py`: an
+  exception becomes one truthful `SOURCE_FAILED` record (never absence), so one
+  crashing source no longer silently skips every remaining query. The RSS parser
+  refuses any feed declaring a DOCTYPE/ENTITY before handing bytes to the
+  entity-expanding stdlib parser (billion-laughs / XXE defense, whole-body scan).
+  Malformed CDX rows are skipped individually rather than aborting.
+- **A poison record cannot loop forever.** A manifestation that fails processing
+  is auto-retried at most `MAX_PROCESSING_ATTEMPTS` (5) times — each retry can
+  fork a 30 s `pdftotext`, so one unprocessable record would otherwise be an
+  unbounded work loop; its OPEN `PROCESSING_FAILED` item still stands for a
+  human, and a later success resets the budget. Locks:
+  `test_semantic_resource_governance.py`.
+- **Fan-out is bounded.** One response's pivot proposals are capped
+  (`MAX_PIVOTS_PER_RESPONSE`), so a verbose/hostile response cannot drive an
+  unbounded number of store appends.
+
+Existing byte/time bounds are preserved: the 40 MB per-request cap and 30 s
+timeout at the transport, the 25 MB `pdftotext` output cap, connector
+`limit ≤ 100`, plan `budget_max_requests ≤ 500`, and the ≥ 60 s watch cadence
+floor.
+
 ## Failure / recovery, backup / restore
 
 The mission store is an append-only hash chain (`verify_chain`) with

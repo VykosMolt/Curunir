@@ -184,6 +184,10 @@ class ExecutionRecord(Record):
     manifestation_ids: tuple[str, ...]
     started_time: str; completed_time: str | None
     absence_semantics: str; marking: Marking
+    # a byte-capped (partial) retrieval: the source was not seen in full, so
+    # this execution cannot establish absence even when it parsed to zero
+    # results. Defaults False so pre-existing records replay unchanged.
+    truncated: bool = False
 
     def __post_init__(self):
         _member(self.outcome, EXECUTION_OUTCOMES, "execution outcome")

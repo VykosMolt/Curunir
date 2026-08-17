@@ -27,6 +27,14 @@ _SCHEME_TO_SOURCE = {
     "WIKIDATA_QID": "wikidata",
 }
 
+# One acquired response can carry source-controlled cardinality (a Wikidata
+# entity with tens of thousands of aliases/labels), and each becomes a pivot
+# proposal append. Bound the proposals recorded per response so a single hostile
+# or verbose response cannot drive an unbounded number of store appends. Pivots
+# are human-review PROPOSALS, not evidence, so a generous deterministic cap is
+# safe; a real entity yields a handful.
+MAX_PIVOTS_PER_RESPONSE = 500
+
 
 def propose_pivots(store: FabricStore, outcome: ExecutionResult, *, subject: str,
                    now: str, actor: str, marking) -> list[PivotEdge]:
@@ -72,7 +80,8 @@ def propose_pivots(store: FabricStore, outcome: ExecutionResult, *, subject: str
     deduped: dict[str, PivotEdge] = {}
     for pivot in pivots:
         deduped.setdefault(pivot.pivot_id, pivot)
-    recorded = list(deduped.values())
+    # bound the appends a single response can drive (source-controlled fan-out)
+    recorded = list(deduped.values())[:MAX_PIVOTS_PER_RESPONSE]
     for pivot in recorded:
         store.append("FABRIC_PIVOT_RECORDED", pivot, recorded_time=now, actor=actor)
     return recorded

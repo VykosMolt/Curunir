@@ -59,10 +59,21 @@ class WaybackConnector(SourceConnector):
             return self._failed(request, url, raw, now=now,
                                 error_class="TRANSPORT" if raw.get("status") is None else "HTTP",
                                 error_detail=self.transport_error_detail(raw))
+        # An empty 200 body is a source error/throttle, not an empty result set
+        # (the other connectors and _fetch_capture already treat it as FAILED);
+        # classifying it EMPTY would feed absence reasoning. A valid CDX reply is
+        # a JSON array (possibly just a header row) — a header-only array is a
+        # legitimate EMPTY.
+        if not raw.get("body"):
+            return self._failed(request, url, raw, now=now, error_class="HTTP",
+                                error_detail="empty CDX response body (source error or throttle)")
         try:
-            rows = json.loads(raw["body"].decode("utf-8")) if raw.get("body") else []
+            rows = json.loads(raw["body"].decode("utf-8"))
         except (ValueError, UnicodeDecodeError) as exc:
             return self._failed(request, url, raw, now=now, error_class="PARSE", error_detail=str(exc))
+        if not isinstance(rows, list):
+            return self._failed(request, url, raw, now=now, error_class="PARSE",
+                                error_detail="CDX response is not a JSON array")
         next_cursor = None
         if rows and rows[-1] and len(rows[-1]) == 1:  # trailing resume key row (after a blank row)
             next_cursor = rows[-1][0]
@@ -70,11 +81,19 @@ class WaybackConnector(SourceConnector):
         rows = [row for row in rows if row]
         results = []
         for row in rows[1:]:  # first row is the header
+            # skip a malformed row rather than abort the whole enumeration and
+            # lose every valid capture in the same response
+            if not isinstance(row, list) or len(row) < 5:
+                continue
             timestamp, original, digest, mimetype, statuscode = row[:5]
+            try:
+                source_time = capture_time_iso(timestamp)
+            except (ValueError, TypeError):
+                continue  # a row with an unparseable capture timestamp is unusable
             results.append(NativeResult(
                 native_id=f"{timestamp}/{original}",
                 url=f"{CAPTURE_ENDPOINT}/{timestamp}id_/{original}",
-                source_time=capture_time_iso(timestamp),
+                source_time=source_time,
                 identifiers=(("wayback_digest", digest),),
                 attributes=(("mimetype", mimetype), ("statuscode", statuscode),
                             ("original_url", original), ("timestamp", timestamp)),
