@@ -521,13 +521,21 @@ class MissionDataStore:
         # ENOSPC mid-write) — treat it as ABSENT and rewrite, never trust a bare
         # existence gate that would serve wrong evidence forever and make every
         # later backup unrestorable with no signal at backup time (review A-F2).
+        if path.is_dir():
+            raise StoreError(f"payload slot {digest[:12]} is a directory; refusing")
         if path.exists():
             try:
                 if hashlib.sha256(path.read_bytes()).hexdigest() == digest:
                     return digest                         # already present and intact
             except OSError:
                 pass                                      # unreadable -> rewrite below
-        tmp = path.with_name(f".{digest}.{os.getpid()}.{time.time_ns()}.tmp")
+        # the temp file lives OUTSIDE payload_dir: export_to copies payload_dir
+        # WHOLESALE, so a torn/never-renamed temp inside it would be swept into the
+        # manifest and rejected by import as a non-digest name — reintroducing the
+        # A-F2 harm (an unrestorable backup, no signal) on a mere crash or a
+        # concurrent write during a backup (review B-1). Same filesystem as the
+        # target, so the replace stays atomic.
+        tmp = self.root / f".payload.{digest}.{os.getpid()}.{time.time_ns()}.tmp"
         try:
             with tmp.open("wb") as handle:
                 handle.write(body)
@@ -539,10 +547,15 @@ class MissionDataStore:
         return digest
 
     def get_payload(self, digest: str) -> bytes:
-        body = (self.payload_dir / digest).read_bytes()
+        path = self.payload_dir / digest
+        if path.is_dir():                                 # a directory-named slot (B-6)
+            raise StoreError(f"payload {digest[:12]} is a directory; refusing to serve it")
+        body = path.read_bytes()                          # FileNotFoundError if genuinely absent
         if hashlib.sha256(body).hexdigest() != digest:
             # a torn/corrupt payload must fail LOUDLY, never be served as silent
-            # wrong evidence to extraction/claims (review A-F2)
+            # wrong evidence to extraction/claims (review A-F2). Callers that want
+            # graceful degradation (provenance) catch StoreError and fall back to
+            # the verified custody copy (review B-2).
             raise StoreError(f"payload {digest[:12]} is corrupt (content does not "
                              "match its content-address); refusing to serve it")
         return body
@@ -576,8 +589,17 @@ class MissionDataStore:
             shutil.copyfile(self.root / "store_meta.json", directory / "store_meta.json")
             payload_hashes: dict[str, str] = {}
             for path in sorted(self.payload_dir.iterdir()):
-                shutil.copyfile(path, directory / "payloads" / path.name)
-                payload_hashes[path.name] = path.name  # content-addressed: name is the sha256
+                # copy ONLY content-address files (64-hex). Any stray non-digest
+                # entry — a leftover temp, an operator's file — must never enter the
+                # manifest, or import refuses the whole restore on a name that is
+                # not a valid payload (defense-in-depth behind put_payload's
+                # temp-outside-payload_dir fix; review B-1).
+                name = path.name
+                if not (path.is_file() and len(name) == 64
+                        and all(c in "0123456789abcdef" for c in name)):
+                    continue
+                shutil.copyfile(path, directory / "payloads" / name)
+                payload_hashes[name] = name  # content-addressed: name is the sha256
             manifest = {
                 "export_format": "curunir-operational-open-export-v1",
                 "store_id": self.meta["store_id"],

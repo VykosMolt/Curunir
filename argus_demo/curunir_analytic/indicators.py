@@ -156,8 +156,13 @@ def _fold_into_forecasts(ctx: AnalyticContext, indicator: Mapping[str, Any]) -> 
         _forecast_reappend(ctx, forecast,
                            {"indicator_ids": tuple(forecast["indicator_ids"])
                             + (indicator["indicator_id"],)},
+                           # REFERENCE the indicator by id (scrubbed for uncleared
+                           # viewers), never embed its compartmented DESCRIPTION —
+                           # a PUBLIC forecast must not carry a SPECIAL indicator's
+                           # text verbatim, and flooring the whole forecast on the
+                           # indicator would over-classify it (review A4)
                            change_reason=f"indicator armed: "
-                                         f"{indicator['description'][:120]}",
+                                         f"{indicator['indicator_id'][:18]}",
                            history_note=f"INDICATOR:{indicator['indicator_id'][:18]}")
 
 
@@ -513,5 +518,7 @@ def _apply_effects(ctx: AnalyticContext, indicator: Mapping[str, Any]) -> int:
                           detail=f"indicator {indicator['description'][:100]!r} "
                                  f"fired ({indicator['direction']}): {why[:120]}",
                           caused_by=marker,
-                          evidence_refs=evidence[:5])
+                          # cite the indicator this detail quotes verbatim, so the
+                          # transition floors on the (compartmented) indicator (A1)
+                          evidence_refs=(indicator["indicator_id"], *evidence[:4]))
     return store.head()["event_count"] - before

@@ -257,9 +257,14 @@ def evidence_view(projection: MissionProjection, manifestation_id: str) -> dict[
         from pathlib import Path
         mission_root = Path(projection.store.root).resolve().parent
         candidates = []
+        from curunir_operational.store import StoreError
         try:
             candidates.append(projection.store.get_payload(sha))
-        except (KeyError, FileNotFoundError, OSError):
+        except (KeyError, FileNotFoundError, OSError, StoreError):
+            # get_payload now fails LOUD on a corrupt/torn payload (review A-F2);
+            # this designed graceful path catches it and falls back to the VERIFIED
+            # custody copy, exactly as for a missing file — a corrupt payload must
+            # render as "unavailable", never 500 the evidence view (review B-2)
             pass
         # canonical content-addressed custody location under the mission
         # root; the recorded path is a last resort, and only when it resolves

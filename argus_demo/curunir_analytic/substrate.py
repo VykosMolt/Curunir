@@ -109,10 +109,7 @@ def object_own_marking(record: Mapping[str, Any], fallback: Marking) -> Marking:
 
 
 def _subject_marking(ctx: AnalyticContext, subject_kind: str, subject_id: str):
-    """The current marking of an analytic SUBJECT object, or None. The single
-    lookup used by record_transition AND marked_for_subject, so the no-write-down
-    floor on a derived record (transition / review item / alert) is derived one
-    way (review R23B-1/2/4)."""
+    """The current marking of an analytic SUBJECT object, or None."""
     if subject_kind in ANALYTIC_ID_FIELDS:
         subject = ctx.store.current_analytics(subject_kind).get(subject_id)
         if subject is not None:
@@ -120,14 +117,53 @@ def _subject_marking(ctx: AnalyticContext, subject_kind: str, subject_id: str):
     return None
 
 
+def _reference_markings(ctx: AnalyticContext, refs) -> list:
+    """The current marking of EVERY retained object a derived record references — a
+    semantic claim, ANY analytic object (indicator / forecast / warning / …), or an
+    activity / execution — so a transition / review / alert that CITES an object in
+    its evidence_refs floors on it AUTOMATICALLY. The class is "floor on everything
+    REFERENCED", not just the subject: a derived record's detail routinely quotes a
+    NON-subject object (an indicator's description, an assumption's statement), and
+    the floor must cover it (review A1/A2/A3). An id that resolves to no retained
+    record names no state to protect and contributes nothing."""
+    ids = {r for r in refs if isinstance(r, str) and r}
+    if not ids:
+        return []
+    out: list = []
+    claims = ctx.store.current_claims()
+    for rid in list(ids):                                   # the common, value-bearing case
+        claim = claims.get(rid)
+        if claim is not None and isinstance(claim.get("marking"), dict):
+            out.append(claim["marking"]); ids.discard(rid)
+    for kind in ANALYTIC_ID_FIELDS:                         # any analytic object it cites
+        if not ids:
+            break
+        current = ctx.store.current_analytics(kind)
+        for rid in list(ids):
+            rec = current.get(rid)
+            if rec is not None and isinstance(rec.get("marking"), dict):
+                out.append(rec["marking"]); ids.discard(rid)
+    for family, id_field in (("activity", "activity_id"), ("fabric_execution", "execution_id")):
+        if not ids:
+            break
+        for rec in ctx.store.records_of(family):
+            rid = rec.get(id_field)
+            if rid in ids and isinstance(rec.get("marking"), dict):
+                out.append(rec["marking"]); ids.discard(rid)
+    return out
+
+
 def marked_for_subject(ctx: AnalyticContext, subject_kind: str, subject_id: str,
-                       reference_markings: "list | tuple" = ()):
+                       reference_markings: "list | tuple" = (),
+                       evidence_refs: "tuple" = ()):
     """The marking a record DERIVED from an analytic subject must carry: floored on
-    the subject's own current marking plus any explicit references — the record
-    analogue of record_transition's subject floor, for engine-written review
-    items / alerts that summarize a subject's state (review R23B-1)."""
+    the subject's own current marking, EVERY object cited in evidence_refs (so a
+    review item that quotes a non-subject object floors on it), plus any explicit
+    reference_markings — the record analogue of record_transition's floor, one way
+    (review R23B-1 / A3)."""
     return inherited_marking(ctx.marking, [*reference_markings,
-                                           _subject_marking(ctx, subject_kind, subject_id)])
+                                           _subject_marking(ctx, subject_kind, subject_id),
+                                           *_reference_markings(ctx, evidence_refs)])
 
 
 def record_transition(ctx: AnalyticContext, *, subject_kind: str, subject_id: str,
@@ -158,8 +194,14 @@ def record_transition(ctx: AnalyticContext, *, subject_kind: str, subject_id: st
     # must never be viewable by a context that cannot view the subject. This is
     # the append_version no-write-down guarantee extended to transitions, so no
     # engine call site has to remember to pass reference_markings for the subject.
+    # floor on the subject AND on EVERY object cited in evidence_refs (resolved to
+    # its current marking) — a transition's detail quotes non-subject objects (an
+    # indicator's description, an assumption's statement), so "floor on the subject"
+    # alone under-classifies; the rule is "cite what you quote" and the floor is
+    # automatic (review A1/A2/A3).
     marking = inherited_marking(ctx.marking, [*reference_markings,
-                                              _subject_marking(ctx, subject_kind, subject_id)])
+                                              _subject_marking(ctx, subject_kind, subject_id),
+                                              *_reference_markings(ctx, evidence_refs)])
     record = AnalyticalTransition(
         transition_id=transition_id, subject_kind=subject_kind, subject_id=subject_id,
         transition_type=transition_type, detail=detail[:500], caused_by=caused_by,

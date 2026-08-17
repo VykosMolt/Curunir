@@ -31,7 +31,7 @@ from .basis import (basis_changed_materially, basis_from_record, compute_basis,
 from .contracts import ForecastRecord, ResolutionRule
 from .store import AnalyticStore
 from .substrate import (AnalyticContext, append_version, ensure_transition,
-                        record_transition, require_accepted_candidate)
+                        marked_for_subject, record_transition, require_accepted_candidate)
 
 
 def forecast_id_for(question: str, horizon_time: str) -> str:
@@ -379,7 +379,9 @@ def update_probability(ctx: AnalyticContext, forecast_id: str, *,
                              f"{' via indicator ' + indicator_id[:18] if indicator_id else ''}"
                              f": {reason[:180]}",
                       caused_by=digest_id("pupdate", forecast_id, str(updated["version"])),
-                      evidence_refs=evidence_refs[:5],
+                      # cite the indicator whose (compartmented) rationale `reason`
+                      # may quote, so the transition floors on it (A2)
+                      evidence_refs=(((indicator_id,) if indicator_id else ()) + tuple(evidence_refs[:4])),
                       from_status=forecast["status"], to_status=new_status,
                       reference_markings=ref_markings)
     if indicator_id:
@@ -391,7 +393,7 @@ def update_probability(ctx: AnalyticContext, forecast_id: str, *,
                           detail=f"pre-authorized update executed: p → "
                                  f"{probability:.2f}",
                           caused_by=digest_id("fire", indicator_id, forecast_id),
-                          evidence_refs=evidence_refs[:5])
+                          evidence_refs=(indicator_id, *evidence_refs[:4]))   # floor on the indicator (A2)
     return updated
 
 
@@ -652,10 +654,12 @@ def try_machine_resolution(ctx: AnalyticContext, forecast_id: str) -> dict[str, 
                     evidence_refs=(claim_id,),
                     status="OPEN", resolution_note="",
                     recorded_time=ctx.now_fn(),
-                    # the item is ABOUT the (possibly restricted) claim whose
-                    # late value it quotes — it inherits the claim's marking
-                    marking=inherited_marking(ctx.marking,
-                                              _ref_markings(store, (claim_id,))))
+                    # floor on the SUBJECT forecast (a SPECIAL forecast may rest on
+                    # a PUBLIC claim — flooring on the claim alone under-classified
+                    # the restricted forecast this item is about) AND on the claim
+                    # whose late value it quotes (review A3)
+                    marking=marked_for_subject(ctx, "analytic_forecast",
+                                               forecast["forecast_id"], evidence_refs=(claim_id,)))
                 store.append("REVIEW_ITEM_RECORDED", item,
                              recorded_time=item.recorded_time, actor=ctx.actor)
             return forecast

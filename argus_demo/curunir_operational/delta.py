@@ -24,30 +24,33 @@ DELTA_FORMAT = "curunir-operational-delta-v1"
 AUDIENCE = "PRIVILEGED_STORE_SYNC"
 
 
+def _scan_digests(value: Any, available: set, out: set) -> None:
+    """Collect every string in `value` — dict KEYS and values, nested — that names
+    a payload in `available`. Family/field-AGNOSTIC: a payload is content-addressed,
+    so any field/key that equals a payload file name is a reference (the V6.7
+    `semantic_document` normalized_sha256/fields_sha256, the V2 `ingestion`
+    payload_ref, any future family), without binding to a record type. Keys are
+    scanned too (review A-F1 / B-5)."""
+    if isinstance(value, str):
+        if value in available:
+            out.add(value)
+    elif isinstance(value, dict):
+        for k, v in value.items():
+            _scan_digests(k, available, out)
+            _scan_digests(v, available, out)
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            _scan_digests(item, available, out)
+
+
 def _referenced_payloads(store: MissionDataStore, events: list) -> set:
-    """Every payload digest referenced by these events, family-AGNOSTICALLY. A
-    payload is content-addressed, so ANY string field in a record that names an
-    existing payload file is a reference — the V6.7 `semantic_document` families
-    (normalized_sha256 / fields_sha256), the V2 `ingestion` family, and any future
-    family, without the copy predicate being bound to one record type. The old
+    """Every payload digest referenced by these events (the old
     `record_type == "ingestion"` predicate omitted 100% of a V6.7 mission's
-    evidence while declaring "none omitted" (review A-F1)."""
+    evidence while declaring "none omitted" — review A-F1)."""
     available = {p.name for p in store.payload_dir.iterdir()}
     referenced: set = set()
-
-    def walk(value):
-        if isinstance(value, str):
-            if value in available:
-                referenced.add(value)
-        elif isinstance(value, dict):
-            for item in value.values():
-                walk(item)
-        elif isinstance(value, (list, tuple)):
-            for item in value:
-                walk(item)
-
     for event in events:
-        walk(event.get("record"))
+        _scan_digests(event.get("record"), available, referenced)
     return referenced
 
 
@@ -206,13 +209,7 @@ def import_delta_bundle(store: MissionDataStore, bundle_dir: str | Path) -> dict
             reject_non_finite(event)
         except ValueError as exc:
             raise StoreError("delta bundle contains a non-finite float (NaN/Infinity); refusing") from exc
-    # install EVERY payload the bundle carries (all record families, not just the
-    # V2 ingestion one — a V6.7 mission's evidence lives in semantic_document
-    # payloads), BEFORE applying any event. verify_delta_bundle already confirmed
-    # each manifest payload is present and hashes to its name; put_payload is
-    # crash-atomic + self-repairing (review A-F1 / A-F2).
-    for digest in manifest.get("payloads", []):
-        store.put_payload((bundle_dir / "payloads" / digest).read_bytes())
+    manifest_payloads = set(manifest.get("payloads", []))    # verified present+hashed by verify
     applied = 0
     for event in events:
         if event["seq"] <= head["event_count"]:
@@ -223,6 +220,14 @@ def import_delta_bundle(store: MissionDataStore, bundle_dir: str | Path) -> dict
                                   "unresolved conflict, nothing further applied",
                         "store_head": store.head(), "bundle_base_seq": base_seq, "received_at": utc_now()}
             continue  # duplicate portion: idempotent skip
+        # install THIS event's referenced payloads (all families, not just V2
+        # ingestion — A-F1) only when the event is ACTUALLY applied, never before a
+        # DIVERGED_OVERLAP / DUPLICATE return, so a rejected/diverged bundle can no
+        # longer plant unbounded attacker-chosen bytes into the store (review B-3).
+        refs: set = set()
+        _scan_digests(event.get("record"), manifest_payloads, refs)
+        for digest in sorted(refs):
+            store.put_payload((bundle_dir / "payloads" / digest).read_bytes())
         store.append_imported_event(event)
         applied += 1
     if applied == 0:

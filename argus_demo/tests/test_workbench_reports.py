@@ -311,6 +311,13 @@ def test_hidden_claim_state_on_cited_basis_blocks_approval(mission):
     report = _draft(ctx, seeded)                                  # cites status_claim
     submitted = submit_report(ctx.store, report["report_id"], actor="analyst-a",
                               marking=MARK, now=ctx.now_fn(), expected_version=1, state_token="tok")
+    # a benign VISIBLE current state lands first — it must NOT mask the later hidden
+    # retraction (the append-family masking B1 exploited)
+    ctx.store.append("SEMANTIC_CLAIM_STATE_RECORDED", ClaimStateRecord(
+        state_id="cs-visible-0", claim_id=claim_id, state="CURRENT",
+        reason="", caused_by="ingest", superseded_by="",
+        actor_id="analyst-a", actor_kind="HUMAN",
+        recorded_time=ctx.now_fn(), marking=MARK), recorded_time=ctx.now_fn(), actor="analyst-a")
     ctx.store.append("SEMANTIC_CLAIM_STATE_RECORDED", ClaimStateRecord(
         state_id="cs-secret-1", claim_id=claim_id, state="RETRACTED",
         reason="retracted on compartmented evidence", caused_by="review-x",

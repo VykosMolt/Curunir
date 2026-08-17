@@ -237,40 +237,55 @@ def test_warning_floors_marking_on_referenced_forecast(tmp_path):
     assert can_view(warn["marking"], uncleared) is False                 # invisible to the uncleared
 
 
-def test_no_derived_record_underclassifies_its_restricted_subject(tmp_path):
-    # CLASS-LEVEL property (review R23B-1/2/4): after a background pass at a lower
-    # marking, NO analytic_transition or review_item ABOUT a restricted subject may
-    # be viewable by an uncleared actor. Tests the record_transition /
-    # marked_for_subject subject-floor chokepoint as an INVARIANT over every
-    # emitting site, not a single instance.
+def test_no_derived_record_underclassifies_anything_it_references(tmp_path):
+    # CLASS-LEVEL property (review A1/A2/A3, the CORRECT invariant): after the
+    # SHIPPED background pass at a lower marking, NO analytic_transition or
+    # review_item may be viewable by an actor who cannot view SOMETHING THE RECORD
+    # REFERENCES — its subject OR any object in evidence_refs (a transition quotes
+    # a non-subject indicator's description; a review quotes a claim). The earlier
+    # version of this test asserted "record >= its own subject", the invariant the
+    # code already enforced, and so could never catch the non-subject leaks the
+    # confirmatory review found — this asserts "record >= EVERYTHING it references".
+    import importlib
     from curunir_analytic.substrate import AnalyticContext
     from curunir_analytic.store import ANALYTIC_ID_FIELDS
+    from curunir_analytic.indicators import arm_indicator, check_indicators
     from curunir_operational.access import AccessContext, can_view
     from workbench_support import RESTRICTED_MARK
-    pipeline, ctx = make_analytic(tmp_path)                       # ctx.marking is PUBLIC
+    ind_mod = importlib.import_module("test_analytic_indicators")
+    pipeline, ctx = make_analytic(tmp_path)                       # PUBLIC background ctx
     claims = _seed(pipeline, ctx)
     rctx = AnalyticContext(store=ctx.store, actor="analyst-a",
                            marking=RESTRICTED_MARK, now_fn=ctx.now_fn)
     obj = _objective(rctx); fc = _forecast(rctx, claims)         # SPECIAL objective + forecast
-    # project + move + re-project the warning on the PUBLIC pass (emits transitions)
-    _project = lambda: project_warning(ctx, forecast_id=fc["forecast_id"],
-                                       objective_id=obj["objective_id"])
-    _project()
-    update_probability(rctx, fc["forecast_id"], probability=0.92, reason="registry flip",
-                       actor_id="analyst-a", actor_kind="HUMAN")
-    _project()
+    project_warning(ctx, forecast_id=fc["forecast_id"], objective_id=obj["objective_id"])
+    # arm a SPECIAL indicator on the (SPECIAL) forecast and FIRE it on the PUBLIC pass
+    arm_indicator(rctx, description="OPERATION MOONLIGHT covert delisting watch",
+                  forecast_ids=(fc["forecast_id"],), kind="PRESENCE", direction="SUPPORTS",
+                  desired_observation_type="ENTITY_ATTRIBUTE", desired_subject_ref=ACME,
+                  desired_attribute="entity_status", expected_value="INACTIVE",
+                  effect=ind_mod._presence_effect())
+    ind_mod._flip_to_suspended(pipeline, ctx)
+    check_indicators(ctx)                                        # shipped background pass, PUBLIC
+    project_warning(ctx, forecast_id=fc["forecast_id"], objective_id=obj["objective_id"])
+
     uncleared = AccessContext("c", "d", "HUMAN", ("ANALYST",), releasability=("PUBLIC",))
-    subj_marking = {}
+    # marking of EVERY object, by id (analytic + claims)
+    mark_of = {}
     for kind, (_, id_field) in ANALYTIC_ID_FIELDS.items():
         for rec in ctx.store.current_analytics(kind).values():
-            subj_marking[(kind, rec[id_field])] = rec["marking"]
+            mark_of[rec[id_field]] = rec["marking"]
+    for cid, c in ctx.store.current_claims().items():
+        mark_of[cid] = c["marking"]
+
+    def _referenced_restricted(record):
+        refs = [record["subject_id"], *record.get("evidence_refs", ())]
+        return [r for r in refs if r in mark_of and not can_view(mark_of[r], uncleared)]
+
     leaks = []
-    for t in ctx.store.records_of("analytic_transition"):
-        m = subj_marking.get((t["subject_kind"], t["subject_id"]))
-        if m and not can_view(m, uncleared) and can_view(t["marking"], uncleared):
-            leaks.append(("transition", t["transition_type"], t["subject_kind"]))
-    for r in ctx.store.records_of("review_item"):
-        m = subj_marking.get((r["subject_kind"], r["subject_id"]))
-        if m and not can_view(m, uncleared) and can_view(r["marking"], uncleared):
-            leaks.append(("review_item", r["kind"], r["subject_kind"]))
-    assert leaks == [], f"derived records under-classifying a restricted subject: {leaks}"
+    for rec in (*ctx.store.records_of("analytic_transition"), *ctx.store.records_of("review_item")):
+        restricted = _referenced_restricted(rec)
+        if restricted and can_view(rec["marking"], uncleared):
+            leaks.append((rec.get("transition_type") or rec.get("kind"),
+                          rec.get("detail", "")[:50], restricted))
+    assert leaks == [], f"derived records under-classifying a REFERENCED object: {leaks}"

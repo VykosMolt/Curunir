@@ -290,7 +290,8 @@ def invalidate_assumption(ctx: AnalyticContext, assumption_id: str, *,
                               detail=f"assumption {assumption['statement'][:120]!r} "
                                      f"invalidated: {reason[:150]}",
                               caused_by=caused_by,
-                              evidence_refs=contradicting_claim_ids[:5],
+                              # cite the assumption this detail quotes (floor on it; A4)
+                              evidence_refs=(assumption_id, *contradicting_claim_ids[:4]),
                               to_status="STALE",
                               reference_markings=basis_markings)
             if path:
@@ -299,7 +300,7 @@ def invalidate_assumption(ctx: AnalyticContext, assumption_id: str, *,
                     detail=f"impact path {ref[:18]} rests on invalidated assumption: "
                            f"{assumption['statement'][:140]}",
                     caused_by=f"{caused_by}:{ref[:18]}",
-                    reference_markings=basis_markings)
+                    reference_markings=[*basis_markings, assumption.get("marking")])
         elif kind == "mission_objective":
             mark_objective_exposed(
                 ctx, ref,

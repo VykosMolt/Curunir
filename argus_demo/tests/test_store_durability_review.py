@@ -190,3 +190,23 @@ def test_put_payload_repairs_a_torn_write_and_get_payload_fails_loud(tmp_path):
         store.get_payload(digest)                                # loud, not silent wrong bytes
     assert store.put_payload(body) == digest                     # self-repairs
     assert store.get_payload(digest) == body                     # correct again
+
+
+def test_export_ignores_stray_non_digest_files_in_payload_dir(tmp_path):
+    # review B-1: put_payload's temp lives OUTSIDE payload_dir and export copies
+    # ONLY 64-hex content-address files, so a leftover temp / operator file can
+    # never enter the manifest and make import_from refuse the whole restore.
+    from curunir_operational.store import MissionDataStore
+    from operational_support import make_store
+    store = make_store(tmp_path)
+    store.put_payload(b"real evidence bytes")
+    (store.payload_dir / ".0abc.4242.99.tmp").write_bytes(b"orphan temp")   # simulate a crash orphan
+    (store.payload_dir / "operator-note.txt").write_bytes(b"stray file")
+    # put_payload's own temp never lingers inside payload_dir (it writes to root)
+    assert not any(p.name.startswith(".payload.") for p in store.payload_dir.iterdir())
+    exp = tmp_path / "exp"; store.export_to(exp)
+    import json
+    manifest = json.loads((exp / "export_manifest.json").read_text())
+    assert manifest["payloads"] and all(len(p) == 64 for p in manifest["payloads"])   # only digests
+    restored = MissionDataStore.import_from(exp, tmp_path / "dest")                    # not refused
+    assert restored.verify_chain()["valid"]

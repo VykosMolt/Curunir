@@ -407,17 +407,20 @@ def _raw_hidden_basis_concerns(store: WorkbenchStore, projection: MissionProject
             cited |= set(sentence.get("basis_refs", ()))
     if not cited:
         return []
-    visible_states = {s["claim_id"] for s in projection.family("semantic_claim_state")}
-    visible_reviews = {r["subject_id"] for r in projection.family("review_item")
-                       if r["status"] == "OPEN"}
+    from curunir_operational.access import can_view
+    approver = projection.context
     hidden: list[str] = []
-    # current state per claim (last-wins, matching the store's semantic view)
-    for claim_id in store.latest_by_id("semantic_claim_state", "claim_id"):
-        if claim_id in cited and claim_id not in visible_states:
+    # Ask whether the approver can VIEW the CURRENT state, not "has the approver
+    # ever seen ANY state record for this claim". semantic_claim_state is an APPEND
+    # family, so a benign visible earlier CURRENT state would otherwise MASK a
+    # later compartmented RETRACTED and let the approval ship retracted evidence as
+    # settled fact. latest_by_id is last-wins = the current state (review B1/R23B-3).
+    for claim_id, state in store.latest_by_id("semantic_claim_state", "claim_id").items():
+        if claim_id in cited and not can_view(state.get("marking"), approver):
             hidden.append(claim_id)
     for item in store.latest_by_id("review_item", "item_id").values():
         if item.get("status") == "OPEN" and item.get("subject_id") in cited \
-                and item["subject_id"] not in visible_reviews:
+                and not can_view(item.get("marking"), approver):
             hidden.append(item["subject_id"])
     return hidden
 
