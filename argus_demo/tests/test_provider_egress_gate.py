@@ -233,7 +233,8 @@ def test_provider_scrub_is_total_no_container_escapes_containment(tmp_path):
     from curunir_operational.canonical import canonical_line
     hostile = {"title": "ok", "a_set": {float("inf"), 1.0}, "hetero": {1, "x", 2.5},
                "raw": b"\xff\x00", "dec": decimal.Decimal("1.5"),
-               "mixedkeys": {5: "a", "b": 2}, "bigint": 10 ** 5000}   # >4300 digits (N-1 huge-int)
+               "mixedkeys": {5: "a", "b": 2}, "bigint": 10 ** 5000,
+               "hugekey": {10 ** 5000: "v"}}   # >4300 digits in value AND key (N-1 + sibling)
     scrubbed = _scrub_output(hostile)
     canonical_line(scrubbed)                                  # serializes without raising
     assert canonical_line(_scrub_output(hostile)) == canonical_line(scrubbed)  # deterministic

@@ -58,7 +58,10 @@ def _scrub_output(value: Any) -> Any:
     if isinstance(value, dict):
         out: dict[str, Any] = {}
         for k, v in value.items():
-            key = k if isinstance(k, str) else str(k)
+            # scrub a non-str key THROUGH _scrub_output before str()-ing it, so a
+            # too-large int (or non-finite / bytes) key cannot itself raise the
+            # int-digit limit here (the N-1 sibling: value was handled, key was not)
+            key = k if isinstance(k, str) else str(_scrub_output(k))
             out[key.encode("utf-8", "replace").decode("utf-8")] = _scrub_output(v)
         return out
     if isinstance(value, (list, tuple)):
