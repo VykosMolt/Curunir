@@ -214,3 +214,24 @@ def test_warning_cannot_be_raised_about_a_settled_question(tmp_path):
     with pytest.raises(ValueError, match="settled"):
         project_warning(ctx, forecast_id=forecast["forecast_id"],
                         objective_id=objective["objective_id"])
+
+
+def test_warning_floors_marking_on_referenced_forecast(tmp_path):
+    # review B-1: a warning EMBEDS the forecast's state (its tier/band come from
+    # the forecast's probability), so its marking must be floored on the
+    # forecast's (and objective's) live marking — else a warning projected or
+    # RE-projected over a restricted forecast under-classifies it.
+    from curunir_analytic.substrate import AnalyticContext
+    from curunir_operational.access import AccessContext, can_view, marking_from_record
+    from workbench_support import RESTRICTED_MARK
+    pipeline, ctx = make_analytic(tmp_path)
+    claims = _seed(pipeline, ctx)
+    rctx = AnalyticContext(store=ctx.store, actor="analyst-a",
+                           marking=RESTRICTED_MARK, now_fn=ctx.now_fn)   # SPECIAL compartment
+    obj = _objective(rctx)
+    fc = _forecast(rctx, claims)
+    warn = project_warning(ctx, forecast_id=fc["forecast_id"],           # projected on the PUBLIC pass
+                           objective_id=obj["objective_id"])
+    assert "SPECIAL" in marking_from_record(warn["marking"]).compartments  # floored, not PUBLIC
+    uncleared = AccessContext("c", "d", "HUMAN", ("ANALYST",), releasability=("PUBLIC",))
+    assert can_view(warn["marking"], uncleared) is False                 # invisible to the uncleared

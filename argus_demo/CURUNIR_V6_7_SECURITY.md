@@ -106,9 +106,13 @@ the untracked kernel transport); and there is a check-then-connect DNS window
 There is currently **no live model provider** — `AnalyticalAssist.propose` is
 the one designed gate but is unwired (no callers). Its egress control is in
 place for when a provider is wired: it derives the effective input marking from
-the actual referenced objects and **refuses before the provider call** when the
-input exceeds the provider's declared `allowed_input_marking`; an ungoverned
-provider (no policy) receives public-releasable evidence only. Provider output
+the **declared** referenced objects (`input_refs`) and **refuses before the
+provider call** when that exceeds the provider's declared `allowed_input_marking`;
+an ungoverned provider (no policy) receives public-releasable evidence only. NOTE
+(review B-6): the gate classifies the declared `input_refs`, not the `inputs`
+payload actually transmitted — wiring a live provider MUST bind `inputs` to
+`input_refs` (or re-derive the marking from the payload) so the cargo cannot
+exceed the manifest. The seam has no in-tree caller today, so this is latent. Provider output
 still enters solely as an untrusted `ANALYTICAL_OBJECT_CANDIDATE` bound to its
 inference record, awaiting human acceptance. Lock:
 `tests/test_provider_egress_gate.py`.
@@ -353,14 +357,18 @@ documented scale limitation below, not a lifecycle defect.
   lower context) rather than recomputed from the visible basis.
 - Cross-analytic-object reference inheritance: the `append_version` chokepoint
   raises an object to cover the **claims** it rests on (creation, mutation,
-  refresh, any caller), but not another **analytic object** whose state it
-  embeds — e.g. a warning projecting a restricted forecast's probability band, an
-  analogue over a restricted episode. This is guarded at the workbench command
-  layer (`project_forecast_warning` sets `most_restrictive([forecast_marking,
-  objective_marking])`) and is not reachable via shipped authoring/background
-  paths (background `refresh_warnings` only re-projects existing warnings, never
-  first-projects over a restricted forecast). A follow-up should extend the
-  chokepoint to referenced-object markings so it is the sole fail-closed defense.
+  refresh, any caller), but not, by itself, another **analytic object** whose
+  state it embeds — e.g. a warning projecting a restricted forecast's probability
+  band, an analogue over a restricted episode. The **warning** case is now closed
+  directly at the projection site: `project_warning` floors the warning's marking
+  on the **live** marking of the forecast AND objective it embeds, at both the
+  first RAISED projection and every re-projection (`refresh_warnings`) — so a
+  forecast raised to a restricted marking after its warning was first raised no
+  longer leaves a lower-marked warning asserting the restricted forecast's
+  resolution/probability (this reachability was previously mis-documented as
+  "not reachable"; review B-1). The general chokepoint extension to *all*
+  referenced-object markings (e.g. analogues over restricted episodes) remains a
+  follow-up; the analogue path is workbench-guarded and not shipped-reachable.
 - No tool-execution/sandbox surface exists in the product, so tool-sandbox
   hardening is not applicable to the current runtime.
 - **`pdftotext` peak memory** (§6a): the 25 MB output cap bounds what flows

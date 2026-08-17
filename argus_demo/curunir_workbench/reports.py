@@ -392,6 +392,23 @@ def open_dissent(projection: MissionProjection, report_id: str) -> list[dict]:
             and (a["target_id"] in part_ids or a.get("anchor_ref") in part_ids)]
 
 
+def _raw_open_dissent(store: WorkbenchStore, report_id: str) -> list[dict]:
+    """Open dissent on the report or its parts, read from the RAW store (ALL
+    markings). An access-filtered VIEW must never silently disarm the control
+    that reads it: a dissent the approver is not cleared to SEE must still gate
+    the approval, failing CLOSED — exactly as validate_report blocks on basis the
+    approver cannot see (UNRESOLVABLE_BASIS), never silently counting it absent
+    (review B-3)."""
+    part_ids = {report_id}
+    for version in store.report_versions(report_id):
+        for section in version["sections"]:
+            part_ids.add(section["section_id"])
+            part_ids |= {x["sentence_id"] for x in section["sentences"]}
+    return [a for a in store.current_annotations().values()
+            if a["kind"] == "DISSENT" and a["status"] == "OPEN"
+            and (a["target_id"] in part_ids or a.get("anchor_ref") in part_ids)]
+
+
 def approve_report(store: WorkbenchStore, projection: MissionProjection,
                    report_id: str, *, actor: str, actor_kind: str,
                    marking: Marking, now: str, expected_version: int,
@@ -429,6 +446,17 @@ def approve_report(store: WorkbenchStore, projection: MissionProjection,
         raise ReportValidationError(validation["blocking"])
     dissent = open_dissent(projection, report_id)
     dissent_ids = tuple(a["annotation_id"] for a in dissent)
+    # fail CLOSED on dissent the approver is not cleared to see: they cannot
+    # acknowledge what they cannot see, and an approval must never assert "no
+    # dissent" over a dissent that is merely invisible to the approver (review B-3)
+    visible_ids = {a["annotation_id"] for a in dissent}
+    hidden = [a for a in _raw_open_dissent(store, report_id)
+              if a["annotation_id"] not in visible_ids]
+    if hidden:
+        raise ValueError(
+            "open dissent exists on this report that you are not cleared to view; "
+            "it must be resolved by a cleared reviewer, or the report approved by "
+            "an actor who can see and acknowledge it — approval refused")
     if dissent and set(dissent_ids) - set(acknowledge_dissent):
         raise ValueError(
             "open dissent exists on this report; approve with "

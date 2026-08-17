@@ -58,24 +58,30 @@ class SessionManager:
 
     # ---- authentication --------------------------------------------------
 
-    def _prune_pending(self, now: str) -> None:
+    def _prune_pending(self, now: str, actor_id: str) -> None:
         """Drop expired pending challenges (authenticate only pops on an attempt,
         so without this a flood of never-answered challenges would grow the map
         without bound). Also hard-cap the map so it cannot grow unboundedly even
-        within the TTL window: evict the oldest when at the cap."""
+        within the TTL window."""
         cutoff = parse_time(now)
         for nonce in [n for n, p in self._pending.items()
                       if cutoff > parse_time(p["expires_time"])]:
             self._pending.pop(nonce, None)
         while len(self._pending) >= MAX_PENDING_CHALLENGES:
-            oldest = min(self._pending, key=lambda n: self._pending[n]["issued_time"])
-            self._pending.pop(oldest, None)
+            # evict the REQUESTING actor's OWN oldest challenge first, so a flooder
+            # exhausts its own footprint rather than knocking out another actor's
+            # live challenge (denying it authentication) — the round-4 finding-5
+            # eviction of _prune_sessions, applied to the pending map too (B-5)
+            own = [n for n, p in self._pending.items() if p["actor_id"] == actor_id]
+            pool = own or list(self._pending)
+            victim = min(pool, key=lambda n: self._pending[n]["issued_time"])
+            self._pending.pop(victim, None)
 
     def issue_challenge(self, actor_id: str) -> dict[str, str]:
         """A fresh single-use nonce the actor must sign to prove key
         possession. Bound to the actor and expiring quickly."""
         now = self.now_fn()
-        self._prune_pending(now)
+        self._prune_pending(now, actor_id)
         nonce = secrets.token_hex(32)
         self._pending[nonce] = {"actor_id": actor_id, "issued_time": now,
                                 "expires_time": self._plus(now, self.challenge_ttl)}

@@ -378,3 +378,17 @@ def test_key_rotation_preserves_historical_verification(tmp_path):
     with pytest.raises(AuthError):
         sessions.resolve(registry, session.session_id)
     assert _login(ops, registry, sessions, "analyst-b", new_pem).actor_id == "analyst-b"
+
+
+def test_pending_challenge_flood_evicts_flooders_own_not_the_victim(tmp_path):
+    # review B-5: a challenge flood must evict the FLOODER's own oldest pending
+    # challenge, not another actor's live one (denying it authentication) — the
+    # round-4 own-actor eviction of _prune_sessions, applied to the pending map.
+    from curunir_identity.sessions import SessionManager, MAX_PENDING_CHALLENGES
+    sm = SessionManager(now_fn=lambda: "2026-08-17T12:00:00+00:00")
+    victim = sm.issue_challenge("analyst-b")["nonce"]
+    for _ in range(MAX_PENDING_CHALLENGES + 50):
+        sm.issue_challenge("watch-service")
+    assert victim in sm._pending                          # victim's live challenge survives
+    assert sm._pending[victim]["actor_id"] == "analyst-b"
+    assert len(sm._pending) <= MAX_PENDING_CHALLENGES     # flooder's footprint is self-bounded

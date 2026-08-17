@@ -265,3 +265,34 @@ def test_export_package_and_html(mission):
     html = export_html(projection, report)
     assert "[SUPPORTED]" in html and "[UNRESOLVED]" in html
     assert "doctype html" in html
+
+
+def test_compartmented_dissent_invisible_to_approver_blocks(mission):
+    # review B-3: an OPEN dissent the approver is not cleared to SEE must still
+    # gate the approval (fail closed) — an approval must never assert "no dissent"
+    # over a dissent merely invisible to the approver (the dissent analogue of
+    # test_support_invisible_to_approver_blocks / UNRESOLVABLE_BASIS).
+    from workbench_support import RESTRICTED_MARK
+    _, ctx, seeded = mission
+    report = _draft(ctx, seeded)
+    submitted = submit_report(ctx.store, report["report_id"], actor="analyst-a",
+                              marking=MARK, now=ctx.now_fn(), expected_version=1, state_token="tok")
+    # a cleared analyst raises a SPECIAL (compartmented) dissent on the report
+    create_annotation(
+        ctx.store, _projection(ctx, CTX_A), actor="analyst-a", marking=RESTRICTED_MARK,
+        now=ctx.now_fn(), target_kind="workbench_report", target_id=report["report_id"],
+        kind="DISSENT", text="compartmented objection to the judgment")
+    # the uncleared approver cannot SEE the dissent -> BLOCKED, not silently APPROVED
+    with pytest.raises(ValueError, match="not cleared to view"):
+        approve_report(ctx.store, _projection(ctx, CTX_B), report["report_id"],
+                       actor="supervisor", actor_kind="HUMAN", marking=MARK,
+                       now=ctx.now_fn(), expected_version=submitted["version"])
+    # and a CLEARED approver still sees it and can carry it visibly (control)
+    cleared = approve_report(ctx.store, _projection(ctx, CTX_A), report["report_id"],
+                             actor="supervisor", actor_kind="HUMAN", marking=MARK,
+                             now=ctx.now_fn(), expected_version=submitted["version"],
+                             acknowledge_dissent=tuple(
+                                 a["annotation_id"] for a in
+                                 __import__("curunir_workbench.reports", fromlist=["_raw_open_dissent"])
+                                 ._raw_open_dissent(ctx.store, report["report_id"])))
+    assert cleared["status"] == "APPROVED_WITH_DISSENT"

@@ -24,6 +24,14 @@ DELTA_FORMAT = "curunir-operational-delta-v1"
 AUDIENCE = "PRIVILEGED_STORE_SYNC"
 
 
+def _is_digest(value: Any) -> bool:
+    """True iff `value` is a 64-hex sha256 content address — safe to use as a
+    payload file name. A payload_ref from an untrusted bundle used as a path
+    otherwise reads an arbitrary host file into the store (the import_from M4
+    guard, applied to the delta path; review B-4 / NEW-A3)."""
+    return isinstance(value, str) and len(value) == 64 and all(c in "0123456789abcdef" for c in value)
+
+
 def build_delta_bundle(store: MissionDataStore, out_dir: str | Path, *, base_seq: int) -> dict[str, Any]:
     head = store.head()
     if not 0 <= base_seq <= head["event_count"]:
@@ -61,19 +69,33 @@ def build_delta_bundle(store: MissionDataStore, out_dir: str | Path, *, base_seq
 
 def verify_delta_bundle(bundle_dir: str | Path) -> dict[str, Any]:
     bundle_dir = Path(bundle_dir)
+    # the manifest is untrusted: parse it defensively and fail CLOSED (valid:False)
+    # on any malformed/hostile shape, rather than raising an untyped
+    # UnicodeDecodeError / AttributeError / RecursionError from a later .items() /
+    # index (review NEW-A2 / B-4)
     try:
-        manifest = json.loads((bundle_dir / "delta_manifest.json").read_text(encoding="utf-8"))
+        manifest = json.loads((bundle_dir / "delta_manifest.json").read_bytes().decode("utf-8"))
     except FileNotFoundError:
         return {"valid": False, "reason": "delta_manifest.json missing"}
+    except (ValueError, UnicodeDecodeError, RecursionError):
+        return {"valid": False, "reason": "delta_manifest.json is not valid JSON", "manifest": {}}
+    if not isinstance(manifest, dict):
+        return {"valid": False, "reason": "delta_manifest.json is not an object", "manifest": {}}
     failures = []
     if sha256({k: v for k, v in manifest.items() if k != "manifest_sha256"}) != manifest.get("manifest_sha256"):
         failures.append("manifest hash mismatch")
+    if not isinstance(manifest.get("base_seq"), int) or isinstance(manifest.get("base_seq"), bool):
+        failures.append("base_seq is not an integer")   # import_delta_bundle compares it numerically
     events_path = bundle_dir / "delta_events.jsonl"
     if not events_path.exists():
         failures.append("delta_events.jsonl missing")
     elif hashlib.sha256(events_path.read_bytes()).hexdigest() != manifest.get("events_sha256"):
         failures.append("events hash mismatch")
-    for digest in manifest.get("payloads", []):
+    payloads = manifest.get("payloads", [])
+    for digest in payloads if isinstance(payloads, list) else []:
+        if not _is_digest(digest):        # never use an untrusted ref as a path (traversal)
+            failures.append("payload ref is not a content-address digest")
+            continue
         path = bundle_dir / "payloads" / digest
         if not path.exists() or hashlib.sha256(path.read_bytes()).hexdigest() != digest:
             failures.append(f"payload {digest[:12]} missing or tampered")
@@ -128,8 +150,15 @@ def import_delta_bundle(store: MissionDataStore, bundle_dir: str | Path) -> dict
         if not (isinstance(event, dict) and isinstance(event.get("seq"), int)
                 and not isinstance(event.get("seq"), bool)
                 and isinstance(event.get("entry_hash"), str)
-                and isinstance(event.get("record"), dict)):   # record must be a dict — the apply loop .get()s it
+                and isinstance(event.get("event_type"), str)      # _entry_hash / append index these
+                and isinstance(event.get("recorded_time"), str)
+                and isinstance(event.get("actor"), str)
+                and isinstance(event.get("prev_hash"), str)
+                and isinstance(event.get("record"), dict)):       # record must be a dict — the apply loop .get()s it
             raise StoreError("delta bundle has a malformed event envelope; refusing")
+        ref = event["record"].get("payload_ref") if event["record"].get("record_type") == "ingestion" else None
+        if ref is not None and not _is_digest(ref):
+            raise StoreError("delta bundle names a non-digest payload_ref; refusing")
         try:
             reject_non_finite(event)
         except ValueError as exc:

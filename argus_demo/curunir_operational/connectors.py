@@ -49,8 +49,14 @@ class MissionDataConnector:
     def idempotency_key(self, source_id: str, body_sha256: str, payload: Any | None) -> str:
         if payload is not None and self.event_id_field and isinstance(payload, Mapping) \
                 and payload.get(self.event_id_field) is not None:
+            event_id = payload[self.event_id_field]
+            if isinstance(event_id, str):
+                # a lone surrogate in a source event_id would crash this sha256's
+                # canonical encode (it runs OUTSIDE the parse try) and lose the
+                # document; scrub it, matching the fabric connector edge (NEW-A4)
+                event_id = event_id.encode("utf-8", "replace").decode("utf-8")
             return sha256({"connector": self.connector_id, "source": source_id,
-                           "event_id": payload[self.event_id_field]})
+                           "event_id": event_id})
         return sha256({"connector": self.connector_id, "source": source_id, "content": body_sha256})
 
     def ingest(self, store: MissionDataStore, registry: SchemaRegistry, body: bytes, *,

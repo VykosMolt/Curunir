@@ -536,23 +536,34 @@ class MissionDataStore:
         directory = Path(directory)
         directory.mkdir(parents=True, exist_ok=True)
         (directory / "payloads").mkdir(exist_ok=True)
-        shutil.copyfile(self.events_path, directory / "events.jsonl")
-        shutil.copyfile(self.root / "store_meta.json", directory / "store_meta.json")
-        payload_hashes: dict[str, str] = {}
-        for path in sorted(self.payload_dir.iterdir()):
-            shutil.copyfile(path, directory / "payloads" / path.name)
-            payload_hashes[path.name] = path.name  # content-addressed: name is the sha256
-        manifest = {
-            "export_format": "curunir-operational-open-export-v1",
-            "store_id": self.meta["store_id"],
-            "contract_version": self.meta["contract_version"],
-            "event_count": len(self._events),
-            "head_hash": self._head_hash,
-            "events_sha256": hashlib.sha256((directory / "events.jsonl").read_bytes()).hexdigest(),
-            "store_meta_sha256": hashlib.sha256((directory / "store_meta.json").read_bytes()).hexdigest(),
-            "payloads": payload_hashes,
-        }
-        (directory / "export_manifest.json").write_text(canonical_line(manifest) + "\n", encoding="utf-8")
+        # HOLD THE APPEND LOCK across catch-up + copy + manifest. The product is
+        # multi-writer (the server re-opens per request), so without this the
+        # copied events.jsonl reflects the on-disk head while the manifest's
+        # head_hash/event_count reflect this instance's STALE in-memory state — a
+        # backup that import_from then refuses ("head hash does not match
+        # manifest"), silently, at restore time. Under the lock: catch up so
+        # in-memory == disk, and no writer can append during the copy (the
+        # lock-and-validate doctrine of recover_torn_tail, applied to backups;
+        # review B-2).
+        with self._append_lock():
+            self._catch_up()
+            shutil.copyfile(self.events_path, directory / "events.jsonl")
+            shutil.copyfile(self.root / "store_meta.json", directory / "store_meta.json")
+            payload_hashes: dict[str, str] = {}
+            for path in sorted(self.payload_dir.iterdir()):
+                shutil.copyfile(path, directory / "payloads" / path.name)
+                payload_hashes[path.name] = path.name  # content-addressed: name is the sha256
+            manifest = {
+                "export_format": "curunir-operational-open-export-v1",
+                "store_id": self.meta["store_id"],
+                "contract_version": self.meta["contract_version"],
+                "event_count": len(self._events),
+                "head_hash": self._head_hash,
+                "events_sha256": hashlib.sha256((directory / "events.jsonl").read_bytes()).hexdigest(),
+                "store_meta_sha256": hashlib.sha256((directory / "store_meta.json").read_bytes()).hexdigest(),
+                "payloads": payload_hashes,
+            }
+            (directory / "export_manifest.json").write_text(canonical_line(manifest) + "\n", encoding="utf-8")
         return manifest
 
     @classmethod
@@ -561,7 +572,21 @@ class MissionDataStore:
         manifest_path = source_dir / "export_manifest.json"
         if not manifest_path.exists():
             raise StoreError(f"not an open export (export_manifest.json missing): {source_dir}")
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        # the manifest is the FIRST untrusted file read on the restore path — parse
+        # it as strictly as events/store_meta (typed errors, no dup keys, must be an
+        # object with the keys the rest of this method indexes) rather than letting
+        # a hostile manifest raise an untyped UnicodeDecodeError / AttributeError /
+        # KeyError / RecursionError before any guard (review NEW-A1)
+        try:
+            manifest = json.loads(manifest_path.read_bytes().decode("utf-8"),
+                                  object_pairs_hook=_no_duplicate_keys)
+        except RecursionError as exc:
+            raise StoreError("export_manifest.json is nested too deeply; refusing") from exc
+        except (ValueError, UnicodeDecodeError) as exc:
+            raise StoreError("export_manifest.json is not valid interchange JSON; refusing") from exc
+        if not isinstance(manifest, dict) or not {"events_sha256", "store_meta_sha256",
+                                                  "head_hash", "payloads"} <= manifest.keys():
+            raise StoreError("export_manifest.json is missing required fields; refusing")
         events_bytes = (source_dir / "events.jsonl").read_bytes()
         if hashlib.sha256(events_bytes).hexdigest() != manifest["events_sha256"]:
             raise StoreError("export tampered: events.jsonl hash mismatch")

@@ -305,3 +305,23 @@ def test_import_refuses_duplicate_keyed_and_deeply_nested_events(tmp_path):
         return json.dumps(ev).encode()
     _poison("dupkey", _dupkey)
     _poison("deep", _deep)
+
+
+def test_export_is_locked_and_caught_up_so_backups_are_restorable(tmp_path):
+    # review B-2: export_to must hold the append lock + catch up, so a STALE
+    # in-memory instance cannot write a manifest head that disagrees with the
+    # copied events.jsonl (a backup import_from then silently refuses).
+    make_workbench(tmp_path)
+    stale = WorkbenchStore(tmp_path / "store")          # opens, caches head in memory
+    _ = stale.head()
+    # a SECOND instance (another process) appends after `stale` cached its head
+    from curunir_analytic.impact import create_objective
+    from curunir_analytic.substrate import AnalyticContext
+    from semantic_support import MARK, clock
+    other = WorkbenchStore(tmp_path / "store")
+    create_objective(AnalyticContext(store=other, actor="t", marking=MARK, now_fn=clock(600)),
+                     mission_context="m", statement="appended by another writer")
+    # the stale instance exports — must catch up under the lock, so the backup restores
+    backup = tmp_path / "backup"; stale.export_to(backup)
+    restored = WorkbenchStore.import_from(backup, tmp_path / "restored")
+    assert restored.head()["head_hash"] == other.head()["head_hash"]   # backup == true head

@@ -286,3 +286,42 @@ def test_delta_import_refuses_malformed_envelope_atomically(tmp_path):
         ev = json.loads(line); ev["record"] = 5
         return json.dumps(ev).encode()
     _run("scalar_record", _scalar_record)
+
+
+def test_delta_import_refuses_non_digest_payload_ref_traversal(tmp_path):
+    # review B-4/NEW-A3: a payload_ref used as a path must be a 64-hex content
+    # address, or a hostile bundle reads an arbitrary host file into the store.
+    import hashlib, shutil
+    from curunir_operational.canonical import canonical_line, sha256
+    store, base_seq = build_two_phase_store(tmp_path)
+    store.export_to(tmp_path / "exp")
+    lines = (tmp_path / "exp" / "events.jsonl").read_text().splitlines()
+    tgt = tmp_path / "target"; (tgt / "payloads").mkdir(parents=True)
+    shutil.copyfile(tmp_path / "exp" / "store_meta.json", tgt / "store_meta.json")
+    (tgt / "events.jsonl").write_text("\n".join(lines[:base_seq]) + "\n")
+    for p in (tmp_path / "exp" / "payloads").iterdir():
+        shutil.copyfile(p, tgt / "payloads" / p.name)
+    target = MissionDataStore(tgt); head_before = target.head()["head_hash"]
+    build_delta_bundle(store, tmp_path / "delta", base_seq=base_seq)
+    ev = tmp_path / "delta" / "delta_events.jsonl"; dl = ev.read_bytes().split(b"\n")
+    e = json.loads(dl[0]); e["record"]["record_type"] = "ingestion"; e["record"]["payload_ref"] = "../../../etc/passwd"
+    dl[0] = json.dumps(e).encode(); nb = b"\n".join(dl); ev.write_bytes(nb)
+    man = json.loads((tmp_path / "delta" / "delta_manifest.json").read_text())
+    man["events_sha256"] = hashlib.sha256(nb).hexdigest()
+    man["manifest_sha256"] = sha256({k: v for k, v in man.items() if k != "manifest_sha256"})
+    (tmp_path / "delta" / "delta_manifest.json").write_text(canonical_line(man) + "\n")
+    assert verify_delta_bundle(tmp_path / "delta")["valid"]
+    with pytest.raises(StoreError):
+        import_delta_bundle(target, tmp_path / "delta")
+    assert target.head()["head_hash"] == head_before               # nothing applied
+
+
+def test_verify_delta_bundle_fails_closed_on_malformed_manifest(tmp_path):
+    # review NEW-A2: a hostile/malformed manifest must return valid:False, never
+    # raise an untyped UnicodeDecodeError/AttributeError/RecursionError.
+    store, base_seq = build_two_phase_store(tmp_path)
+    build_delta_bundle(store, tmp_path / "delta", base_seq=base_seq)
+    mpath = tmp_path / "delta" / "delta_manifest.json"
+    for bad in (b"\xff\xff", b"5", b"[1,2]", b'"x"', b"{", b'{"base_seq":"3"}'):
+        mpath.write_bytes(bad)
+        assert verify_delta_bundle(tmp_path / "delta")["valid"] is False

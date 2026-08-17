@@ -803,3 +803,72 @@ store carrying a non-finite still opens (only the import of a foreign backup is
 guarded); a duplicate-key export is now refused, but the by-value guarantee
 remains value-level not byte-level for any residual construction the strict parse
 does not reach.
+
+## Round 21 — TWO concurrent Opus 5 reviewers (poison-value completeness + everything else); repaired round 22
+
+To converge faster, round 21 ran two independent Opus 5 reviewers in parallel:
+Reviewer A owned the poison-value class, Reviewer B owned auth/four-eyes/crypto/
+crash-consistency/markings/resource/egress + the merge view. Both `NOT_CONVERGED`;
+all findings repaired round 22. B's enforcement-core assessment was strong ("could
+not break it" across auth, four-eyes on both paths and every crash-truncation
+point, the Ed25519 order, torn-tail at every byte offset, write-side floors, 1134
+hostile GETs → 0 5xx). The findings were, tellingly, the SAME "unswept-half"
+pattern the campaign had been closing for serialization, now in the durability /
+resource / gate classes — an accepted repair not swept to a sibling site.
+
+Reviewer A (poison-value):
+- **N-1 (MAJOR)** — `_scrub_output` was total for 43/48 exotic types but a Python
+  `int` > `sys.get_int_max_str_digits()` (4300 digits) passed through and crashed
+  the out-of-containment `sha256`, losing the audit. Fixed: the int branch
+  `try: str(value)` and maps a too-large int to null. Lock: added to
+  `test_provider_scrub_is_total_no_container_escapes_containment`.
+- **NEW-A1/A2/N-3 (MINOR)** — the `export_manifest.json` parse (import) and the
+  `delta_manifest.json` parse + delta envelope shape were unguarded/incomplete.
+  Fixed: manifest parses are typed + `isinstance(dict)` + required-keys (import) /
+  fail-closed (verify_delta_bundle); the delta envelope check now covers
+  `event_type`/`recorded_time`/`actor`/`prev_hash`. Locks:
+  `test_verify_delta_bundle_fails_closed_on_malformed_manifest`.
+- **NEW-A3 / B-4 (MAJOR — both reviewers)** — the delta path read+persisted a
+  payload named by an untrusted `payload_ref` before verifying (the `import_from`
+  M4 arbitrary-file-read, unswept on the delta path). Fixed: `payload_ref` must be
+  a 64-hex digest before use as a path (`_is_digest`), in both
+  `import_delta_bundle` and `verify_delta_bundle`. Lock:
+  `test_delta_import_refuses_non_digest_payload_ref_traversal`.
+- **NEW-A4 (MINOR, out-of-tranche)** — the V2 `connectors.py` idempotency hash of
+  a source `event_id` was outside the parse try (surrogate → record lost). Fixed:
+  scrub a str `event_id`.
+
+Reviewer B (everything else) — three no-attacker, shipped-path MAJORs:
+- **B-1 (MAJOR)** — a PUBLIC strategic warning RE-projected over a forecast raised
+  to SPECIAL after the warning was first raised under-classified the restricted
+  forecast's state (resolution/probability readable by an uncleared actor), and
+  `CURUNIR_V6_7_SECURITY.md` documented this as "not reachable" — false, re-
+  projection is exactly where it lands. Fixed: `project_warning` floors the
+  warning's marking on the forecast's AND objective's LIVE marking at both the
+  RAISED projection and every re-projection; the doc's reachability claim is
+  corrected. Lock: `test_warning_floors_marking_on_referenced_forecast`.
+- **B-2 (MAJOR)** — `export_to` took no append lock and no catch-up, so a stale
+  multi-writer instance wrote a manifest head disagreeing with the copied
+  events.jsonl → a backup `import_from` then silently refuses (the documented
+  rollback mechanism, invalid with no signal at backup time). Fixed: hold the
+  append lock + `_catch_up()` across the copy + manifest (the recover_torn_tail
+  doctrine applied to backups). Lock:
+  `test_export_is_locked_and_caught_up_so_backups_are_restorable`.
+- **B-3 (MAJOR)** — a NEW class: an access-filtered GATE (not just a view) can
+  fail open. `open_dissent` read the APPROVER's filtered projection, so a
+  compartmented dissent invisible to the approver → plain APPROVED (asserting "no
+  dissent" over a standing dissent). Fixed: `approve_report` also reads dissent
+  from the RAW store and fails CLOSED on any open dissent the approver cannot see
+  (the dissent analogue of UNRESOLVABLE_BASIS). Lock:
+  `test_compartmented_dissent_invisible_to_approver_blocks`.
+- **B-5 (MINOR)** — `_prune_pending` evicted the globally-oldest (a victim's)
+  challenge, not the flooder's own (the round-4 `_prune_sessions` fix, unswept).
+  Fixed: own-actor eviction. Lock:
+  `test_pending_challenge_flood_evicts_flooders_own_not_the_victim`.
+- **B-6 (MINOR, unwired)** — the provider egress gate classifies the DECLARED
+  `input_refs`, not the `inputs` cargo. Doc corrected; to be bound when a provider
+  is wired.
+
+New classes B named: (1) access-filtered GATES can fail open (B-3); (2) doctrine
+established for one artifact not swept to its siblings (B-2/B-4/B-5) — the same
+unswept-half pattern, now beyond serialization.

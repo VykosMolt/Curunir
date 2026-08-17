@@ -46,7 +46,11 @@ def _scrub_output(value: Any) -> Any:
     if isinstance(value, float):
         return value if math.isfinite(value) else None
     if isinstance(value, int):
-        return value
+        try:
+            str(value)             # canonical serialization str()s an int; one past
+            return value           # sys.get_int_max_str_digits() (4300) crashes json.dumps
+        except ValueError:
+            return None            # a degenerate huge int -> null (keep the audit)
     if isinstance(value, str):
         return value.encode("utf-8", "replace").decode("utf-8")
     if isinstance(value, (bytes, bytearray)):
