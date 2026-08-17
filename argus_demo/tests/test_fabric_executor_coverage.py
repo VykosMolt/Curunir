@@ -216,6 +216,23 @@ def test_unrecoverable_infra_fault_propagates_not_attributed_to_source(ctx):
                 if r["source_id"] == "gleif" and r["kind"] == "FAILURE"]
 
 
+def test_local_custody_disk_fault_propagates_not_source_failed(ctx):
+    # review F8-round-C: a fault on OUR side (a full CUSTODY disk during
+    # manifestation preservation) must PROPAGATE, not be contained as SOURCE_FAILED
+    # (which would defame the source). The transport SUCCEEDS; the local write fails.
+    def _boom(*args, **kwargs):
+        raise OSError(28, "No space left on device")
+    ctx.custody.preserve = _boom
+    query = QuerySpec(query_id="q-disk", family="EXACT_NAME", value="Severstal", language="",
+                      script="", operation="SEARCH", source_id="wikidata",
+                      time_bounds=(None, None), origin="RULE", origin_detail="t",
+                      rationale="r", derived_from=())
+    with pytest.raises(OSError):
+        execute_single(ctx, query=query, source_id="wikidata")
+    assert not [r for r in ctx.store.records_of("fabric_source_status")
+                if r["source_id"] == "wikidata" and r["kind"] == "FAILURE"]
+
+
 def test_network_error_is_contained_and_does_not_abort_the_plan(ctx):
     # review F3-round-B: a source-side network fault (ConnectionReset/Timeout/SSL,
     # all OSError subclasses) MUST be contained as SOURCE_FAILED, not propagate and

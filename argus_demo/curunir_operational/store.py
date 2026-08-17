@@ -178,8 +178,18 @@ class MissionDataStore:
         """
         import fcntl
         root = Path(root)
-        if not (root / "store_meta.json").exists():
+        meta_path = root / "store_meta.json"
+        if not meta_path.exists():
             raise StoreError(f"not a mission data store: {root}")
+        # A version-incompatible store is not a recoverable torn-tail situation:
+        # refuse up front so recovery never reports success on a store that would
+        # still refuse to open (the chain-verify below cannot see this — review
+        # finding 1 residual).
+        if json.loads(meta_path.read_text(encoding="utf-8")).get("contract_version") \
+                not in COMPATIBLE_CONTRACT_VERSIONS:
+            raise StoreError(
+                "store contract version is not compatible with this code; not a "
+                "recoverable torn-tail crash — refusing to auto-recover")
         events_path = root / "events.jsonl"
         # Hold the SAME exclusive lock the append path uses, for the whole
         # read-decide-install: a live writer (a concurrent self-healer IS a

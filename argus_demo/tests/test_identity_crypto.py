@@ -342,3 +342,23 @@ def test_active_key_cap_bounds_enrollment_and_auth_work(tmp_path):
         sig = sign(pem, sessions.challenge_payload("analyst-a", ch["nonce"]))
         assert sessions.authenticate(registry, actor_id="analyst-a",
                                      nonce=ch["nonce"], signature_hex=sig)
+
+
+def test_session_eviction_hits_the_flooding_actor_not_victims(monkeypatch):
+    # review finding 5: at the session cap, authenticate evicts the AUTHENTICATING
+    # actor's OWN oldest session, never another actor's live session.
+    from curunir_identity import sessions as sess_mod
+    from curunir_identity.sessions import Session, SessionManager
+    monkeypatch.setattr(sess_mod, "MAX_SESSIONS", 3)
+    sm = SessionManager(now_fn=lambda: "2026-08-17T12:00:00+00:00")
+    sm._sessions = {
+        "vb": Session("vb", "analyst-b", "HUMAN", "kb",
+                      "2026-08-17T11:00:00+00:00", "2026-08-17T13:00:00+00:00"),  # oldest globally
+        "a1": Session("a1", "analyst-a", "HUMAN", "ka",
+                      "2026-08-17T11:30:00+00:00", "2026-08-17T13:00:00+00:00"),
+        "a2": Session("a2", "analyst-a", "HUMAN", "ka",
+                      "2026-08-17T11:45:00+00:00", "2026-08-17T13:00:00+00:00"),
+    }
+    sm._prune_sessions("2026-08-17T12:00:00+00:00", "analyst-a")  # analyst-a re-auth at cap
+    assert "vb" in sm._sessions      # the victim's live session survives
+    assert "a1" not in sm._sessions  # the flooder's OWN oldest was evicted

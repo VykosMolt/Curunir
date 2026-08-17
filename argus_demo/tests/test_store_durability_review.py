@@ -146,6 +146,22 @@ def test_recovery_blocks_on_the_append_lock(tmp_path):
     assert WorkbenchStore(root).verify_chain()["valid"]
 
 
+# ---- finding 1: recovery refuses a version-incompatible store (truthful result) -
+
+def test_recovery_refuses_version_incompatible_store_even_with_torn_tail(tmp_path):
+    import json
+    root = _store(tmp_path)
+    meta_path = root / "store_meta.json"
+    meta = json.loads(meta_path.read_text())
+    meta["contract_version"] = "curunir-operational-contracts-vFUTURE"
+    meta_path.write_text(json.dumps(meta))
+    with (root / "events.jsonl").open("ab") as handle:
+        handle.write(b'{"torn')                       # a real torn tail too
+    # recovery must NOT report success on a store that would still refuse to open
+    with pytest.raises(StoreError, match="contract version|not compatible"):
+        WorkbenchStore.recover_torn_tail(root)
+
+
 # ---- M-4: the plain constructor also refuses an incompatible contract version -
 
 def test_constructor_refuses_incompatible_contract_version(tmp_path):

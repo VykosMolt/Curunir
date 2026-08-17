@@ -82,6 +82,29 @@ def test_truncated_re_retrieval_is_not_interpreted_as_removal_or_staleness(tmp_p
                 if s.get("state") in ("STALE", "RETRACTED", "SUPERSEDED")]
 
 
+def test_region_map_cap_is_not_treated_as_content_truncation():
+    # review F4-round-C: REGIONS_TRUNCATED_* caps the anchor MAP only — the
+    # normalized content is complete — so it must NOT trigger the truncation guard
+    # (which would SUPPRESS genuine change detection). Only content caps do.
+    from curunir_semantic.changes import _current_read_truncated
+
+    class _FakeStore:
+        def __init__(self, warnings):
+            self._docs = [{"manifestation_id": "m1", "warnings": warnings}]
+        def records_of(self, record_type):
+            return self._docs if record_type == "semantic_document" else []
+
+    manifestation = {"manifestation_id": "m1", "truncated": False}
+    assert _current_read_truncated(_FakeStore(("REGIONS_TRUNCATED_AT_400",)),
+                                   manifestation, "m1") is False   # content complete
+    assert _current_read_truncated(_FakeStore(("FIELDS_TRUNCATED_AT_50000",)),
+                                   manifestation, "m1") is True    # content truncated
+    assert _current_read_truncated(_FakeStore(("PDF_TEXT_DERIVATIVE_TRUNCATED_TO_BOUND",)),
+                                   manifestation, "m1") is True
+    assert _current_read_truncated(_FakeStore(("ACTIVE_SCRIPT_PRESENT_NOT_EXECUTED",)),
+                                   manifestation, "m1") is False   # unrelated warning
+
+
 def test_normalizer_field_cap_truncation_is_not_interpreted_as_removal(tmp_path, monkeypatch):
     # review finding 4 (F4-round-B): the SEMANTIC normalizer's own caps (field /
     # region / pdf) truncate a read while the manifestation's transport `truncated`

@@ -116,6 +116,14 @@ def _next_version(store: WorkbenchStore, current: Mapping[str, Any], *,
         raise ReportConflict(
             f"report {current['report_id']} is at version {current['version']}, "
             f"you edited version {expected_version}")
+    # a CONTENT change (new sections) must name its content_author, or the version
+    # would keep the prior drafter's `author` while someone else rewrote it —
+    # decoupling content from attribution and eroding separation of duties
+    # (review finding 6). Status transitions (sections is None) legitimately keep
+    # the drafting author.
+    if sections is not None and content_author is None:
+        raise ValueError(
+            "a content change must name its content_author (separation-of-duties)")
     kept_sections = sections if sections is not None else _sections(
         current["report_id"],
         [{**s, "sentences": list(s["sentences"])} for s in current["sections"]])

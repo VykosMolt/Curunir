@@ -349,3 +349,33 @@ Round-2 repairs each carry a regression lock (durability C-3-refuse, executor
 network-contained + MemoryError-propagates, identity active-key-cap, normalizer-
 truncation, four-eyes reviewer-may-approve-revision). Full non-DB suite green
 (only the two pre-existing capsule failures).
+
+## Round 4 — convergence check found 2 MAJOR round-2 over-corrections (repaired)
+
+The convergence check (attacking the round-2 repairs) confirmed 4 of 6 categories
+sound (store recovery, four-eyes, F2/F5 only Minor) and found two MAJOR
+over-corrections, now repaired:
+
+- **F8 over-corrected (MAJOR)** — the type-based narrowing (`except MemoryError,
+  StoreError`) sat over a `try` spanning two fault domains, so a LOCAL custody
+  disk-full (OSError) was contained as SOURCE_FAILED, defaming every source. Fixed
+  by scoping by SITE: only `connector.execute` is contained; the custody/store
+  write is outside it, so a local disk fault propagates. Lock:
+  `test_local_custody_disk_fault_propagates_not_source_failed`.
+- **F4 over-broad (MAJOR)** — "any warning containing TRUNCATED" caught
+  `REGIONS_TRUNCATED_AT_*`, an anchor-MAP cap where the content is COMPLETE, so a
+  page with >400 blocks (or a >400-path feed) silently dropped a real
+  ISSUED→REVOKED change — a false negative worse than the original. Fixed to match
+  only content caps (`FIELDS_TRUNCATED*`, `PDF_TEXT_DERIVATIVE_TRUNCATED*`), with a
+  robust manifestation-id document lookup. Lock:
+  `test_region_map_cap_is_not_treated_as_content_truncation`.
+
+Minor fixes from the same round: F5 evicts the flooding actor's OWN oldest session
+(not a victim's); recover_torn_tail refuses a version-incompatible store up front
+(truthful result); `_next_version` requires content_author with a content change.
+
+Documented bounded LIMITATION (reviewer-rated MINOR, not a bypass): the per-actor
+active-key cap is checked outside the append lock, so concurrent enrolments can
+overshoot it by ~request-concurrency (one-shot: a second burst is fully refused,
+and there is no HTTP revoke surface to reset it). The O(K) authenticate cost thus
+returns only by a small bounded constant, never unboundedly.

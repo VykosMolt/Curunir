@@ -109,20 +109,30 @@ def _affected(store: SemanticStore, observations: Iterable[Mapping[str, Any] | N
     return tuple(sorted(object_ids)), tuple(sorted(claim_ids))
 
 
+# document warnings that mean the extracted CONTENT was truncated (so a diff can
+# falsely read as removal). NOT the region/anchor-MAP cap (REGIONS_TRUNCATED_*):
+# that bounds the anchor map only — the normalized content and field table are
+# complete — so treating it as truncation would SUPPRESS genuine change detection
+# (review F4-round-C). Match must be exact-prefix, not a substring of "TRUNCATED".
+_CONTENT_TRUNCATION_WARNING_PREFIXES = (
+    "FIELDS_TRUNCATED", "PDF_TEXT_DERIVATIVE_TRUNCATED")
+
+
 def _current_read_truncated(store, current_manifestation: Mapping[str, Any],
                             current_manifestation_id: str) -> bool:
-    """Was the CURRENT read incomplete? True for a transport byte cap
-    (manifestation.truncated) OR the semantic normalizer's own caps (field /
-    region / pdf-text), which surface as `*TRUNCATED*` document warnings and are
-    otherwise invisible to the diff (review F4-round-B)."""
+    """Was the CURRENT read's CONTENT incomplete? True for a transport byte cap
+    (manifestation.truncated) OR the normalizer's content caps (field table /
+    pdf-text), which surface as document warnings and are otherwise invisible to
+    the diff (review F4). The region-map cap is deliberately excluded (content
+    stays complete)."""
     if current_manifestation.get("truncated"):
         return True
-    from .normalize import normalized_document_id  # local: avoid import cycle
-    document_id = normalized_document_id(current_manifestation_id)
     document = next((d for d in store.records_of("semantic_document")
-                     if d["document_id"] == document_id), None)
-    return bool(document) and any(
-        "TRUNCATED" in str(warning) for warning in document.get("warnings", ()))
+                     if d.get("manifestation_id") == current_manifestation_id), None)
+    if document is None:
+        return False
+    return any(str(warning).startswith(_CONTENT_TRUNCATION_WARNING_PREFIXES)
+               for warning in document.get("warnings", ()))
 
 
 def interpret_change(ctx: IntegrationContext, prior_manifestation_id: str,
@@ -243,9 +253,10 @@ def _detail(difference: Mapping[str, Any]) -> str:
         base = (f"{current_obs['subject_ref']} {current_obs['attribute']}"
                 if current_obs else
                 f"{prior_obs['subject_ref']} {prior_obs['attribute']}") if (prior_obs or current_obs) else "difference"
-        return (f"{base}: the current manifestation was byte-capped (truncated), "
-                f"so this apparent removal/change is not interpreted as evidence "
-                f"of deletion or staleness — a partial read is not the whole source")
+        return (f"{base}: the current read was TRUNCATED (transport byte cap or a "
+                f"content normalizer cap), so this apparent removal/change is not "
+                f"interpreted as evidence of deletion or staleness — a partial "
+                f"read is not the whole source")
     if prior_obs and current_obs:
         return (f"{current_obs['subject_ref']} {current_obs['attribute']}: "
                 f"{prior_obs['value'][:120]!r} → {current_obs['value'][:120]!r}")

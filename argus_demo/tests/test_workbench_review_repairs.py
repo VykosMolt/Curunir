@@ -285,3 +285,21 @@ def test_theme_appears_in_entity_dossier(mission):
     projection = MissionProjection(ctx.store, CTX_A)
     dossier = entity_dossier(projection, acme_object)
     assert any(t["theme_id"] == theme["theme_id"] for t in dossier["themes"])
+
+
+def test_content_change_requires_content_author(mission):
+    # review finding 6: _next_version must refuse a content change (sections) with
+    # no content_author, which would keep the prior drafter's `author` while
+    # someone else rewrote the content (a separation-of-duties erosion).
+    from curunir_workbench.reports import _next_version
+    ctx, seeded, cc = mission
+    claim_id = seeded["status_claim"]["claim_id"]
+    report = commands.create_report(cc(CTX_A), title="t", question="?", sections=[
+        {"kind": "key_judgments", "title": "KJ", "sentences": [
+            {"text": "Acme holds an ISSUED registration.", "status": "SUPPORTED",
+             "basis_refs": [claim_id]}]}])
+    current = ctx.store.current_reports()[report["report_id"]]
+    with pytest.raises(ValueError, match="content_author"):
+        _next_version(ctx.store, current, expected_version=1, actor="ghost",
+                      now=ctx.now_fn(), status="DRAFT", change_note="rewrite",
+                      sections=())  # content change, no content_author

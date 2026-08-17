@@ -209,46 +209,46 @@ def execute_single(ctx: ExecutionContext, *, query: QuerySpec, source_id: str,
     request = ConnectorRequest(operation=query.operation, value=query.value,
                                language=query.language, time_bounds=query.time_bounds)
     transport = ctx.transports.get(connector.connector_id)
-    # A connector fault (hostile body that trips an unguarded parse, a malformed
-    # row, a transport exception) must not propagate and abort the rest of the
-    # plan/watch pass — that would silently skip every remaining query with no
-    # record of why. Contain it to one truthful SOURCE_FAILED record; a crashed
-    # search is a failure, never absence evidence (SOURCE_FAILED is excluded
-    # from absence coverage).
+    # Contain ONLY the source/network domain — the connector call. A connector
+    # fault (hostile body that trips an unguarded parse, a malformed row, a
+    # transport/network exception incl. ConnectionReset/Timeout/SSL) must not
+    # abort the rest of the plan/watch pass: record one truthful SOURCE_FAILED and
+    # move on (a crashed search is a failure, never absence — SOURCE_FAILED is
+    # excluded from absence coverage). MemoryError / StoreError still propagate.
     try:
         response = connector.execute(request, transport=transport, now=ctx.now_fn())
-        outcome = _STATUS_TO_OUTCOME[response.status]
-        manifestations: tuple[ManifestationRecord, ...] = ()
-        if response.status in ("OK", "EMPTY") and response.raw_body:
-            historical = query.operation.startswith("HISTORICAL_")
-            single = response.results[0] if len(response.results) == 1 else None
-            capture_time = single.source_time if historical and single else None
-            # a multi-result response (e.g. a CDX enumeration) is identified by
-            # the target it enumerates, not left anonymous: dependence grouping
-            # and prior-version linking key on this identity
-            native_id = single.native_id if single else (
-                query.value if query.operation in ("HISTORICAL_ENUMERATE", "ENUMERATE", "POLL")
-                else "")
-            manifestations = (_manifestation(
-                ctx, source_id=source_id, connector=connector,
-                execution_id=digest_id("execution", plan_id, query.query_id, source_id, started),
-                response=response, native_id=native_id,
-                temporal_status="HISTORICAL" if historical and capture_time else "LIVE",
-                source_time=single.source_time if single else None,
-                archive_capture_time=capture_time,
-            ),)
     except (MemoryError, StoreError):
-        # a genuinely-unrecoverable environment fault (out of memory, a store
-        # error) is OURS, not the source's, AND cannot safely continue — propagate
-        # it rather than recording SOURCE_FAILED. NOTE: OSError is deliberately
-        # NOT here — its subclasses are the source-side network faults
-        # (ConnectionReset/Timeout/SSL/gaierror), which MUST stay contained so one
-        # crashing source does not abort the whole plan (§7.3, review F3-round-B).
         raise
-    except Exception as error:  # noqa: BLE001 — source/content fault containment at the acquisition edge
+    except Exception as error:  # noqa: BLE001 — source/content/network fault at the acquisition edge
         return finish("SOURCE_FAILED", error_class="CONNECTOR_ERROR",
                       error_detail=f"{type(error).__name__}: {error}"[:500],
                       policy_decision=decision.decision)
+
+    outcome = _STATUS_TO_OUTCOME[response.status]
+    # Custody preservation + manifestation build is a LOCAL operation (a disk
+    # write on OUR side). A fault here (ENOSPC, permission, store error) is OUR
+    # environment, NOT the source's — it is left OUTSIDE the containment above so
+    # it propagates honestly rather than being recorded as SOURCE_FAILED and
+    # defaming the source's health (review F8-round-C).
+    manifestations: tuple[ManifestationRecord, ...] = ()
+    if response.status in ("OK", "EMPTY") and response.raw_body:
+        historical = query.operation.startswith("HISTORICAL_")
+        single = response.results[0] if len(response.results) == 1 else None
+        capture_time = single.source_time if historical and single else None
+        # a multi-result response (e.g. a CDX enumeration) is identified by the
+        # target it enumerates, not left anonymous: dependence grouping and
+        # prior-version linking key on this identity
+        native_id = single.native_id if single else (
+            query.value if query.operation in ("HISTORICAL_ENUMERATE", "ENUMERATE", "POLL")
+            else "")
+        manifestations = (_manifestation(
+            ctx, source_id=source_id, connector=connector,
+            execution_id=digest_id("execution", plan_id, query.query_id, source_id, started),
+            response=response, native_id=native_id,
+            temporal_status="HISTORICAL" if historical and capture_time else "LIVE",
+            source_time=single.source_time if single else None,
+            archive_capture_time=capture_time,
+        ),)
 
     return finish(outcome, response=response, results=response.results,
                   manifestations=manifestations,

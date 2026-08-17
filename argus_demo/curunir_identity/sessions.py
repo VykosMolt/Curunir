@@ -107,21 +107,27 @@ class SessionManager:
             raise AuthError("no active key verifies the challenge")
         # prune expired sessions + hard-cap the map: resolve() only pops on use,
         # so without this a session flood would grow it without bound (review F5b).
-        self._prune_sessions(now)
+        self._prune_sessions(now, actor_id)
         session = Session(session_id=secrets.token_hex(24), actor_id=actor_id,
                           actor_kind=key["actor_kind"], key_id=key["key_id"],
                           issued_time=now, expires_time=self._plus(now, self.session_ttl))
         self._sessions[session.session_id] = session
         return session
 
-    def _prune_sessions(self, now: str) -> None:
+    def _prune_sessions(self, now: str, actor_id: str) -> None:
         cutoff = parse_time(now)
         for session_id in [s for s, sess in self._sessions.items()
                            if cutoff > parse_time(sess.expires_time)]:
             self._sessions.pop(session_id, None)
         while len(self._sessions) >= MAX_SESSIONS:
-            oldest = min(self._sessions, key=lambda s: self._sessions[s].issued_time)
-            self._sessions.pop(oldest, None)
+            # evict the AUTHENTICATING actor's OWN oldest session first, so a
+            # flooder exhausts its own footprint rather than knocking out other
+            # actors' live sessions; fall back to global-oldest only if it holds
+            # none (review finding 5).
+            own = [s for s, sess in self._sessions.items() if sess.actor_id == actor_id]
+            pool = own or list(self._sessions)
+            victim = min(pool, key=lambda s: self._sessions[s].issued_time)
+            self._sessions.pop(victim, None)
 
     # ---- resolution ------------------------------------------------------
 
