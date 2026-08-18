@@ -263,8 +263,11 @@ def open_analytic_requirements(ctx: AnalyticContext, *, mission_context: str,
         # floor persist on the claims the need rests on so a PUBLIC
         # collection pass cannot write a SPECIAL subject_ref / attribute
         # into a discriminator CTX_B can read (R27A-2)
+        from .substrate import resolve_reference_markings
         marking = inherited_marking(
-            ctx.marking, claim_markings(store, need["claim_ids"]))
+            ctx.marking,
+            [*claim_markings(store, need["claim_ids"]),
+             *resolve_reference_markings(store, (need.get("source_id"),))])
         discriminator = propose_discriminator(
             store, question=need["question"],
             claim_ids=tuple(need["claim_ids"]),

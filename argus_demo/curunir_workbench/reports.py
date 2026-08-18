@@ -233,32 +233,20 @@ def validate_report(projection: MissionProjection, report: Mapping[str, Any]) ->
                             "approving context")
                 else:
                     resolved.append(hit)
-            if status == "SUPPORTED":
-                for family, record in resolved:
-                    if family not in _OBSERVATIONAL_BASIS:
-                        finding("INFERENCE_AS_OBSERVATION", sentence,
-                                f"basis {family} is analytical inference; the "
-                                "sentence must be EXPLICITLY_INFERENTIAL")
-                    elif family == "semantic_claim" \
-                            and record.get("epistemic_state") in _INFERENTIAL_STATES:
-                        finding("INFERENCE_AS_OBSERVATION", sentence,
-                                f"claim {record['claim_id']} is "
-                                f"{record['epistemic_state']}; the sentence must "
-                                "be EXPLICITLY_INFERENTIAL")
-                # contested/disputed basis rendered as settled — including
-                # claims reached through an inferential citation (forecast /
-                # hypothesis / …). Hidden retractions are Ck2; visible ones
-                # must still be STALE_BASIS (review R27A-4).
+            if status in ("SUPPORTED", "EXPLICITLY_INFERENTIAL"):
+                # visible retractions/contests on related claims — including
+                # inferential citations (the legal way to cite a forecast).
+                # Hidden retractions remain Ck2 (review R28A-1 / R27A-4).
                 related_for_sentence: set = {
                     rec.get("claim_id") for fam, rec in resolved
                     if fam == "semantic_claim" and rec.get("claim_id")
                 }
                 store = getattr(projection, "store", None)
                 if store is not None:
-                    refs = {id for id in (*sentence.get("basis_refs", ()),
-                                          *sentence.get("assumption_ids", ()))
-                            if id}
-                    related_for_sentence |= _related_claim_ids(store, refs)
+                    cite = {i for i in (*sentence.get("basis_refs", ()),
+                                        *sentence.get("assumption_ids", ()))
+                            if i}
+                    related_for_sentence |= _related_claim_ids(store, cite)
                 for claim_id in related_for_sentence:
                     state = claim_states.get(claim_id, {}).get("state", "ACTIVE")
                     if state in ("RETRACTED", "SUPERSEDED", "CORRECTED"):
@@ -273,6 +261,18 @@ def validate_report(projection: MissionProjection, report: Mapping[str, Any]) ->
                         finding("CONTESTED_AS_SETTLED", sentence,
                                 f"claim {claim_id} is contested/under review; "
                                 "the sentence renders it settled")
+            if status == "SUPPORTED":
+                for family, record in resolved:
+                    if family not in _OBSERVATIONAL_BASIS:
+                        finding("INFERENCE_AS_OBSERVATION", sentence,
+                                f"basis {family} is analytical inference; the "
+                                "sentence must be EXPLICITLY_INFERENTIAL")
+                    elif family == "semantic_claim" \
+                            and record.get("epistemic_state") in _INFERENTIAL_STATES:
+                        finding("INFERENCE_AS_OBSERVATION", sentence,
+                                f"claim {record['claim_id']} is "
+                                f"{record['epistemic_state']}; the sentence must "
+                                "be EXPLICITLY_INFERENTIAL")
                 # historical rendered as current — derived from the BASIS,
                 # not from an author-supplied flag: omitting temporal_scope
                 # does not opt out
@@ -443,7 +443,8 @@ def _claims_from_record(store: WorkbenchStore, record: Mapping[str, Any] | None,
                     pending.append(reference[1])
 
 
-def _related_claim_ids(store: WorkbenchStore, cited: set) -> set:
+def _related_claim_ids(store: WorkbenchStore, cited: set,
+                       walked: set | None = None) -> set:
     """Claim ids a cited basis_ref implicates.
 
     basis_refs are polymorphic — every family `validate_report.resolve`
@@ -454,7 +455,7 @@ def _related_claim_ids(store: WorkbenchStore, cited: set) -> set:
     related: set = set()
     claims = store.current_claims() if hasattr(store, "current_claims") else {}
     states = store.latest_by_id("semantic_claim_state", "claim_id")
-    seen: set = set()
+    seen: set = walked if walked is not None else set()
     pending = list(cited)
     current_analytics = getattr(store, "current_analytics", None)
     current_hypotheses = getattr(store, "current_hypotheses", None)
@@ -529,7 +530,8 @@ def _raw_hidden_basis_concerns(store: WorkbenchStore, projection: MissionProject
     from curunir_operational.access import can_view
     approver = projection.context
     hidden: list[str] = []
-    related = _related_claim_ids(store, cited)
+    walked: set = set()
+    related = _related_claim_ids(store, cited, walked)
     # Ask whether the approver can VIEW the CURRENT state, not "has the approver
     # ever seen ANY state record for this claim". semantic_claim_state is an APPEND
     # family, so a benign visible earlier CURRENT state would otherwise MASK a
@@ -542,7 +544,9 @@ def _raw_hidden_basis_concerns(store: WorkbenchStore, projection: MissionProject
         if item.get("status") != "OPEN":
             continue
         subject = item.get("subject_id")
-        if (subject in cited or subject in related) \
+        # reviews on intermediate walk nodes (a hypothesis a forecast
+        # proposition_refs) must also fail closed (review R28A-3)
+        if (subject in cited or subject in related or subject in walked) \
                 and not can_view(item.get("marking"), approver):
             hidden.append(subject)
     return hidden

@@ -946,6 +946,18 @@ Two independent Grok reviewers attacked `cf7d685`/`8a36d87`. **BOTH DIFF_BROKEN.
 - **R27B-1 (MAJOR)** — dest-side symlink writes on `build_delta_bundle` / `build_pace_bundle` / `create`. Repair: shared `_export_write_bytes`; refuse symlink `payloads/` dest dir.
 - **R27B-2 (MAJOR)** — delta apply dropped the append lock between events. Repair: `apply_imported_events_locked` holds one lock across preflight + payloads + commits.
 
-## Round 28 — WHOLE-TRANCHE confirmatory attack (pending)
+## Round 28 — WHOLE-TRANCHE attack found the next hop; repaired
 
-The Round-27 repair is itself un-attacked. Same stopping condition.
+Two independent Grok reviewers attacked `9a77e9a`. **BOTH DIFF_BROKEN.**
+
+- **R28A-1 (CRITICAL)** — STALE_BASIS walk lived inside `if status == "SUPPORTED"`. Legal inferential cites (`EXPLICITLY_INFERENTIAL`) never ran it. Repair: run the walk for SUPPORTED and EXPLICITLY_INFERENTIAL. Lock: `test_visible_retraction_on_inferential_forecast_blocks_approval`.
+- **R28A-2 (CRITICAL)** — collection persist floored only on `need.claim_ids`, not the SPECIAL source indicator/forecast whose `desired_subject_ref` was copied. Repair: also `resolve_reference_markings(source_id)`.
+- **R28A-3 (CRITICAL)** — Ck2 review half checked only cited + related *claims*, not intermediate walk nodes (hypothesis a forecast `proposition_refs`). Repair: pass `walked` into the review check.
+- **R28A-4 (MAJOR)** — `append_version` did not floor a forecast on non-claim `proposition_refs`. Repair: `_embedded_analytic_ids` for `analytic_forecast`.
+- **R28B-1 (MAJOR)** — `create()` followed a `payloads/` directory symlink. Repair: refuse.
+- **R28B-2 (MAJOR)** — `recover_torn_tail` dest-side dangling symlink write. Repair: `_export_write_bytes` + refuse symlink dests.
+- **R28B-3 (MAJOR)** — delta apply preflighted events but not dest payload slots; a directory on digest 2 aborted after event 1 committed. Repair: preflight every payload slot before any commit.
+
+## Round 29 — WHOLE-TRANCHE confirmatory attack (pending)
+
+The Round-28 repair is itself un-attacked. Same stopping condition.

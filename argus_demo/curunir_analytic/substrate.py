@@ -300,6 +300,16 @@ def _embedded_analytic_ids(record) -> tuple[str, ...]:
     if kind == "historical_analogue":
         episode_id = mapping.get("episode_id") or ""
         return (episode_id,) if episode_id else ()
+    if kind == "analytic_forecast":
+        # proposition_refs of non-claim kind are the forecast's material
+        # propositions (workbench floors these; the engine must too — R28A-4).
+        # indicator_ids remain association, not embed (A4).
+        ids = []
+        for reference in mapping.get("proposition_refs") or ():
+            if isinstance(reference, (list, tuple)) and len(reference) == 2 \
+                    and reference[0] != "claim" and reference[1]:
+                ids.append(reference[1])
+        return tuple(ids)
     return ()
 
 

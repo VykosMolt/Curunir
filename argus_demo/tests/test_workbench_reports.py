@@ -369,6 +369,37 @@ def test_hidden_retraction_via_cited_observation_blocks_approval(mission):
                        now=ctx.now_fn(), expected_version=submitted["version"])
 
 
+def test_visible_retraction_on_inferential_forecast_blocks_approval(mission):
+    # R28A-1: STALE_BASIS must run for EXPLICITLY_INFERENTIAL, not only
+    # SUPPORTED. A visible PUBLIC retraction of a cited forecast's
+    # supporting claim must block a cleared approver.
+    from curunir_semantic.contracts import ClaimStateRecord
+    _, ctx, seeded = mission
+    claim_id = seeded["status_claim"]["claim_id"]
+    forecast_id = seeded["forecast"]["forecast_id"]
+    report = _draft(ctx, seeded, sentences=[
+        {"text": "Acme most likely remains operational.",
+         "status": "EXPLICITLY_INFERENTIAL", "basis_refs": [forecast_id],
+         "inference_note": "authored forecast, not an observation"},
+        {"text": "Ownership structure is unknown.",
+         "status": "UNRESOLVED",
+         "unresolved_reason": "no ownership evidence collected"},
+    ])
+    submitted = submit_report(ctx.store, report["report_id"], actor="analyst-a",
+                              marking=MARK, now=ctx.now_fn(), expected_version=1,
+                              state_token="tok")
+    ctx.store.append("SEMANTIC_CLAIM_STATE_RECORDED", ClaimStateRecord(
+        state_id="cs-visible-retract", claim_id=claim_id, state="RETRACTED",
+        reason="retracted on public evidence", caused_by="review-x",
+        superseded_by="", actor_id="analyst-a", actor_kind="HUMAN",
+        recorded_time=ctx.now_fn(), marking=MARK),
+        recorded_time=ctx.now_fn(), actor="analyst-a")
+    with pytest.raises(ReportValidationError):
+        approve_report(ctx.store, _projection(ctx, CTX_A), report["report_id"],
+                       actor="supervisor", actor_kind="HUMAN", marking=MARK,
+                       now=ctx.now_fn(), expected_version=submitted["version"])
+
+
 def test_hidden_retraction_via_cited_forecast_blocks_approval(mission):
     # R26A-1: citing a forecast (a legal EXPLICITLY_INFERENTIAL basis) whose
     # supporting claim is later SPECIAL-RETRACTED must fail closed. The

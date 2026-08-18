@@ -214,7 +214,10 @@ class MissionDataStore:
         if (root / "store_meta.json").exists():
             raise StoreError(f"store already exists: {root}")
         root.mkdir(parents=True, exist_ok=True)
-        (root / "payloads").mkdir(exist_ok=True)
+        payloads = root / "payloads"
+        if payloads.exists() and (payloads.is_symlink() or not payloads.is_dir()):
+            raise StoreError("payloads dest is not a regular directory; refusing")
+        payloads.mkdir(exist_ok=True)
         meta = {"store_id": store_id, "created_time": created_time,
                 "contract_version": CONTRACT_VERSION, "package_version": PACKAGE_VERSION}
         _export_write_bytes(root / "store_meta.json",
@@ -309,16 +312,18 @@ class MissionDataStore:
                     "torn-tail truncation would not yield a clean store (damage "
                     "is deeper than the last line); events.jsonl left untouched") from exc
             backup = events_path.with_name(events_path.name + ".torn")
+            if backup.is_symlink() or (backup.exists() and not backup.is_file()):
+                raise StoreError("recovery forensic dest is not a regular file; refusing")
             if backup.exists():  # never clobber an earlier crash's forensic remainder
                 backup = events_path.with_name(f"{events_path.name}.torn.{int(time.time_ns())}")
+                if backup.is_symlink() or (backup.exists() and not backup.is_file()):
+                    raise StoreError("recovery forensic dest is not a regular file; refusing")
             tmp = events_path.with_name(events_path.name + ".recovering")
-            # write the validated truncated log to a temp file, copy the crashed
-            # original aside for forensics, then swap in with ONE atomic rename.
-            # On any failure before the rename the live log is untouched; the temp
-            # and (possibly partial) forensic copy are cleaned up.
+            if tmp.is_symlink() or (tmp.exists() and not tmp.is_file()):
+                raise StoreError("recovery temp is not a regular file; refusing")
             try:
-                tmp.write_bytes(kept)
-                shutil.copyfile(events_path, backup)
+                _export_write_bytes(tmp, kept)
+                _export_write_bytes(backup, events_path.read_bytes())
                 tmp.replace(events_path)
             except BaseException:
                 tmp.unlink(missing_ok=True)
@@ -518,9 +523,19 @@ class MissionDataStore:
         with self._append_lock():
             self._catch_up()
             self.preflight_imported_events(events)
+            bodies_by_event = [list(load_payloads(event)) for event in events]
+            for bodies in bodies_by_event:
+                for body in bodies:
+                    digest = hashlib.sha256(body).hexdigest()
+                    slot = self.payload_dir / digest
+                    if slot.is_dir() and not slot.is_symlink():
+                        raise StoreError(
+                            f"payload slot {digest[:12]} is a directory; "
+                            f"refusing the bundle rather than applying a prefix"
+                        )
             applied = 0
-            for event in events:
-                for body in load_payloads(event):
+            for event, bodies in zip(events, bodies_by_event):
+                for body in bodies:
                     self._install_payload_body(body)
                 self._commit_imported_event(event)
                 applied += 1
