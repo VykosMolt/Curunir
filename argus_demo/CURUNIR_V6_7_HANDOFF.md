@@ -1,7 +1,7 @@
 # CURUNIR V6.7 — HANDOFF
 
 **Date:** 2026-08-19 · **Branch:** `feature/curunir-v67-hardening`
-**Verdict:** `READY_PENDING_WHOLE_TRANCHE_CONFIRMATORY_REVIEW_OF_ROUND_25_REPAIR`
+**Verdict:** `READY_PENDING_WHOLE_TRANCHE_CONFIRMATORY_REVIEW_OF_ROUND_26_REPAIR`
 **NOT MERGED.** Do not merge until fresh review of the **whole V6.7 tranche**
 returns `DIFF_SURVIVES` on both domains.
 
@@ -9,12 +9,11 @@ returns `DIFF_SURVIVES` on both domains.
 
 ## 1. The one thing to do next (the stopping condition)
 
-Round 25 independently attacked `9d0760d`+`06060c0` and **broke it** (two
-CRITICAL + two MAJOR on marking/gate; one CRITICAL + one MAJOR on durability).
-Those classes were closed at the chokepoints (this working tree / the commit
-that lands this handoff). **That repair has itself not been independently
-attacked**, and the operator now requires the attack surface to be the
-**whole V6.7 hardening tranche**, not only the four chokepoints.
+Round 26 independently attacked `5b5125a` (the Round-25 repair) across the
+**whole tranche** and **broke it** (two CRITICAL on Ck2/collect; three MAJOR
+on export skip / dest-symlink / delta partial-apply). Those classes were
+closed at the chokepoints in the commit that lands this handoff. **That
+repair has itself not been independently attacked.**
 
 > Give the current tree to FRESH reviewers. Attack the claim that the
 > V6.7 classes (marking floor, fail-closed gates, payload durability,
@@ -33,7 +32,7 @@ version / the other import family.
 
 ---
 
-## 2. What changed in Round 25 (what to attack first)
+## 2. What changed in Rounds 25–26 (what to attack first)
 
 1. **Shared reference-marking resolver** — `resolve_reference_markings` in
    `curunir_analytic/substrate.py` now covers claims, all `ANALYTIC_ID_FIELDS`,

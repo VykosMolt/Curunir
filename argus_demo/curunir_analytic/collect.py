@@ -60,7 +60,7 @@ def analytic_collection_needs(store: AnalyticStore) -> list[dict[str, Any]]:
         needs.append(_need(
             "analytic_theme", theme["theme_id"],
             f"Does any independent source family corroborate the theme "
-            f"{theme['title'][:100]!r}? All current support descends from one "
+            f"{theme['theme_id'][:18]}? All current support descends from one "
             f"origin family.",
             claim_ids=tuple(theme["basis"]["supporting_claim_ids"]),
             desired_type="ENTITY_ATTRIBUTE"
@@ -82,7 +82,7 @@ def analytic_collection_needs(store: AnalyticStore) -> list[dict[str, Any]]:
         if anchor_claim is None:
             continue
         question = (f"What is the earliest historical manifestation of the "
-                    f"proposition {narrative['statement'][:100]!r}? Earliest "
+                    f"proposition {narrative['narrative_id'][:18]}? Earliest "
                     f"currently observed: "
                     f"{narrative['earliest_time'][:19] or 'unknown'}."
                     + (" Independent corroboration is also missing: all support "
@@ -112,8 +112,8 @@ def analytic_collection_needs(store: AnalyticStore) -> list[dict[str, Any]]:
             subject_ref = based_on["subject_ref"] if based_on else ""
         needs.append(_need(
             "stakeholder_assessment", assessment["assessment_id"],
-            f"Is there a primary public statement by {assessment['entity_label']} "
-            f"bearing on: {interest['statement'][:120]}? The interest is inferred; "
+            f"Is there a primary public statement bearing on assessment "
+            f"{assessment['assessment_id'][:18]}? The interest is inferred; "
             f"no explicit position is in evidence.",
             claim_ids=tuple(interest["claim_ids"]),
             desired_type="STATEMENT", desired_subject=subject_ref,
@@ -145,8 +145,8 @@ def analytic_collection_needs(store: AnalyticStore) -> list[dict[str, Any]]:
             "impact_path", path["path_id"],
             f"What evidence would discriminate the uncertain link "
             f"{edge['from_id'][:18]} → {edge['to_id'][:18]} "
-            f"({edge['authority']}) in the exposure of the objective? "
-            f"{edge['note'][:120]}",
+            f"({edge['authority']}) in the exposure of the objective "
+            f"{path['path_id'][:18]}?",
             claim_ids=(anchor_claim["claim_id"],),
             desired_type="ENTITY_ATTRIBUTE"
             if anchor_claim["predicate"] in ("entity_status", "legal_name",
@@ -189,14 +189,14 @@ def analytic_collection_needs(store: AnalyticStore) -> list[dict[str, Any]]:
             continue
         if coverage_blocked:
             question = (f"Resolution of the forecast "
-                        f"{forecast['question'][:100]!r} is coverage-blocked: "
+                        f"{forecast['forecast_id'][:18]} is coverage-blocked: "
                         f"the sources its rule declares "
                         f"({', '.join(rule['absence_required_source_ids'])}) "
                         f"have not been successfully searched since the "
                         f"horizon. Silence means nothing until they are.")
         else:
             question = (f"Does any independent source family bear on the "
-                        f"forecast {forecast['question'][:100]!r}? Its entire "
+                        f"forecast {forecast['forecast_id'][:18]}? Its entire "
                         f"basis descends from "
                         f"{'one origin family' if forecast['basis']['origin_families'] else 'no evidence at all'}.")
         needs.append(_need(

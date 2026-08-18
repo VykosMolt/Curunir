@@ -83,6 +83,33 @@ def _entry_hash(seq: int, event_type: str, recorded_time: str, actor: str, recor
                    "actor": actor, "record": record, "prev_hash": prev_hash})
 
 
+def _looks_like_complete_store(root: Path) -> bool:
+    """True only when store_meta.json exists AND parses as a store identity.
+    An empty/torn/symlink meta is not a store (review R26B-4) — import may
+    overwrite it rather than refuse retry."""
+    meta = Path(root) / "store_meta.json"
+    if not meta.is_file() or meta.is_symlink():
+        return False
+    try:
+        data = json.loads(meta.read_bytes().decode("utf-8"))
+    except (ValueError, UnicodeDecodeError, OSError):
+        return False
+    return isinstance(data, dict) and "store_id" in data
+
+
+def _export_write_bytes(path: Path, body: bytes) -> None:
+    """Write an export member without following a dest-side symlink
+    (review R26B-2). A pre-planted symlink at events.jsonl / store_meta /
+    a payload digest would otherwise clobber an arbitrary file the
+    export process can write."""
+    path = Path(path)
+    if path.is_symlink() or (path.exists() and not path.is_file()):
+        raise StoreError(
+            f"export dest {path.name} is not a regular file; refusing"
+        )
+    _write_file_atomic(path, body, tmp_dir=path.parent)
+
+
 def _write_file_atomic(path: Path, body: bytes, *, tmp_dir: Path) -> None:
     """fsync + replace, with the temp living in `tmp_dir` (NOT necessarily
     next to `path`). put_payload's temp must live outside payload_dir so
@@ -115,7 +142,13 @@ class MissionDataStore:
         meta_path = self.root / "store_meta.json"
         if not meta_path.exists():
             raise StoreError(f"not a mission data store: {self.root}")
-        self.meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        try:
+            self.meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        except (ValueError, UnicodeDecodeError) as exc:
+            raise StoreError(
+                f"store_meta.json is not valid JSON ({self.root}); refusing to "
+                f"open rather than misread the store"
+            ) from exc
         # migration safety at EVERY open (not only import_from): a store written
         # under a contract this code cannot interpret is refused rather than
         # silently misread — closes the directory-copy / snapshot-restore path
@@ -514,6 +547,78 @@ class MissionDataStore:
             self._index(event)
         return event
 
+    def preflight_imported_events(self, events: list[Mapping[str, Any]]) -> None:
+        """Validate a sequence of NEW events would all append, without
+        writing. import_delta_bundle must refuse a hostile suffix BEFORE
+        planting any payload or applying a prefix (review R26B-3)."""
+        seq = len(self._events)
+        head_hash = self._head_hash
+        last_recorded = self._last_recorded
+        object_versions = dict(self._object_versions)
+        relationship_versions = dict(self._relationship_versions)
+        generic_versions = dict(self._generic_versions)
+        for event in events:
+            expected_seq = seq + 1
+            if event.get("seq") != expected_seq:
+                raise StoreError(
+                    f"imported event seq {event.get('seq')} does not continue "
+                    f"the log (next is {expected_seq})"
+                )
+            if event.get("prev_hash") != head_hash:
+                raise StoreError(
+                    "imported event does not link to this store's head "
+                    "(wrong or diverged base)"
+                )
+            if event.get("event_type") not in self.EVENT_TYPES:
+                raise StoreError(
+                    f"imported event has unknown type: {event.get('event_type')}"
+                )
+            recomputed = _entry_hash(
+                event["seq"], event["event_type"], event["recorded_time"],
+                event["actor"], event["record"], event["prev_hash"],
+            )
+            if event.get("entry_hash") != recomputed:
+                raise StoreError(
+                    f"imported event {event.get('seq')} fails content-hash "
+                    f"verification"
+                )
+            if last_recorded is not None \
+                    and parse_time(event["recorded_time"]) < parse_time(last_recorded):
+                raise StoreError("imported event violates recorded-time monotonicity")
+            record = event["record"]
+            if record.get("record_type") == "object_version":
+                expected = object_versions.get(record["object_id"], 0) + 1
+                if record["version"] != expected:
+                    raise StoreError(
+                        f"imported object {record['object_id']} next version is "
+                        f"{expected}, got {record['version']}: an import may not "
+                        f"shadow local versioned state"
+                    )
+                object_versions[record["object_id"]] = record["version"]
+            if record.get("record_type") == "relationship_version":
+                expected = relationship_versions.get(record["relationship_id"], 0) + 1
+                if record["version"] != expected:
+                    raise StoreError(
+                        f"imported relationship {record['relationship_id']} next "
+                        f"version is {expected}, got {record['version']}: an import "
+                        f"may not shadow local versioned state"
+                    )
+                relationship_versions[record["relationship_id"]] = record["version"]
+            if record.get("record_type") in self.VERSIONED_RECORD_TYPES:
+                key = (record["record_type"],
+                       record[self.VERSIONED_RECORD_TYPES[record["record_type"]]])
+                expected = generic_versions.get(key, 0) + 1
+                if record.get("version", 1) != expected:
+                    raise StoreError(
+                        f"imported {record['record_type']} {key[1]} next version is "
+                        f"{expected}, got {record.get('version', 1)}: an import may "
+                        f"not shadow local versioned state"
+                    )
+                generic_versions[key] = record.get("version", 1)
+            seq = expected_seq
+            head_hash = event["entry_hash"]
+            last_recorded = event["recorded_time"]
+
     def head(self) -> dict[str, Any]:
         return {"store_id": self.meta["store_id"], "event_count": len(self._events), "head_hash": self._head_hash}
 
@@ -540,9 +645,14 @@ class MissionDataStore:
         # Hold the append lock so a concurrent export_to cannot copy a torn
         # slot while we rewrite it (review R25B-1).
         with self._append_lock():
-            if path.is_dir():
+            if path.is_dir() and not path.is_symlink():
                 raise StoreError(f"payload slot {digest[:12]} is a directory; refusing")
-            if path.exists():
+            if path.is_symlink():
+                # a symlink is not a content-address file — replace it
+                # with a regular file (review R26B-1). Following it would
+                # hash a foreign target and leave the slot unrestorable.
+                path.unlink()
+            elif path.exists():
                 try:
                     if hashlib.sha256(path.read_bytes()).hexdigest() == digest:
                         return digest                     # already present and intact
@@ -591,28 +701,32 @@ class MissionDataStore:
         # review B-2).
         with self._append_lock():
             self._catch_up()
-            shutil.copyfile(self.events_path, directory / "events.jsonl")
-            shutil.copyfile(self.root / "store_meta.json", directory / "store_meta.json")
+            _export_write_bytes(directory / "events.jsonl", self.events_path.read_bytes())
+            _export_write_bytes(directory / "store_meta.json",
+                                (self.root / "store_meta.json").read_bytes())
             payload_hashes: dict[str, str] = {}
             for path in sorted(self.payload_dir.iterdir()):
-                # copy ONLY content-address files (64-hex) whose BYTES hash to
-                # the name. A torn 64-hex slot, or a 64-hex symlink whose
-                # target does not hash to the name, must fail the backup NOW
-                # (signal at backup time) rather than produce a restore that
-                # import_from then refuses (review R25B-1 / R25B-3).
+                # A 64-hex slot that is not a regular file (symlink, dir,
+                # fifo) must FAIL the backup NOW — skipping it produced a
+                # successful backup that import restored without the
+                # evidence the live store could still serve (R26B-1).
+                # Non-digest names remain ignored (operator notes / temps).
                 name = path.name
-                if path.is_symlink() or not path.is_file():
-                    continue
                 if not (len(name) == 64
                         and all(c in "0123456789abcdef" for c in name)):
                     continue
+                if path.is_symlink() or path.is_dir() or not path.is_file():
+                    raise StoreError(
+                        f"export: payload slot {name[:12]} is not a regular "
+                        f"file; refusing rather than omit it from the backup"
+                    )
                 try:
                     body = self.get_payload(name)
                 except FileNotFoundError as exc:
                     raise StoreError(
                         f"export: payload {name[:12]} disappeared during copy"
                     ) from exc
-                (directory / "payloads" / name).write_bytes(body)
+                _export_write_bytes(directory / "payloads" / name, body)
                 payload_hashes[name] = name
             manifest = {
                 "export_format": "curunir-operational-open-export-v1",
@@ -624,7 +738,8 @@ class MissionDataStore:
                 "store_meta_sha256": hashlib.sha256((directory / "store_meta.json").read_bytes()).hexdigest(),
                 "payloads": payload_hashes,
             }
-            (directory / "export_manifest.json").write_text(canonical_line(manifest) + "\n", encoding="utf-8")
+            _export_write_bytes(directory / "export_manifest.json",
+                                (canonical_line(manifest) + "\n").encode("utf-8"))
         return manifest
 
     @classmethod
@@ -719,7 +834,7 @@ class MissionDataStore:
             # a file/symlink-to-file target would make mkdir + the rollback unlink
             # raise NotADirectoryError untyped; refuse it up front as a StoreError (M1)
             raise StoreError(f"import target exists and is not a directory: {new_root}")
-        if (new_root / "store_meta.json").exists():
+        if _looks_like_complete_store(new_root):
             raise StoreError(f"refusing to import over an existing store: {new_root}")
         # Crash-atomic install (review R25B-2): write into a sibling staging
         # directory (payloads FIRST, then events, then store_meta as the
@@ -751,8 +866,8 @@ class MissionDataStore:
             # commit marker LAST — a dest without store_meta is not a store
             (staging / "store_meta.json").write_bytes(store_meta_bytes)
             if new_root.exists():
-                # leftover without store_meta (prior crashed import / empty dir)
-                if (new_root / "store_meta.json").exists():
+                # leftover without a complete store (no/invalid store_meta)
+                if _looks_like_complete_store(new_root):
                     raise StoreError(f"refusing to import over an existing store: {new_root}")
                 shutil.rmtree(new_root)
             staging.rename(new_root)

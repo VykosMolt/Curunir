@@ -171,12 +171,27 @@ def resolve_reference_markings(store, refs) -> list:
     records_of = getattr(store, "records_of", None)
     if not callable(records_of):
         return out
+    latest_by_id = getattr(store, "latest_by_id", None)
     for family, id_field in _REFERENCED_RECORD_ID_FIELDS:
         if not ids:
             break
-        for rec in records_of(family):
-            rid = rec.get(id_field)
-            if rid in ids and isinstance(rec.get("marking"), dict):
+        # last-wins / latest-by-id: a PUBLIC v1 then SPECIAL v2 must
+        # resolve as SPECIAL (review R26A-3). First-match on records_of
+        # was the write-down.
+        current: dict = {}
+        if callable(latest_by_id):
+            try:
+                current = latest_by_id(family, id_field)
+            except Exception:
+                current = {}
+        if not current and callable(records_of):
+            for rec in records_of(family):
+                rid = rec.get(id_field)
+                if rid in ids:
+                    current[rid] = rec
+        for rid in list(ids):
+            rec = current.get(rid)
+            if rec is not None and isinstance(rec.get("marking"), dict):
                 out.append(rec["marking"])
                 ids.discard(rid)
     return out

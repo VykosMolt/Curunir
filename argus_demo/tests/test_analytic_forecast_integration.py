@@ -140,6 +140,10 @@ def test_forecast_uncertainty_becomes_collection(tmp_path):
                       if n["source_id"] == forecast["forecast_id"]]
     assert forecast_needs and forecast_needs[0]["independence_required"]
     assert forecast_needs[0]["desired_attribute"] == "entity_status"
+    # R26A-2: collection-need text cites the forecast by id, never embeds
+    # its (possibly compartmented) question.
+    assert forecast["question"] not in forecast_needs[0]["question"]
+    assert forecast["forecast_id"][:18] in forecast_needs[0]["question"]
     # a coverage-blocked resolution asks for exactly the declared sources
     blocked = _forecast(ctx, by_predicate, probability=0.20,
                         expected="NEVER_SO", horizon="2026-08-17T12:04:00+00:00")

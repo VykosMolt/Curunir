@@ -214,7 +214,7 @@ def import_delta_bundle(store: MissionDataStore, bundle_dir: str | Path) -> dict
         except ValueError as exc:
             raise StoreError("delta bundle contains a non-finite float (NaN/Infinity); refusing") from exc
     manifest_payloads = set(manifest.get("payloads", []))    # verified present+hashed by verify
-    applied = 0
+    to_apply = []
     for event in events:
         if event["seq"] <= head["event_count"]:
             existing = store.entry_hash_at(event["seq"])
@@ -224,6 +224,12 @@ def import_delta_bundle(store: MissionDataStore, bundle_dir: str | Path) -> dict
                                   "unresolved conflict, nothing further applied",
                         "store_head": store.head(), "bundle_base_seq": base_seq, "received_at": utc_now()}
             continue  # duplicate portion: idempotent skip
+        to_apply.append(event)
+    # refuse a hostile suffix BEFORE planting payloads or applying a prefix
+    # (review R26B-3). DIVERGED_OVERLAP above already returned without writes.
+    store.preflight_imported_events(to_apply)
+    applied = 0
+    for event in to_apply:
         # install THIS event's referenced payloads (all families, not just V2
         # ingestion — A-F1) only when the event is ACTUALLY applied, never before a
         # DIVERGED_OVERLAP / DUPLICATE return, so a rejected/diverged bundle can no

@@ -392,19 +392,57 @@ def open_dissent(projection: MissionProjection, report_id: str) -> list[dict]:
             and (a["target_id"] in part_ids or a.get("anchor_ref") in part_ids)]
 
 
+def _claims_from_record(store: WorkbenchStore, record: Mapping[str, Any] | None,
+                        related: set, pending: list, seen: set) -> None:
+    """Collect claim ids a retained record rests on, and queue analytic
+    objects it embeds so the walk covers warning→forecast, indicator→
+    forecast, analogue→episode (review R26A-1)."""
+    if not record:
+        return
+    from curunir_analytic.substrate import material_claim_ids
+    related.update(material_claim_ids(record))
+    for key in ("supporting_claim_ids", "contradicting_claim_ids",
+                "unresolved_claim_ids", "outcome_claim_ids", "claim_ids"):
+        related.update(x for x in (record.get(key) or ()) if x)
+    basis = record.get("basis") if isinstance(record.get("basis"), Mapping) else {}
+    related.update(basis.get("supporting_claim_ids") or ())
+    related.update(basis.get("contradicting_claim_ids") or ())
+    for key in ("forecast_id", "episode_id", "objective_id", "path_id",
+                "query_id"):
+        rid = record.get(key) or ""
+        if rid and rid not in seen:
+            pending.append(rid)
+    for key in ("forecast_ids", "assumption_ids", "indicator_ids",
+                "impact_path_ids"):
+        for rid in record.get(key) or ():
+            if rid and rid not in seen:
+                pending.append(rid)
+
+
 def _related_claim_ids(store: WorkbenchStore, cited: set) -> set:
     """Claim ids a cited basis_ref implicates.
 
-    basis_refs are polymorphic (claim / observation / manifestation /
-    forecast / … — see ReportSentence). The hidden-state gate that only
-    intersected cited ids with semantic_claim_state.claim_id missed a
-    SUPPORTED sentence that cited the observation of a retracted claim
-    (review R25A-4). Walk observation → claim and manifestation →
-    observation → claim on the RAW store."""
+    basis_refs are polymorphic — every family `validate_report.resolve`
+    accepts (claim / observation / manifestation / forecast / hypothesis /
+    theme / …). Walking only observation→claim (R25A-4) left the rest of
+    that list fail-open: a PUBLIC forecast whose supporting claim was
+    later SPECIAL-RETRACTED shipped (review R26A-1)."""
     related: set = set()
     claims = store.current_claims() if hasattr(store, "current_claims") else {}
     states = store.latest_by_id("semantic_claim_state", "claim_id")
-    for ref in cited:
+    seen: set = set()
+    pending = list(cited)
+    current_analytics = getattr(store, "current_analytics", None)
+    current_hypotheses = getattr(store, "current_hypotheses", None)
+    analytic_kinds: tuple = ()
+    if callable(current_analytics):
+        from curunir_analytic.store import ANALYTIC_ID_FIELDS
+        analytic_kinds = tuple(ANALYTIC_ID_FIELDS)
+    while pending:
+        ref = pending.pop()
+        if not ref or ref in seen:
+            continue
+        seen.add(ref)
         if ref in claims or ref in states:
             related.add(ref)
         if hasattr(store, "claims_referencing_observation"):
@@ -413,11 +451,37 @@ def _related_claim_ids(store: WorkbenchStore, cited: set) -> set:
         if hasattr(store, "observations_for_manifestation"):
             for observation in store.observations_for_manifestation(ref):
                 oid = observation.get("observation_id")
-                if not oid:
-                    continue
-                if hasattr(store, "claims_referencing_observation"):
-                    for claim in store.claims_referencing_observation(oid):
-                        related.add(claim["claim_id"])
+                if oid and oid not in seen:
+                    pending.append(oid)
+        if callable(current_analytics):
+            for kind in analytic_kinds:
+                rec = current_analytics(kind).get(ref)
+                if rec is not None:
+                    _claims_from_record(store, rec, related, pending, seen)
+        if callable(current_hypotheses):
+            hyp = current_hypotheses().get(ref)
+            if hyp is not None:
+                _claims_from_record(store, hyp, related, pending, seen)
+        # Reverse edges: an objective is cited but its claims live on the
+        # assumptions/paths that name it (create_objective does not copy
+        # them onto the objective record) — review R26A-1 leftover.
+        if hasattr(store, "current_assumptions"):
+            for assumption in store.current_assumptions().values():
+                if ref in (assumption.get("objective_ids") or ()):
+                    aid = assumption.get("assumption_id")
+                    if aid and aid not in seen:
+                        pending.append(aid)
+        if callable(current_analytics):
+            for path in current_analytics("impact_path").values():
+                if path.get("objective_id") == ref:
+                    pid = path.get("path_id")
+                    if pid and pid not in seen:
+                        pending.append(pid)
+            for warning in current_analytics("strategic_warning").values():
+                if ref in (warning.get("objective_id"), warning.get("forecast_id")):
+                    wid = warning.get("warning_id")
+                    if wid and wid not in seen:
+                        pending.append(wid)
     return related
 
 

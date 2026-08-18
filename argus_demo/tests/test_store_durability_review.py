@@ -242,3 +242,51 @@ def test_import_retries_over_a_dest_without_store_meta(tmp_path):
     restored = MissionDataStore.import_from(exp, dest)
     assert restored.verify_chain()["valid"]
     assert restored.get_payload(digest) == b"evidence bytes that must survive restore"
+
+
+def test_export_refuses_a_symlink_payload_slot(tmp_path):
+    # R26B-1: a 64-hex symlink must fail the backup NOW, not be skipped so
+    # import restores a store that cannot serve the evidence.
+    from curunir_operational.store import MissionDataStore, StoreError
+    from operational_support import make_store
+    store = make_store(tmp_path)
+    body = b"evidence behind a planted symlink slot"
+    digest = store.put_payload(body)
+    real = tmp_path / "real-bytes"
+    real.write_bytes(body)
+    (store.payload_dir / digest).unlink()
+    (store.payload_dir / digest).symlink_to(real)
+    with pytest.raises(StoreError, match="not a regular file"):
+        store.export_to(tmp_path / "exp")
+
+
+def test_export_refuses_a_dest_symlink(tmp_path):
+    # R26B-2: dest-side writes must not follow a pre-planted symlink.
+    from curunir_operational.store import MissionDataStore, StoreError
+    from operational_support import make_store
+    store = make_store(tmp_path)
+    store.put_payload(b"payload body")
+    victim = tmp_path / "victim"
+    victim.write_bytes(b"ORIGINAL VICTIM -- must survive")
+    dest = tmp_path / "exp"
+    dest.mkdir()
+    (dest / "payloads").mkdir()
+    (dest / "events.jsonl").symlink_to(victim)
+    with pytest.raises(StoreError, match="not a regular file"):
+        store.export_to(dest)
+    assert victim.read_bytes() == b"ORIGINAL VICTIM -- must survive"
+
+
+def test_import_overwrites_dest_with_torn_store_meta(tmp_path):
+    # R26B-4: an empty/torn store_meta is not a store; retry must succeed.
+    from curunir_operational.store import MissionDataStore
+    from operational_support import make_store
+    store = make_store(tmp_path)
+    digest = store.put_payload(b"must survive retry over torn meta")
+    exp = tmp_path / "exp"
+    store.export_to(exp)
+    dest = tmp_path / "dest"
+    dest.mkdir()
+    (dest / "store_meta.json").write_bytes(b"")
+    restored = MissionDataStore.import_from(exp, dest)
+    assert restored.get_payload(digest) == b"must survive retry over torn meta"

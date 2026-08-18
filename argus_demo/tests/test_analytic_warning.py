@@ -333,6 +333,7 @@ def test_apply_probability_does_not_embed_indicator_rationale(tmp_path):
     # the version itself stays PUBLIC (A4: association is not embed); the
     # PROBABILITY_UPDATED transition cites the indicator and is floored
     assert can_view(moved["marking"], uncleared) is True
+    assert "SPECIAL" not in marking_from_record(moved["marking"]).compartments
     leaked_transitions = [
         t for t in ctx.store.transitions_for(fc["forecast_id"])
         if SECRET in (t.get("detail") or "") and can_view(t["marking"], uncleared)

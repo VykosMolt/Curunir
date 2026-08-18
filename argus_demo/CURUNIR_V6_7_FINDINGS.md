@@ -920,6 +920,21 @@ Two independent Grok reviewers (A = marking/gate, B = durability) attacked `9d07
 
 Self-review sibling before the next independent round: `collect.py` collection-need text no longer embeds an indicator description (id only). Semantic-plane watch/`_propagate` was re-probed in Round 25-A and HELD. B-4 (hostile omission of a payload from an otherwise valid bundle) remains an accepted LIMITATION: fail-closed at `get_payload`, not silent-wrong evidence. A hand-built dest that already has `store_meta`+events and no payloads is not a state the new importer can mint; `get_payload` is still fail-closed at read.
 
-## Round 26 — WHOLE-TRANCHE confirmatory attack (pending)
+## Round 26 — WHOLE-TRANCHE attack broke the Round-25 repair; repaired
 
-The Round-25 repair is itself un-attacked. Per the operator: do not merge; give the whole V6.7 tranche (not only the four chokepoints) to fresh reviewers. Stopping condition unchanged: continue until fresh review stops materially changing the implementation.
+Two independent Grok reviewers attacked `5b5125a` across the whole tranche. **BOTH returned DIFF_BROKEN.**
+
+- **R26A-1 (CRITICAL)** — Ck2 still fail-open for every `validate_report` family except claim/observation/manifestation. Citing a PUBLIC forecast/hypothesis/theme/warning/path/indicator whose supporting claim was later SPECIAL-RETRACTED shipped. Repair: `_related_claim_ids` walks `material_claim_ids`, embedded analytic ids, and reverse edges (objective←assumption/path, forecast←warning). Lock: `test_hidden_retraction_via_cited_forecast_blocks_approval`.
+- **R26A-2 (CRITICAL)** — `collect.py` still interpolated theme title, narrative statement, forecast question, interest statement, edge note into PUBLIC discriminator/requirement text. Indicator description was the only site Round 25 closed. Repair: cite object ids only. Lock: `test_forecast_uncertainty_becomes_collection` asserts the question is absent from the need text.
+- **R26A-3 (MINOR)** — `resolve_reference_markings` first-matched `records_of` for versioned families (PUBLIC v1 masked SPECIAL v2). Repair: latest-wins / `latest_by_id`.
+- **R26A-4 (MINOR)** — APPLY_PROBABILITY passed SPECIAL observation ids as `evidence_refs`, flooring the PUBLIC forecast version (A4 over-classify, no text leak). Repair: forecast fire path cites the indicator only.
+- **R26B-1 (MAJOR)** — `export_to` `continue`d on 64-hex symlink/dir/fifo, so a live store that could still serve evidence produced a successful backup with `payloads={}`. Repair: non-regular 64-hex slot → `StoreError`; `put_payload` replaces a symlink with a regular file. Lock: `test_export_refuses_a_symlink_payload_slot`.
+- **R26B-2 (MAJOR)** — dest-side `copyfile`/`write_bytes` followed a pre-planted symlink (arbitrary write as the export uid). Repair: `_export_write_bytes` refuses symlink/non-file dest members. Lock: `test_export_refuses_a_dest_symlink`.
+- **R26B-3 (MAJOR)** — `import_delta_bundle` applied a good prefix then planted payloads from a later rejected event (unknown type / bad entry_hash). Repair: `preflight_imported_events` validates the whole suffix before any `put_payload`/`append`.
+- **R26B-4 (MINOR)** — empty/torn `store_meta.json` untyped-failed on open and blocked retry. Repair: typed `StoreError` on open; `_looks_like_complete_store` required for the retry gate. Lock: `test_import_overwrites_dest_with_torn_store_meta`.
+
+B-4 remains an accepted LIMITATION (hostile omission fail-closed at `get_payload`). Semantic-plane watch HELD. Round-25 locks still pass.
+
+## Round 27 — WHOLE-TRANCHE confirmatory attack (pending)
+
+The Round-26 repair is itself un-attacked. Same stopping condition.

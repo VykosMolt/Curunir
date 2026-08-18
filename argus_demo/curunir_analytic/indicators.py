@@ -497,7 +497,12 @@ def _apply_effects(ctx: AnalyticContext, indicator: Mapping[str, Any]) -> int:
                     reason=f"pre-authorized by {effect['authorized_by']} on "
                            f"indicator firing: "
                            f"{indicator['indicator_id'][:18]}",
-                    evidence_refs=evidence,
+                    # A4 / R26A-4: do not pass SPECIAL observation ids as
+                    # evidence_refs — the resolver would floor the PUBLIC
+                    # forecast version on mere association. The indicator
+                    # is named in the reason by id; the FIRED marker cites
+                    # the indicator only.
+                    evidence_refs=(),
                     actor_id=effect["authorized_by"], actor_kind="SERVICE",
                     indicator_id=indicator["indicator_id"])
         else:
@@ -536,5 +541,5 @@ def _apply_effects(ctx: AnalyticContext, indicator: Mapping[str, Any]) -> int:
                           detail=f"indicator {indicator['indicator_id'][:18]} "
                                  f"fired ({indicator['direction']})",
                           caused_by=marker,
-                          evidence_refs=(indicator["indicator_id"], *evidence[:4]))
+                          evidence_refs=(indicator["indicator_id"],))
     return store.head()["event_count"] - before

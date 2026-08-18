@@ -367,3 +367,36 @@ def test_hidden_retraction_via_cited_observation_blocks_approval(mission):
         approve_report(ctx.store, _projection(ctx, CTX_B), report["report_id"],
                        actor="supervisor", actor_kind="HUMAN", marking=MARK,
                        now=ctx.now_fn(), expected_version=submitted["version"])
+
+
+def test_hidden_retraction_via_cited_forecast_blocks_approval(mission):
+    # R26A-1: citing a forecast (a legal EXPLICITLY_INFERENTIAL basis) whose
+    # supporting claim is later SPECIAL-RETRACTED must fail closed. The
+    # observation walk from R25A-4 did not cover validate_report's other
+    # families.
+    from workbench_support import RESTRICTED_MARK
+    from curunir_semantic.contracts import ClaimStateRecord
+    _, ctx, seeded = mission
+    claim_id = seeded["status_claim"]["claim_id"]
+    forecast_id = seeded["forecast"]["forecast_id"]
+    report = _draft(ctx, seeded, sentences=[
+        {"text": "Acme most likely remains operational.",
+         "status": "EXPLICITLY_INFERENTIAL", "basis_refs": [forecast_id],
+         "inference_note": "authored forecast, not an observation"},
+        {"text": "Ownership structure is unknown.",
+         "status": "UNRESOLVED",
+         "unresolved_reason": "no ownership evidence collected"},
+    ])
+    submitted = submit_report(ctx.store, report["report_id"], actor="analyst-a",
+                              marking=MARK, now=ctx.now_fn(), expected_version=1,
+                              state_token="tok")
+    ctx.store.append("SEMANTIC_CLAIM_STATE_RECORDED", ClaimStateRecord(
+        state_id="cs-secret-fc", claim_id=claim_id, state="RETRACTED",
+        reason="retracted on compartmented evidence", caused_by="review-x",
+        superseded_by="", actor_id="analyst-a", actor_kind="HUMAN",
+        recorded_time=ctx.now_fn(), marking=RESTRICTED_MARK),
+        recorded_time=ctx.now_fn(), actor="analyst-a")
+    with pytest.raises(ValueError, match="not cleared to view"):
+        approve_report(ctx.store, _projection(ctx, CTX_B), report["report_id"],
+                       actor="supervisor", actor_kind="HUMAN", marking=MARK,
+                       now=ctx.now_fn(), expected_version=submitted["version"])
