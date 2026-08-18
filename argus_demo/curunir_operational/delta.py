@@ -18,7 +18,8 @@ from pathlib import Path
 from typing import Any
 
 from .canonical import canonical_line, reject_non_finite, sha256, utc_now
-from .store import CHAIN_GENESIS, MissionDataStore, StoreError, _no_duplicate_keys
+from .store import (CHAIN_GENESIS, MissionDataStore, StoreError,
+                    _export_write_bytes, _no_duplicate_keys)
 
 DELTA_FORMAT = "curunir-operational-delta-v1"
 AUDIENCE = "PRIVILEGED_STORE_SYNC"
@@ -70,13 +71,15 @@ def build_delta_bundle(store: MissionDataStore, out_dir: str | Path, *, base_seq
     out_dir.mkdir(parents=True, exist_ok=True)
     events = [e for e in store.events() if e["seq"] > base_seq]
     events_text = "".join(canonical_line(e) + "\n" for e in events)
-    (out_dir / "delta_events.jsonl").write_text(events_text, encoding="utf-8")
+    _export_write_bytes(out_dir / "delta_events.jsonl", events_text.encode("utf-8"))
     payload_dir = out_dir / "payloads"
+    if payload_dir.exists() and (payload_dir.is_symlink() or not payload_dir.is_dir()):
+        raise StoreError("delta dest payloads is not a regular directory; refusing")
     payload_dir.mkdir(exist_ok=True)
     payload_hashes = []
     referenced = _referenced_payloads(store, events)      # family-agnostic (A-F1)
     for digest in sorted(referenced):
-        (payload_dir / digest).write_bytes(store.get_payload(digest))
+        _export_write_bytes(payload_dir / digest, store.get_payload(digest))
         payload_hashes.append(digest)
     manifest = {
         "bundle_type": "OperationalDeltaBundle", "bundle_format": DELTA_FORMAT, "audience": AUDIENCE,
@@ -92,7 +95,8 @@ def build_delta_bundle(store: MissionDataStore, out_dir: str | Path, *, base_seq
         "integrity_note": "sha256 integrity only; no signatures; no secure cross-domain transport claimed",
     }
     manifest["manifest_sha256"] = sha256({k: v for k, v in manifest.items() if k != "manifest_sha256"})
-    (out_dir / "delta_manifest.json").write_text(canonical_line(manifest) + "\n", encoding="utf-8")
+    _export_write_bytes(out_dir / "delta_manifest.json",
+                        (canonical_line(manifest) + "\n").encode("utf-8"))
     return manifest
 
 
@@ -227,19 +231,13 @@ def import_delta_bundle(store: MissionDataStore, bundle_dir: str | Path) -> dict
         to_apply.append(event)
     # refuse a hostile suffix BEFORE planting payloads or applying a prefix
     # (review R26B-3). DIVERGED_OVERLAP above already returned without writes.
-    store.preflight_imported_events(to_apply)
-    applied = 0
-    for event in to_apply:
-        # install THIS event's referenced payloads (all families, not just V2
-        # ingestion — A-F1) only when the event is ACTUALLY applied, never before a
-        # DIVERGED_OVERLAP / DUPLICATE return, so a rejected/diverged bundle can no
-        # longer plant unbounded attacker-chosen bytes into the store (review B-3).
+    def _payloads_for(event):
         refs: set = set()
         _scan_digests(event.get("record"), manifest_payloads, refs)
-        for digest in sorted(refs):
-            store.put_payload((bundle_dir / "payloads" / digest).read_bytes())
-        store.append_imported_event(event)
-        applied += 1
+        return [(bundle_dir / "payloads" / digest).read_bytes()
+                for digest in sorted(refs)]
+
+    applied = store.apply_imported_events_locked(to_apply, _payloads_for)
     if applied == 0:
         return _receipt("DUPLICATE_DELTA", manifest, store, "all bundle events already present; idempotent no-op")
     return _receipt("APPLIED", manifest, store, "delta applied with per-event chain verification", applied)

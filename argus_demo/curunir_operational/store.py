@@ -217,8 +217,12 @@ class MissionDataStore:
         (root / "payloads").mkdir(exist_ok=True)
         meta = {"store_id": store_id, "created_time": created_time,
                 "contract_version": CONTRACT_VERSION, "package_version": PACKAGE_VERSION}
-        (root / "store_meta.json").write_text(canonical_line(meta) + "\n", encoding="utf-8")
-        (root / "events.jsonl").touch()
+        _export_write_bytes(root / "store_meta.json",
+                            (canonical_line(meta) + "\n").encode("utf-8"))
+        events = root / "events.jsonl"
+        if events.is_symlink() or (events.exists() and not events.is_file()):
+            raise StoreError("events.jsonl dest is not a regular file; refusing")
+        events.touch()
         return cls(root)
 
     @classmethod
@@ -502,49 +506,68 @@ class MissionDataStore:
     def append_imported_event(self, envelope: Mapping[str, Any]) -> dict[str, Any]:
         """Append a fully-formed event envelope from a trusted delta/export
         source, re-verifying continuity, linkage and content hash."""
-        event = dict(envelope)
         with self._append_lock():
             self._catch_up()
-            expected_seq = len(self._events) + 1
-            if event.get("seq") != expected_seq:
-                raise StoreError(f"imported event seq {event.get('seq')} does not continue the log (next is {expected_seq})")
-            if event.get("prev_hash") != self._head_hash:
-                raise StoreError("imported event does not link to this store's head (wrong or diverged base)")
-            if event.get("event_type") not in self.EVENT_TYPES:
-                raise StoreError(f"imported event has unknown type: {event.get('event_type')}")
-            recomputed = _entry_hash(event["seq"], event["event_type"], event["recorded_time"],
-                                     event["actor"], event["record"], event["prev_hash"])
-            if event.get("entry_hash") != recomputed:
-                raise StoreError(f"imported event {event.get('seq')} fails content-hash verification")
-            if self._last_recorded is not None and parse_time(event["recorded_time"]) < parse_time(self._last_recorded):
-                raise StoreError("imported event violates recorded-time monotonicity")
-            record = event["record"]
-            if record.get("record_type") == "object_version":
-                expected = self._object_versions.get(record["object_id"], 0) + 1
-                if record["version"] != expected:
-                    raise StoreError(
-                        f"imported object {record['object_id']} next version is "
-                        f"{expected}, got {record['version']}: an import may not "
-                        f"shadow local versioned state")
-            if record.get("record_type") == "relationship_version":
-                expected = self._relationship_versions.get(
-                    record["relationship_id"], 0) + 1
-                if record["version"] != expected:
-                    raise StoreError(
-                        f"imported relationship {record['relationship_id']} next "
-                        f"version is {expected}, got {record['version']}: an import "
-                        f"may not shadow local versioned state")
-            if record.get("record_type") in self.VERSIONED_RECORD_TYPES:
-                key = (record["record_type"],
-                       record[self.VERSIONED_RECORD_TYPES[record["record_type"]]])
-                expected = self._generic_versions.get(key, 0) + 1
-                if record.get("version", 1) != expected:
-                    raise StoreError(
-                        f"imported {record['record_type']} {key[1]} next version is "
-                        f"{expected}, got {record.get('version', 1)}: an import may "
-                        f"not shadow local versioned state")
-            self._locked_write(event)
-            self._index(event)
+            return self._commit_imported_event(envelope)
+
+    def apply_imported_events_locked(self, events: list[Mapping[str, Any]],
+                                     load_payloads) -> int:
+        """Apply a pre-checked suffix under ONE append lock so a concurrent
+        local writer cannot steal a seq slot mid-bundle (review R27B-2).
+        `load_payloads(event)` yields payload bodies to install first."""
+        with self._append_lock():
+            self._catch_up()
+            self.preflight_imported_events(events)
+            applied = 0
+            for event in events:
+                for body in load_payloads(event):
+                    self._install_payload_body(body)
+                self._commit_imported_event(event)
+                applied += 1
+            return applied
+
+    def _commit_imported_event(self, envelope: Mapping[str, Any]) -> dict[str, Any]:
+        event = dict(envelope)
+        expected_seq = len(self._events) + 1
+        if event.get("seq") != expected_seq:
+            raise StoreError(f"imported event seq {event.get('seq')} does not continue the log (next is {expected_seq})")
+        if event.get("prev_hash") != self._head_hash:
+            raise StoreError("imported event does not link to this store's head (wrong or diverged base)")
+        if event.get("event_type") not in self.EVENT_TYPES:
+            raise StoreError(f"imported event has unknown type: {event.get('event_type')}")
+        recomputed = _entry_hash(event["seq"], event["event_type"], event["recorded_time"],
+                                 event["actor"], event["record"], event["prev_hash"])
+        if event.get("entry_hash") != recomputed:
+            raise StoreError(f"imported event {event.get('seq')} fails content-hash verification")
+        if self._last_recorded is not None and parse_time(event["recorded_time"]) < parse_time(self._last_recorded):
+            raise StoreError("imported event violates recorded-time monotonicity")
+        record = event["record"]
+        if record.get("record_type") == "object_version":
+            expected = self._object_versions.get(record["object_id"], 0) + 1
+            if record["version"] != expected:
+                raise StoreError(
+                    f"imported object {record['object_id']} next version is "
+                    f"{expected}, got {record['version']}: an import may not "
+                    f"shadow local versioned state")
+        if record.get("record_type") == "relationship_version":
+            expected = self._relationship_versions.get(
+                record["relationship_id"], 0) + 1
+            if record["version"] != expected:
+                raise StoreError(
+                    f"imported relationship {record['relationship_id']} next "
+                    f"version is {expected}, got {record['version']}: an import "
+                    f"may not shadow local versioned state")
+        if record.get("record_type") in self.VERSIONED_RECORD_TYPES:
+            key = (record["record_type"],
+                   record[self.VERSIONED_RECORD_TYPES[record["record_type"]]])
+            expected = self._generic_versions.get(key, 0) + 1
+            if record.get("version", 1) != expected:
+                raise StoreError(
+                    f"imported {record['record_type']} {key[1]} next version is "
+                    f"{expected}, got {record.get('version', 1)}: an import may "
+                    f"not shadow local versioned state")
+        self._locked_write(event)
+        self._index(event)
         return event
 
     def preflight_imported_events(self, events: list[Mapping[str, Any]]) -> None:
@@ -645,22 +668,23 @@ class MissionDataStore:
         # Hold the append lock so a concurrent export_to cannot copy a torn
         # slot while we rewrite it (review R25B-1).
         with self._append_lock():
-            if path.is_dir() and not path.is_symlink():
-                raise StoreError(f"payload slot {digest[:12]} is a directory; refusing")
-            if path.is_symlink():
-                # a symlink is not a content-address file — replace it
-                # with a regular file (review R26B-1). Following it would
-                # hash a foreign target and leave the slot unrestorable.
-                path.unlink()
-            elif path.exists():
-                try:
-                    if hashlib.sha256(path.read_bytes()).hexdigest() == digest:
-                        return digest                     # already present and intact
-                except OSError:
-                    pass                                  # unreadable -> rewrite below
-            # temp lives OUTSIDE payload_dir (review B-1)
-            _write_file_atomic(path, body, tmp_dir=self.root)
-            return digest
+            return self._install_payload_body(body)
+
+    def _install_payload_body(self, body: bytes) -> str:
+        digest = hashlib.sha256(body).hexdigest()
+        path = self.payload_dir / digest
+        if path.is_dir() and not path.is_symlink():
+            raise StoreError(f"payload slot {digest[:12]} is a directory; refusing")
+        if path.is_symlink():
+            path.unlink()
+        elif path.exists():
+            try:
+                if hashlib.sha256(path.read_bytes()).hexdigest() == digest:
+                    return digest
+            except OSError:
+                pass
+        _write_file_atomic(path, body, tmp_dir=self.root)
+        return digest
 
     def get_payload(self, digest: str) -> bytes:
         path = self.payload_dir / digest
@@ -704,6 +728,12 @@ class MissionDataStore:
             _export_write_bytes(directory / "events.jsonl", self.events_path.read_bytes())
             _export_write_bytes(directory / "store_meta.json",
                                 (self.root / "store_meta.json").read_bytes())
+            payload_out = directory / "payloads"
+            if payload_out.exists() and (
+                    payload_out.is_symlink() or not payload_out.is_dir()):
+                raise StoreError(
+                    "export dest payloads is not a regular directory; refusing"
+                )
             payload_hashes: dict[str, str] = {}
             for path in sorted(self.payload_dir.iterdir()):
                 # A 64-hex slot that is not a regular file (symlink, dir,

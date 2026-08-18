@@ -935,6 +935,17 @@ Two independent Grok reviewers attacked `5b5125a` across the whole tranche. **BO
 
 B-4 remains an accepted LIMITATION (hostile omission fail-closed at `get_payload`). Semantic-plane watch HELD. Round-25 locks still pass.
 
-## Round 27 — WHOLE-TRANCHE confirmatory attack (pending)
+## Round 27 — WHOLE-TRANCHE attack found the next hop; repaired
 
-The Round-26 repair is itself un-attacked. Same stopping condition.
+Two independent Grok reviewers attacked `cf7d685`/`8a36d87`. **BOTH DIFF_BROKEN.**
+
+- **R27A-1 (CRITICAL)** — Ck2 did not follow `proposition_refs` of kind hypothesis/theme (the workbench `author_forecast` shape). Repair: `_claims_from_record` queues every `(kind, id)` pair.
+- **R27A-2 (CRITICAL)** — collection persist still wrote SPECIAL `desired_subject_ref` into a PUBLIC discriminator. Repair: `open_analytic_requirements` floors persist marking on `claim_markings(need.claim_ids)`.
+- **R27A-3 (MAJOR)** — sentence `assumption_ids` were omitted from the Ck2 cited set. Now unioned.
+- **R27A-4 (MAJOR)** — `validate_report` STALE_BASIS only looked at SUPPORTED claims. Now walks related claims of inferential citations (visible half; hidden half remains Ck2).
+- **R27B-1 (MAJOR)** — dest-side symlink writes on `build_delta_bundle` / `build_pace_bundle` / `create`. Repair: shared `_export_write_bytes`; refuse symlink `payloads/` dest dir.
+- **R27B-2 (MAJOR)** — delta apply dropped the append lock between events. Repair: `apply_imported_events_locked` holds one lock across preflight + payloads + commits.
+
+## Round 28 — WHOLE-TRANCHE confirmatory attack (pending)
+
+The Round-27 repair is itself un-attacked. Same stopping condition.

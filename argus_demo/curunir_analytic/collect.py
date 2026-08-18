@@ -257,7 +257,14 @@ def open_analytic_requirements(ctx: AnalyticContext, *, mission_context: str,
     if needs is None:
         needs = analytic_collection_needs(store)
     opened = []
+    from curunir_operational.access import inherited_marking
+    from .substrate import claim_markings
     for need in needs:
+        # floor persist on the claims the need rests on so a PUBLIC
+        # collection pass cannot write a SPECIAL subject_ref / attribute
+        # into a discriminator CTX_B can read (R27A-2)
+        marking = inherited_marking(
+            ctx.marking, claim_markings(store, need["claim_ids"]))
         discriminator = propose_discriminator(
             store, question=need["question"],
             claim_ids=tuple(need["claim_ids"]),
@@ -265,10 +272,10 @@ def open_analytic_requirements(ctx: AnalyticContext, *, mission_context: str,
             desired_subject_ref=need["desired_subject_ref"],
             desired_attribute=need["desired_attribute"],
             independence_required=need["independence_required"],
-            now=ctx.now_fn(), actor=ctx.actor, marking=ctx.marking)
+            now=ctx.now_fn(), actor=ctx.actor, marking=marking)
         outcome = requirement_for_discriminator(
             store, discriminator, mission_context=mission_context,
-            now=ctx.now_fn(), actor=ctx.actor, marking=ctx.marking)
+            now=ctx.now_fn(), actor=ctx.actor, marking=marking)
         opened.append({"need": need,
                        "discriminator": outcome["discriminator"],
                        "requirement": outcome["requirement"]})

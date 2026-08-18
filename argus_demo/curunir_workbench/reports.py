@@ -245,17 +245,31 @@ def validate_report(projection: MissionProjection, report: Mapping[str, Any]) ->
                                 f"claim {record['claim_id']} is "
                                 f"{record['epistemic_state']}; the sentence must "
                                 "be EXPLICITLY_INFERENTIAL")
-                # contested/disputed basis rendered as settled
-                for family, record in resolved:
-                    if family != "semantic_claim":
-                        continue
-                    claim_id = record["claim_id"]
+                # contested/disputed basis rendered as settled — including
+                # claims reached through an inferential citation (forecast /
+                # hypothesis / …). Hidden retractions are Ck2; visible ones
+                # must still be STALE_BASIS (review R27A-4).
+                related_for_sentence: set = {
+                    rec.get("claim_id") for fam, rec in resolved
+                    if fam == "semantic_claim" and rec.get("claim_id")
+                }
+                store = getattr(projection, "store", None)
+                if store is not None:
+                    refs = {id for id in (*sentence.get("basis_refs", ()),
+                                          *sentence.get("assumption_ids", ()))
+                            if id}
+                    related_for_sentence |= _related_claim_ids(store, refs)
+                for claim_id in related_for_sentence:
                     state = claim_states.get(claim_id, {}).get("state", "ACTIVE")
                     if state in ("RETRACTED", "SUPERSEDED", "CORRECTED"):
                         finding("STALE_BASIS", sentence,
                                 f"claim {claim_id} is {state}; the sentence "
                                 "presents it as settled support")
-                    if record.get("epistemic_state") == "DISPUTED" or claim_id in open_reviews:
+                    claim_rec = next((r for f, r in resolved
+                                      if f == "semantic_claim"
+                                      and r.get("claim_id") == claim_id), None)
+                    if (claim_rec or {}).get("epistemic_state") == "DISPUTED" \
+                            or claim_id in open_reviews:
                         finding("CONTESTED_AS_SETTLED", sentence,
                                 f"claim {claim_id} is contested/under review; "
                                 "the sentence renders it settled")
@@ -417,6 +431,16 @@ def _claims_from_record(store: WorkbenchStore, record: Mapping[str, Any] | None,
         for rid in record.get(key) or ():
             if rid and rid not in seen:
                 pending.append(rid)
+    # workbench author_forecast stores hypothesis/theme links only in
+    # proposition_refs (kind, id) — not supporting_claim_ids (R27A-1)
+    for key in ("depends_on", "proposition_refs"):
+        for reference in record.get(key) or ():
+            if isinstance(reference, (list, tuple)) and len(reference) == 2 \
+                    and reference[1] and reference[1] not in seen:
+                if reference[0] == "claim":
+                    related.add(reference[1])
+                else:
+                    pending.append(reference[1])
 
 
 def _related_claim_ids(store: WorkbenchStore, cited: set) -> set:
@@ -499,6 +523,7 @@ def _raw_hidden_basis_concerns(store: WorkbenchStore, projection: MissionProject
     for section in report["sections"]:
         for sentence in section["sentences"]:
             cited |= set(sentence.get("basis_refs", ()))
+            cited |= set(sentence.get("assumption_ids", ()))
     if not cited:
         return []
     from curunir_operational.access import can_view

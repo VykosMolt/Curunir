@@ -159,8 +159,9 @@ def build_pace_bundle(store: MissionDataStore, projection: Projection, context: 
         "sitrep.txt": render_text(report),
     }
     member_hashes = {}
+    from .store import _export_write_bytes
     for name, content in members.items():
-        (out_dir / name).write_text(content, encoding="utf-8")
+        _export_write_bytes(out_dir / name, content.encode("utf-8"))
         member_hashes[name] = hashlib.sha256(content.encode("utf-8")).hexdigest()
     manifest = {
         "bundle_type": "OperationalPACEBundle", "bundle_format": "curunir-operational-pace-v1",
@@ -171,7 +172,9 @@ def build_pace_bundle(store: MissionDataStore, projection: Projection, context: 
         "members": member_hashes, "combined_sha256": sha256(member_hashes),
         "boundary_note": "integrity by standard sha256 only; no secure cross-domain transport is claimed",
     }
-    (out_dir / "bundle_manifest.json").write_text(canonical_line(manifest) + "\n", encoding="utf-8")
+    from .store import _export_write_bytes as _write_manifest
+    _write_manifest(out_dir / "bundle_manifest.json",
+                    (canonical_line(manifest) + "\n").encode("utf-8"))
     return manifest
 
 
