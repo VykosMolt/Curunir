@@ -328,3 +328,42 @@ def test_hidden_claim_state_on_cited_basis_blocks_approval(mission):
         approve_report(ctx.store, _projection(ctx, CTX_B), report["report_id"],
                        actor="supervisor", actor_kind="HUMAN", marking=MARK,
                        now=ctx.now_fn(), expected_version=submitted["version"])
+
+
+def test_hidden_retraction_via_cited_observation_blocks_approval(mission):
+    # R25A-4: citing the observation_id of a retracted claim (a legal
+    # SUPPORTED observational basis) must still fail closed when the
+    # claim's CURRENT state is a hidden RETRACTED. The gate that only
+    # intersected cited ids with semantic_claim_state.claim_id missed this.
+    from workbench_support import RESTRICTED_MARK
+    from curunir_semantic.contracts import ClaimStateRecord
+    _, ctx, seeded = mission
+    claim = seeded["status_claim"]
+    claim_id = claim["claim_id"]
+    observation_id = claim["observation_ids"][0]
+    report = _draft(ctx, seeded, sentences=[
+        {"text": "Acme Industri AS holds an ISSUED GLEIF registration.",
+         "status": "SUPPORTED", "basis_refs": [observation_id]},
+        {"text": "Ownership structure is unknown.",
+         "status": "UNRESOLVED",
+         "unresolved_reason": "no ownership evidence collected"},
+    ])
+    submitted = submit_report(ctx.store, report["report_id"], actor="analyst-a",
+                              marking=MARK, now=ctx.now_fn(), expected_version=1,
+                              state_token="tok")
+    ctx.store.append("SEMANTIC_CLAIM_STATE_RECORDED", ClaimStateRecord(
+        state_id="cs-visible-0", claim_id=claim_id, state="CURRENT",
+        reason="", caused_by="ingest", superseded_by="",
+        actor_id="analyst-a", actor_kind="HUMAN",
+        recorded_time=ctx.now_fn(), marking=MARK), recorded_time=ctx.now_fn(),
+                     actor="analyst-a")
+    ctx.store.append("SEMANTIC_CLAIM_STATE_RECORDED", ClaimStateRecord(
+        state_id="cs-secret-1", claim_id=claim_id, state="RETRACTED",
+        reason="retracted on compartmented evidence", caused_by="review-x",
+        superseded_by="", actor_id="analyst-a", actor_kind="HUMAN",
+        recorded_time=ctx.now_fn(), marking=RESTRICTED_MARK),
+        recorded_time=ctx.now_fn(), actor="analyst-a")
+    with pytest.raises(ValueError, match="not cleared to view"):
+        approve_report(ctx.store, _projection(ctx, CTX_B), report["report_id"],
+                       actor="supervisor", actor_kind="HUMAN", marking=MARK,
+                       now=ctx.now_fn(), expected_version=submitted["version"])

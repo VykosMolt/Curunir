@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from .canonical import canonical_line, reject_non_finite, sha256, utc_now
-from .store import CHAIN_GENESIS, MissionDataStore, StoreError
+from .store import CHAIN_GENESIS, MissionDataStore, StoreError, _no_duplicate_keys
 
 DELTA_FORMAT = "curunir-operational-delta-v1"
 AUDIENCE = "PRIVILEGED_STORE_SYNC"
@@ -103,7 +103,8 @@ def verify_delta_bundle(bundle_dir: str | Path) -> dict[str, Any]:
     # UnicodeDecodeError / AttributeError / RecursionError from a later .items() /
     # index (review NEW-A2 / B-4)
     try:
-        manifest = json.loads((bundle_dir / "delta_manifest.json").read_bytes().decode("utf-8"))
+        manifest = json.loads((bundle_dir / "delta_manifest.json").read_bytes().decode("utf-8"),
+                              object_pairs_hook=_no_duplicate_keys)
     except FileNotFoundError:
         return {"valid": False, "reason": "delta_manifest.json missing"}
     except (ValueError, UnicodeDecodeError, RecursionError, OSError):   # incl. IsADirectoryError (A-F5)
@@ -184,8 +185,11 @@ def import_delta_bundle(store: MissionDataStore, bundle_dir: str | Path) -> dict
     except UnicodeDecodeError as exc:                          # hostile bundle (M9)
         raise StoreError("delta bundle events are not valid UTF-8") from exc
     try:
-        events = [json.loads(line) for line in raw.split("\n") if line.strip()]
+        events = [json.loads(line, object_pairs_hook=_no_duplicate_keys)
+                  for line in raw.split("\n") if line.strip()]
     except json.JSONDecodeError as exc:                        # hostile bundle (MINOR-3)
+        raise StoreError("delta bundle has a malformed event line") from exc
+    except ValueError as exc:                                  # duplicate key (R25B-4)
         raise StoreError("delta bundle has a malformed event line") from exc
     # validate EVERY event (shape + non-finite by value, incl. 1e400->inf) BEFORE
     # applying any, so a poison/malformed bundle is refused atomically with a

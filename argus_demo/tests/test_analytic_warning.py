@@ -270,13 +270,16 @@ def test_no_derived_record_underclassifies_anything_it_references(tmp_path):
     project_warning(ctx, forecast_id=fc["forecast_id"], objective_id=obj["objective_id"])
 
     uncleared = AccessContext("c", "d", "HUMAN", ("ANALYST",), releasability=("PUBLIC",))
-    # marking of EVERY object, by id (analytic + claims)
+    # marking of EVERY object, by id (analytic + claims + observations —
+    # the resolver hole R25A-2 hid observations from this test)
     mark_of = {}
     for kind, (_, id_field) in ANALYTIC_ID_FIELDS.items():
         for rec in ctx.store.current_analytics(kind).values():
             mark_of[rec[id_field]] = rec["marking"]
     for cid, c in ctx.store.current_claims().items():
         mark_of[cid] = c["marking"]
+    for rec in ctx.store.records_of("semantic_observation"):
+        mark_of[rec["observation_id"]] = rec["marking"]
 
     def _referenced_restricted(record):
         refs = [record["subject_id"], *record.get("evidence_refs", ())]
@@ -289,3 +292,128 @@ def test_no_derived_record_underclassifies_anything_it_references(tmp_path):
             leaks.append((rec.get("transition_type") or rec.get("kind"),
                           rec.get("detail", "")[:50], restricted))
     assert leaks == [], f"derived records under-classifying a REFERENCED object: {leaks}"
+
+
+def test_apply_probability_does_not_embed_indicator_rationale(tmp_path):
+    # R25A-1: APPLY_PROBABILITY wrote the SPECIAL indicator's rationale into
+    # the PUBLIC forecast version (change_reason / probability_basis). A4
+    # stopped embedding description in _fold; the fire-side sibling must
+    # cite the indicator by id, not its compartmented rationale.
+    from curunir_analytic.contracts import IndicatorEffect
+    from curunir_analytic.indicators import arm_indicator, check_indicators
+    from curunir_analytic.substrate import AnalyticContext
+    from curunir_operational.access import AccessContext, can_view, marking_from_record
+    from workbench_support import RESTRICTED_MARK
+    SECRET = "COMPARTMENTED_RATIONALE_MOONLIGHT_XYZ"
+    pipeline, ctx = make_analytic(tmp_path)
+    claims = _seed(pipeline, ctx)
+    fc = _forecast(ctx, claims)                                 # PUBLIC forecast
+    assert "SPECIAL" not in marking_from_record(fc["marking"]).compartments
+    rctx = AnalyticContext(store=ctx.store, actor="analyst-a",
+                           marking=RESTRICTED_MARK, now_fn=ctx.now_fn)
+    arm_indicator(rctx, description="OPERATION MOONLIGHT covert delisting watch",
+                  forecast_ids=(fc["forecast_id"],), kind="PRESENCE",
+                  direction="SUPPORTS",
+                  desired_observation_type="ENTITY_ATTRIBUTE",
+                  desired_subject_ref=ACME, desired_attribute="entity_status",
+                  expected_value="INACTIVE",
+                  effect=IndicatorEffect(mode="APPLY_PROBABILITY",
+                                         target_probability=0.62,
+                                         rationale=SECRET, authorized_by="jan",
+                                         authorized_kind="HUMAN"))
+    from test_analytic_indicators import _flip_to_suspended
+    _flip_to_suspended(pipeline, ctx)
+    check_indicators(ctx)
+    moved = ctx.store.current_forecasts()[fc["forecast_id"]]
+    uncleared = AccessContext("c", "d", "HUMAN", ("ANALYST",),
+                              releasability=("PUBLIC",))
+    assert moved["probability"] == 0.62
+    assert SECRET not in (moved.get("change_reason") or "")
+    assert SECRET not in (moved.get("probability_basis") or "")
+    # the version itself stays PUBLIC (A4: association is not embed); the
+    # PROBABILITY_UPDATED transition cites the indicator and is floored
+    assert can_view(moved["marking"], uncleared) is True
+    leaked_transitions = [
+        t for t in ctx.store.transitions_for(fc["forecast_id"])
+        if SECRET in (t.get("detail") or "") and can_view(t["marking"], uncleared)
+    ]
+    assert leaked_transitions == []
+
+
+def test_fire_does_not_embed_observation_value(tmp_path):
+    # R25A-2: _reference_markings must resolve observations, and _fire must
+    # not embed a SPECIAL observation's value in a PUBLIC indicator's
+    # FIRED transition / version.
+    import hashlib
+    from argus.source_intelligence.models import digest_id
+    from curunir_analytic.contracts import IndicatorEffect
+    from curunir_analytic.indicators import arm_indicator, check_indicators
+    from curunir_analytic.substrate import _reference_markings
+    from curunir_fabric.contracts import ManifestationRecord
+    from curunir_operational.access import AccessContext, can_view
+    from curunir_semantic.contracts import EvidenceAnchor, SemanticObservation
+    from workbench_support import RESTRICTED_MARK
+    SECRET = "COVERT_SANCTION_CODE_MOONLIGHT"
+    pipeline, ctx = make_analytic(tmp_path)
+    claims = _seed(pipeline, ctx)
+    fc = _forecast(ctx, claims)
+    arm_indicator(ctx, description="any entity_status observation on ACME",
+                  forecast_ids=(fc["forecast_id"],), kind="PRESENCE",
+                  direction="SUPPORTS",
+                  desired_observation_type="ENTITY_ATTRIBUTE",
+                  desired_subject_ref=ACME, desired_attribute="entity_status",
+                  expected_value="",
+                  effect=IndicatorEffect(mode="REVIEW_ONLY"))
+    now = ctx.now_fn()
+    body = b'{"secret": true}'
+    digest = hashlib.sha256(body).hexdigest()
+    path = tmp_path / "custody" / digest
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(body)
+    manifestation = ManifestationRecord(
+        manifestation_id=digest_id("manifestation", "gleif", "secret", digest, now),
+        source_id="gleif", connector_id="gleif-test", connector_version="1.0",
+        native_id="lei/ACMELEI000000000001-secret",
+        request_url="lei/secret", final_url="lei/secret",
+        content_sha256=digest, content_store_path=str(path),
+        media_type="application/json", temporal_status="LIVE", source_time=None,
+        archive_capture_time=None, retrieval_time=now, http_status=200,
+        redirects=(), etag="", last_modified="", truncated=False,
+        retrieval_id=digest_id("retrieval", digest, now),
+        custody_ingestion_id=digest_id("ingestion", digest),
+        source_object_id=digest_id("source-object", "gleif", digest),
+        execution_id=digest_id("execution", "gleif", "secret", now),
+        prior_manifestation_id=None, marking=RESTRICTED_MARK)
+    pipeline.store.append("FABRIC_MANIFESTATION_RECORDED", manifestation,
+                          recorded_time=now, actor="t")
+    observation = SemanticObservation(
+        observation_id=digest_id("obs", "secret", now),
+        document_id=digest_id("doc", "secret"),
+        manifestation_id=manifestation.manifestation_id,
+        source_id="gleif", observation_type="ENTITY_ATTRIBUTE",
+        subject_ref=ACME, attribute="entity_status", value=SECRET,
+        object_ref="", valid_from=None, valid_to=None, source_time=None,
+        time_precision="UNKNOWN", language="en", representation="ORIGINAL",
+        anchors=(EvidenceAnchor(
+            manifestation_id=manifestation.manifestation_id, source_id="gleif",
+            content_sha256=digest, kind="FIELD",
+            field_path="data.attributes.entity.status", exact_value=SECRET),),
+        producer_kind="DETERMINISTIC_PARSER", producer_id="test",
+        producer_version="1.0", inference_id="", recorded_time=now,
+        marking=RESTRICTED_MARK)
+    pipeline.store.append("SEMANTIC_OBSERVATION_RECORDED", observation,
+                          recorded_time=now, actor="t")
+    assert _reference_markings(ctx, (observation.observation_id,)), \
+        "resolver must resolve a cited observation"
+    check_indicators(ctx)
+    uncleared = AccessContext("c", "d", "HUMAN", ("ANALYST",),
+                              releasability=("PUBLIC",))
+    leaks = []
+    for rec in (*ctx.store.records_of("analytic_transition"),
+                *ctx.store.records_of("forecast_indicator")):
+        text = " ".join(str(rec.get(k, "")) for k in
+                        ("detail", "change_reason", "probability_basis"))
+        if SECRET in text and can_view(rec.get("marking"), uncleared):
+            leaks.append((rec.get("transition_type") or rec.get("status"),
+                          rec.get("detail") or rec.get("change_reason")))
+    assert leaks == [], f"SPECIAL observation value leaked into PUBLIC record: {leaks}"

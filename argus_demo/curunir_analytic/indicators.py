@@ -21,6 +21,7 @@ from __future__ import annotations
 from typing import Any, Iterable, Mapping
 
 from argus.source_intelligence.models import digest_id
+from curunir_operational.access import inherited_marking, marking_from_record
 from curunir_operational.canonical import parse_time
 from curunir_semantic.contracts import ReviewItem
 
@@ -30,7 +31,8 @@ from .forecasts import (update_probability, _absence_coverage_satisfied,
                         _close_coverage_gap)
 from .store import AnalyticStore
 from .substrate import (AnalyticContext, append_version, ensure_transition,
-                        marked_for_subject, record_transition, require_accepted_candidate)
+                        _reference_markings, marked_for_subject,
+                        record_transition, require_accepted_candidate)
 
 
 def indicator_id_for(description: str, forecast_ids: tuple[str, ...]) -> str:
@@ -168,7 +170,8 @@ def _fold_into_forecasts(ctx: AnalyticContext, indicator: Mapping[str, Any]) -> 
 
 def _reappend(ctx: AnalyticContext, indicator: Mapping[str, Any],
               updates: dict[str, Any], change_reason: str,
-              history_note: str) -> dict[str, Any]:
+              history_note: str, *,
+              reference_markings: "list | tuple" = ()) -> dict[str, Any]:
     merged = {k: v for k, v in indicator.items() if k != "record_type"}
     merged.update(updates)
     merged["version"] = ctx.store.next_analytic_version(
@@ -176,7 +179,11 @@ def _reappend(ctx: AnalyticContext, indicator: Mapping[str, Any],
     merged["change_reason"] = change_reason
     merged["history"] = tuple(indicator["history"]) + (history_note,)
     merged["recorded_time"] = ctx.now_fn()
-    merged["marking"] = ctx.marking
+    # never re-classify DOWN; raise to cover cited evidence (a FIRED version
+    # that names a SPECIAL observation must not stay PUBLIC — R25A-2)
+    own = marking_from_record(indicator["marking"]) \
+        if isinstance(indicator.get("marking"), dict) else indicator["marking"]
+    merged["marking"] = inherited_marking(own, list(reference_markings))
     for key in ("forecast_ids", "coverage_required_source_ids",
                 "fired_evidence_refs", "history"):
         merged[key] = tuple(merged[key])
@@ -324,8 +331,12 @@ def check_indicators(ctx: AnalyticContext) -> list[dict[str, Any]]:
             outcomes.append(_fire(ctx, indicator,
                                   evidence=tuple(o["observation_id"]
                                                  for o in matching[:5]),
-                                  why=f"matching observation(s): "
-                                      f"{matching[0]['value'][:100]!r}"))
+                                  # cite the observations; do NOT embed their
+                                  # values (a PUBLIC indicator matching a
+                                  # SPECIAL observation would write the
+                                  # compartmented value down — R25A-2 / A4)
+                                  why="matching observation(s) cited in "
+                                      "fired_evidence_refs"))
         else:  # ABSENCE
             if indicator["status"] == "ARMED" \
                     and parse_time(ctx.now_fn()) \
@@ -417,7 +428,8 @@ def _fire(ctx: AnalyticContext, indicator: Mapping[str, Any], *,
     fired = _reappend(ctx, indicator,
                       {"status": "FIRED", "fired_time": ctx.now_fn(),
                        "fired_evidence_refs": evidence},
-                      change_reason=why[:280], history_note="FIRED")
+                      change_reason=why[:280], history_note="FIRED",
+                      reference_markings=_reference_markings(ctx, evidence))
     record_transition(ctx, subject_kind="forecast_indicator",
                       subject_id=indicator["indicator_id"],
                       transition_type="FIRED",
@@ -479,8 +491,12 @@ def _apply_effects(ctx: AnalyticContext, indicator: Mapping[str, Any]) -> int:
                 update_probability(
                     ctx, forecast_id,
                     probability=effect["target_probability"],
+                    # A4 sibling (R25A-1): do NOT embed the indicator's
+                    # compartmented rationale in the PUBLIC forecast version.
+                    # Cite the indicator by id, same doctrine as _fold.
                     reason=f"pre-authorized by {effect['authorized_by']} on "
-                           f"indicator firing: {effect['rationale'][:140]}",
+                           f"indicator firing: "
+                           f"{indicator['indicator_id'][:18]}",
                     evidence_refs=evidence,
                     actor_id=effect["authorized_by"], actor_kind="SERVICE",
                     indicator_id=indicator["indicator_id"])
@@ -515,10 +531,10 @@ def _apply_effects(ctx: AnalyticContext, indicator: Mapping[str, Any]) -> int:
         record_transition(ctx, subject_kind="analytic_forecast",
                           subject_id=forecast_id,
                           transition_type="INDICATOR_FIRED",
-                          detail=f"indicator {indicator['description'][:100]!r} "
-                                 f"fired ({indicator['direction']}): {why[:120]}",
+                          # cite by id; never embed description or observation
+                          # values (A1 / A4 / R25A-1 / R25A-2)
+                          detail=f"indicator {indicator['indicator_id'][:18]} "
+                                 f"fired ({indicator['direction']})",
                           caused_by=marker,
-                          # cite the indicator this detail quotes verbatim, so the
-                          # transition floors on the (compartmented) indicator (A1)
                           evidence_refs=(indicator["indicator_id"], *evidence[:4]))
     return store.head()["event_count"] - before

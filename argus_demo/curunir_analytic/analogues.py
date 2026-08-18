@@ -219,11 +219,15 @@ def retrieve_analogues(ctx: AnalyticContext, *, query_kind: str, query_id: str,
         appended = append_version(ctx, record)
         ensure_transition(ctx, subject_kind="historical_analogue",
                           subject_id=analogue_id, transition_type="RETRIEVED",
+                          # cite the episode by id; never embed its title
+                          # (a PUBLIC analogue over a SPECIAL episode leaked
+                          # the title through this transition — R25A-3 / A4)
                           detail=f"analogue retrieved for {query_kind}:{query_id[:18]} "
-                                 f"← episode {episode['title'][:80]!r} "
+                                 f"← episode {episode['episode_id'][:18]} "
                                  f"({len(matched)} matched, {len(mismatched)} "
                                  f"mismatched dimension(s))",
-                          caused_by=f"retrieve:{query_kind}:{query_id[:18]}")
+                          caused_by=f"retrieve:{query_kind}:{query_id[:18]}",
+                          evidence_refs=(episode["episode_id"],))
         retrieved.append(appended)
     retrieved.sort(key=lambda a: (-len(a.get("matched", ())), a.get("analogue_id", "")))
     return retrieved

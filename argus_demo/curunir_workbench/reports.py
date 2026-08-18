@@ -392,15 +392,45 @@ def open_dissent(projection: MissionProjection, report_id: str) -> list[dict]:
             and (a["target_id"] in part_ids or a.get("anchor_ref") in part_ids)]
 
 
+def _related_claim_ids(store: WorkbenchStore, cited: set) -> set:
+    """Claim ids a cited basis_ref implicates.
+
+    basis_refs are polymorphic (claim / observation / manifestation /
+    forecast / … — see ReportSentence). The hidden-state gate that only
+    intersected cited ids with semantic_claim_state.claim_id missed a
+    SUPPORTED sentence that cited the observation of a retracted claim
+    (review R25A-4). Walk observation → claim and manifestation →
+    observation → claim on the RAW store."""
+    related: set = set()
+    claims = store.current_claims() if hasattr(store, "current_claims") else {}
+    states = store.latest_by_id("semantic_claim_state", "claim_id")
+    for ref in cited:
+        if ref in claims or ref in states:
+            related.add(ref)
+        if hasattr(store, "claims_referencing_observation"):
+            for claim in store.claims_referencing_observation(ref):
+                related.add(claim["claim_id"])
+        if hasattr(store, "observations_for_manifestation"):
+            for observation in store.observations_for_manifestation(ref):
+                oid = observation.get("observation_id")
+                if not oid:
+                    continue
+                if hasattr(store, "claims_referencing_observation"):
+                    for claim in store.claims_referencing_observation(oid):
+                        related.add(claim["claim_id"])
+    return related
+
+
 def _raw_hidden_basis_concerns(store: WorkbenchStore, projection: MissionProjection,
                                report: Mapping[str, Any]) -> list[str]:
-    """A basis (claim / object) the report cites whose current claim-STATE (a
+    """A basis the report cites whose current claim-STATE (a
     retraction/contradiction) or OPEN review the approver is NOT cleared to see
     must BLOCK approval. validate_report reads the approver's FILTERED projection,
     so an invisible retraction/contest is silently counted absent and a published,
     four-eyes-approved report can render retracted evidence as settled fact. This
     is the SAME fail-open-gate class as the dissent gate (a control that BLOCKS
-    reads the RAW store, never a filtered view), swept to the basis gate (R23B-3)."""
+    reads the RAW store, never a filtered view), swept to the basis gate (R23B-3)
+    and to every family validate_report accepts as a basis_ref (R25A-4)."""
     cited: set = set()
     for section in report["sections"]:
         for sentence in section["sentences"]:
@@ -410,18 +440,22 @@ def _raw_hidden_basis_concerns(store: WorkbenchStore, projection: MissionProject
     from curunir_operational.access import can_view
     approver = projection.context
     hidden: list[str] = []
+    related = _related_claim_ids(store, cited)
     # Ask whether the approver can VIEW the CURRENT state, not "has the approver
     # ever seen ANY state record for this claim". semantic_claim_state is an APPEND
     # family, so a benign visible earlier CURRENT state would otherwise MASK a
     # later compartmented RETRACTED and let the approval ship retracted evidence as
     # settled fact. latest_by_id is last-wins = the current state (review B1/R23B-3).
     for claim_id, state in store.latest_by_id("semantic_claim_state", "claim_id").items():
-        if claim_id in cited and not can_view(state.get("marking"), approver):
+        if claim_id in related and not can_view(state.get("marking"), approver):
             hidden.append(claim_id)
     for item in store.latest_by_id("review_item", "item_id").values():
-        if item.get("status") == "OPEN" and item.get("subject_id") in cited \
+        if item.get("status") != "OPEN":
+            continue
+        subject = item.get("subject_id")
+        if (subject in cited or subject in related) \
                 and not can_view(item.get("marking"), approver):
-            hidden.append(item["subject_id"])
+            hidden.append(subject)
     return hidden
 
 

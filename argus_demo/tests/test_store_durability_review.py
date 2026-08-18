@@ -210,3 +210,35 @@ def test_export_ignores_stray_non_digest_files_in_payload_dir(tmp_path):
     assert manifest["payloads"] and all(len(p) == 64 for p in manifest["payloads"])   # only digests
     restored = MissionDataStore.import_from(exp, tmp_path / "dest")                    # not refused
     assert restored.verify_chain()["valid"]
+
+
+def test_export_refuses_a_torn_payload(tmp_path):
+    # R25B-1: export_to must SIGNAL at backup time when a 64-hex slot is
+    # torn, not copy the truncated bytes and leave import_from to refuse.
+    from curunir_operational.store import MissionDataStore, StoreError
+    from operational_support import make_store
+    store = make_store(tmp_path)
+    body = b"the real evidence bytes, long enough to matter"
+    digest = store.put_payload(body)
+    (store.payload_dir / digest).write_bytes(b"trunc")
+    with pytest.raises(StoreError, match="corrupt"):
+        store.export_to(tmp_path / "exp")
+
+
+def test_import_retries_over_a_dest_without_store_meta(tmp_path):
+    # R25B-2: store_meta is the commit marker. A leftover dest with events
+    # but no store_meta (the crash window the old importer left mid-copy)
+    # must not block retry, and the successful import must carry payloads.
+    from curunir_operational.store import MissionDataStore
+    from operational_support import make_store
+    store = make_store(tmp_path)
+    digest = store.put_payload(b"evidence bytes that must survive restore")
+    exp = tmp_path / "exp"
+    store.export_to(exp)
+    dest = tmp_path / "dest"
+    dest.mkdir()
+    (dest / "events.jsonl").write_bytes(b"")          # crash leftover, no meta
+    (dest / "payloads").mkdir()
+    restored = MissionDataStore.import_from(exp, dest)
+    assert restored.verify_chain()["valid"]
+    assert restored.get_payload(digest) == b"evidence bytes that must survive restore"

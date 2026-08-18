@@ -83,6 +83,22 @@ def _entry_hash(seq: int, event_type: str, recorded_time: str, actor: str, recor
                    "actor": actor, "record": record, "prev_hash": prev_hash})
 
 
+def _write_file_atomic(path: Path, body: bytes, *, tmp_dir: Path) -> None:
+    """fsync + replace, with the temp living in `tmp_dir` (NOT necessarily
+    next to `path`). put_payload's temp must live outside payload_dir so
+    export_to cannot sweep a leftover tmp into a backup (review B-1)."""
+    path = Path(path)
+    tmp = Path(tmp_dir) / f".{path.name}.{os.getpid()}.{time.time_ns()}.tmp"
+    try:
+        with tmp.open("wb") as handle:
+            handle.write(body)
+            handle.flush()
+            os.fsync(handle.fileno())
+        tmp.replace(path)
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
 class MissionDataStore:
     EVENT_TYPES = EVENT_TYPES
     # subclasses may declare additional versioned record families
@@ -521,30 +537,20 @@ class MissionDataStore:
         # ENOSPC mid-write) — treat it as ABSENT and rewrite, never trust a bare
         # existence gate that would serve wrong evidence forever and make every
         # later backup unrestorable with no signal at backup time (review A-F2).
-        if path.is_dir():
-            raise StoreError(f"payload slot {digest[:12]} is a directory; refusing")
-        if path.exists():
-            try:
-                if hashlib.sha256(path.read_bytes()).hexdigest() == digest:
-                    return digest                         # already present and intact
-            except OSError:
-                pass                                      # unreadable -> rewrite below
-        # the temp file lives OUTSIDE payload_dir: export_to copies payload_dir
-        # WHOLESALE, so a torn/never-renamed temp inside it would be swept into the
-        # manifest and rejected by import as a non-digest name — reintroducing the
-        # A-F2 harm (an unrestorable backup, no signal) on a mere crash or a
-        # concurrent write during a backup (review B-1). Same filesystem as the
-        # target, so the replace stays atomic.
-        tmp = self.root / f".payload.{digest}.{os.getpid()}.{time.time_ns()}.tmp"
-        try:
-            with tmp.open("wb") as handle:
-                handle.write(body)
-                handle.flush()
-                os.fsync(handle.fileno())                 # durable before the rename
-            tmp.replace(path)                             # atomic on the same filesystem
-        finally:
-            tmp.unlink(missing_ok=True)                   # clean up if replace failed
-        return digest
+        # Hold the append lock so a concurrent export_to cannot copy a torn
+        # slot while we rewrite it (review R25B-1).
+        with self._append_lock():
+            if path.is_dir():
+                raise StoreError(f"payload slot {digest[:12]} is a directory; refusing")
+            if path.exists():
+                try:
+                    if hashlib.sha256(path.read_bytes()).hexdigest() == digest:
+                        return digest                     # already present and intact
+                except OSError:
+                    pass                                  # unreadable -> rewrite below
+            # temp lives OUTSIDE payload_dir (review B-1)
+            _write_file_atomic(path, body, tmp_dir=self.root)
+            return digest
 
     def get_payload(self, digest: str) -> bytes:
         path = self.payload_dir / digest
@@ -589,17 +595,25 @@ class MissionDataStore:
             shutil.copyfile(self.root / "store_meta.json", directory / "store_meta.json")
             payload_hashes: dict[str, str] = {}
             for path in sorted(self.payload_dir.iterdir()):
-                # copy ONLY content-address files (64-hex). Any stray non-digest
-                # entry — a leftover temp, an operator's file — must never enter the
-                # manifest, or import refuses the whole restore on a name that is
-                # not a valid payload (defense-in-depth behind put_payload's
-                # temp-outside-payload_dir fix; review B-1).
+                # copy ONLY content-address files (64-hex) whose BYTES hash to
+                # the name. A torn 64-hex slot, or a 64-hex symlink whose
+                # target does not hash to the name, must fail the backup NOW
+                # (signal at backup time) rather than produce a restore that
+                # import_from then refuses (review R25B-1 / R25B-3).
                 name = path.name
-                if not (path.is_file() and len(name) == 64
+                if path.is_symlink() or not path.is_file():
+                    continue
+                if not (len(name) == 64
                         and all(c in "0123456789abcdef" for c in name)):
                     continue
-                shutil.copyfile(path, directory / "payloads" / name)
-                payload_hashes[name] = name  # content-addressed: name is the sha256
+                try:
+                    body = self.get_payload(name)
+                except FileNotFoundError as exc:
+                    raise StoreError(
+                        f"export: payload {name[:12]} disappeared during copy"
+                    ) from exc
+                (directory / "payloads" / name).write_bytes(body)
+                payload_hashes[name] = name
             manifest = {
                 "export_format": "curunir-operational-open-export-v1",
                 "store_id": self.meta["store_id"],
@@ -707,13 +721,20 @@ class MissionDataStore:
             raise StoreError(f"import target exists and is not a directory: {new_root}")
         if (new_root / "store_meta.json").exists():
             raise StoreError(f"refusing to import over an existing store: {new_root}")
-        root_preexisted = new_root.exists()
+        # Crash-atomic install (review R25B-2): write into a sibling staging
+        # directory (payloads FIRST, then events, then store_meta as the
+        # commit marker) and rename onto new_root. store_meta is what
+        # __init__ and the retry gate treat as "this is a store", so a
+        # SIGKILL mid-payload can never leave a dest that OPENS, verifies
+        # the chain, refuses retry, and whose later export drops the
+        # missing payload with no signal.
+        staging = new_root.parent / (
+            f".{new_root.name}.importing.{os.getpid()}.{time.time_ns()}"
+        )
+        renamed = False
         try:
-            new_root.mkdir(parents=True, exist_ok=True)
-            (new_root / "payloads").mkdir(exist_ok=True)
-            # the verified bytes are the bytes installed, not a fresh read of the source
-            (new_root / "store_meta.json").write_bytes(store_meta_bytes)
-            (new_root / "events.jsonl").write_bytes(events_bytes)
+            staging.mkdir(parents=True)
+            (staging / "payloads").mkdir()
             for name in manifest["payloads"]:
                 # the manifest is untrusted: a payload name MUST be a content-
                 # address (64-hex sha256) before we read it, or a hostile export
@@ -725,7 +746,17 @@ class MissionDataStore:
                 body = (source_dir / "payloads" / name).read_bytes()
                 if hashlib.sha256(body).hexdigest() != name:
                     raise StoreError(f"export tampered: payload {name} hash mismatch")
-                (new_root / "payloads" / name).write_bytes(body)
+                _write_file_atomic(staging / "payloads" / name, body, tmp_dir=staging)
+            (staging / "events.jsonl").write_bytes(events_bytes)
+            # commit marker LAST — a dest without store_meta is not a store
+            (staging / "store_meta.json").write_bytes(store_meta_bytes)
+            if new_root.exists():
+                # leftover without store_meta (prior crashed import / empty dir)
+                if (new_root / "store_meta.json").exists():
+                    raise StoreError(f"refusing to import over an existing store: {new_root}")
+                shutil.rmtree(new_root)
+            staging.rename(new_root)
+            renamed = True
             store = cls(new_root)
             check = store.verify_chain()
             if not check["valid"]:
@@ -733,20 +764,10 @@ class MissionDataStore:
             if store.head()["head_hash"] != manifest["head_hash"]:
                 raise StoreError("imported head hash does not match manifest")
         except BaseException as error:
-            # roll back the ENTIRE install, from the first mkdir. A malformed or
-            # hostile export (a payload whose content fails its hash, a payload
-            # file absent from the export, a serialization crash on a lone
-            # surrogate, or a mid-copy OSError like ENOSPC) must not leave behind
-            # a store that OPENS and verifies clean while silently missing payload
-            # content — nor a target root that then refuses a retry ("refusing to
-            # import over an existing store"). Every failure surfaces as a typed
-            # StoreError (review NEW-2 / F-I1). Remove exactly what we created:
-            # the whole root if this import made it, else only our artifacts.
-            if root_preexisted:
-                (new_root / "store_meta.json").unlink(missing_ok=True)
-                (new_root / "events.jsonl").unlink(missing_ok=True)
-                shutil.rmtree(new_root / "payloads", ignore_errors=True)
-            else:
+            # roll back staging always; if we already renamed, roll back the
+            # dest too so a failed verify cannot occupy the name and block retry
+            shutil.rmtree(staging, ignore_errors=True)
+            if renamed:
                 shutil.rmtree(new_root, ignore_errors=True)
             if isinstance(error, (KeyboardInterrupt, SystemExit)):
                 raise                 # never suppress an interrupt as a StoreError

@@ -117,40 +117,79 @@ def _subject_marking(ctx: AnalyticContext, subject_kind: str, subject_id: str):
     return None
 
 
-def _reference_markings(ctx: AnalyticContext, refs) -> list:
-    """The current marking of EVERY retained object a derived record references — a
-    semantic claim, ANY analytic object (indicator / forecast / warning / …), or an
-    activity / execution — so a transition / review / alert that CITES an object in
-    its evidence_refs floors on it AUTOMATICALLY. The class is "floor on everything
-    REFERENCED", not just the subject: a derived record's detail routinely quotes a
-    NON-subject object (an indicator's description, an assumption's statement), and
-    the floor must cover it (review A1/A2/A3). An id that resolves to no retained
-    record names no state to protect and contributes nothing."""
+# Families a derived record may cite besides claims and ANALYTIC_ID_FIELDS.
+# First match still wins (claims first — the common value-bearing case). A
+# cited observation / manifestation / change / hypothesis that the old
+# resolver skipped was a write-down: the id sat in evidence_refs and the
+# floor contributed nothing (review R25A-2).
+_REFERENCED_RECORD_ID_FIELDS: tuple[tuple[str, str], ...] = (
+    ("semantic_observation", "observation_id"),
+    ("semantic_document", "document_id"),
+    ("semantic_change", "change_id"),
+    ("semantic_claim_state", "state_id"),
+    ("hypothesis", "hypothesis_id"),
+    ("discriminator", "discriminator_id"),
+    ("collection_route", "route_id"),
+    ("review_item", "item_id"),
+    ("activity", "activity_id"),
+    ("fabric_execution", "execution_id"),
+    ("fabric_manifestation", "manifestation_id"),
+    ("object_version", "object_id"),
+    ("information_requirement", "requirement_id"),
+)
+
+
+def resolve_reference_markings(store, refs) -> list:
+    """Current marking of every retained object `refs` name.
+
+    Shared by `record_transition` / `marked_for_subject` and by forecast
+    `_ref_markings` — two incomplete resolvers was the class hole (R25A-2).
+    An id that resolves to no retained record names no state to protect."""
     ids = {r for r in refs if isinstance(r, str) and r}
     if not ids:
         return []
     out: list = []
-    claims = ctx.store.current_claims()
-    for rid in list(ids):                                   # the common, value-bearing case
-        claim = claims.get(rid)
-        if claim is not None and isinstance(claim.get("marking"), dict):
-            out.append(claim["marking"]); ids.discard(rid)
-    for kind in ANALYTIC_ID_FIELDS:                         # any analytic object it cites
-        if not ids:
-            break
-        current = ctx.store.current_analytics(kind)
+    current_claims = getattr(store, "current_claims", None)
+    if callable(current_claims):
+        claims = current_claims()
         for rid in list(ids):
-            rec = current.get(rid)
-            if rec is not None and isinstance(rec.get("marking"), dict):
-                out.append(rec["marking"]); ids.discard(rid)
-    for family, id_field in (("activity", "activity_id"), ("fabric_execution", "execution_id")):
+            claim = claims.get(rid)
+            if claim is not None and isinstance(claim.get("marking"), dict):
+                out.append(claim["marking"])
+                ids.discard(rid)
+    current_analytics = getattr(store, "current_analytics", None)
+    if callable(current_analytics):
+        for kind in ANALYTIC_ID_FIELDS:
+            if not ids:
+                break
+            current = current_analytics(kind)
+            for rid in list(ids):
+                rec = current.get(rid)
+                if rec is not None and isinstance(rec.get("marking"), dict):
+                    out.append(rec["marking"])
+                    ids.discard(rid)
+    records_of = getattr(store, "records_of", None)
+    if not callable(records_of):
+        return out
+    for family, id_field in _REFERENCED_RECORD_ID_FIELDS:
         if not ids:
             break
-        for rec in ctx.store.records_of(family):
+        for rec in records_of(family):
             rid = rec.get(id_field)
             if rid in ids and isinstance(rec.get("marking"), dict):
-                out.append(rec["marking"]); ids.discard(rid)
+                out.append(rec["marking"])
+                ids.discard(rid)
     return out
+
+
+def _reference_markings(ctx: AnalyticContext, refs) -> list:
+    """The current marking of EVERY retained object a derived record references —
+    a semantic claim, ANY analytic object, an observation / manifestation /
+    change / hypothesis / review item, or an activity / execution — so a
+    transition / review / alert that CITES an object in its evidence_refs
+    floors on it AUTOMATICALLY. The class is "floor on everything REFERENCED",
+    not just the subject (review A1/A2/A3 / R25A-2)."""
+    return resolve_reference_markings(ctx.store, refs)
 
 
 def marked_for_subject(ctx: AnalyticContext, subject_kind: str, subject_id: str,
@@ -234,6 +273,21 @@ def ensure_transition(ctx: AnalyticContext, *, subject_kind: str, subject_id: st
                              to_status=to_status)
 
 
+def _embedded_analytic_ids(record) -> tuple[str, ...]:
+    """Analytic-object ids whose state this version *embeds* (not mere
+    association). A forecast listing indicator_ids is association — flooring
+    it would reclassify a PUBLIC forecast just because a SPECIAL indicator
+    watches it (review A4). A historical analogue *embeds* the episode
+    (title, setting, matched/mismatched detail) so the episode must floor
+    the analogue record (review R25A-3)."""
+    mapping = _as_mapping(record)
+    kind = mapping.get("record_type") or getattr(record, "RECORD_TYPE", "")
+    if kind == "historical_analogue":
+        episode_id = mapping.get("episode_id") or ""
+        return (episode_id,) if episode_id else ()
+    return ()
+
+
 def append_version(ctx: AnalyticContext, record) -> dict[str, Any]:
     """Append one analytical object version through its registered event type.
 
@@ -249,8 +303,11 @@ def append_version(ctx: AnalyticContext, record) -> dict[str, Any]:
     # version: (1) never re-classify DOWN — floor on the object's prior marking;
     # (2) never under-classify — raise to cover every material claim the object
     # rests on, so authoring or folding restricted evidence into a lower-marked
-    # object cannot silently retain a weaker marking.
+    # object cannot silently retain a weaker marking;
+    # (3) raise to cover analytic objects whose state this version embeds
+    # (analogue ← episode), resolved through the same reference chokepoint.
     refs: list = list(claim_markings(ctx.store, material_claim_ids(record)))
+    refs.extend(_reference_markings(ctx, _embedded_analytic_ids(record)))
     current = ctx.store.current_analytics(record.RECORD_TYPE).get(
         getattr(record, id_field))
     if current is not None:

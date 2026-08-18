@@ -45,36 +45,17 @@ def _authority_for(provenance_kind: str) -> str:
 
 def _ref_markings(store: AnalyticStore, refs: Iterable[str]) -> list[Marking]:
     """Markings of the material records a resolution or basis-degradation
-    cites — the claim whose value a CLAIM_PREDICATE quotes, the event an
-    EVENT_OCCURRED resolves on, or the executions that established coverage — so
-    a derived forecast version or transition embedding their state can never be
-    viewed by a context that could not view the state it is about. An id that
-    resolves to no retained record contributes nothing: it names no state to
-    protect. Claims (the common, value-bearing case) resolve through the
-    current-claim index; the rarer event/execution refs fall back to a bounded
-    scan of only their own families."""
-    ids = [r for r in dict.fromkeys(refs) if r]
-    if not ids:
-        return []
-    claims = store.current_claims()
+    cites. Delegates to the shared reference-marking chokepoint so an
+    observation / manifestation / analytic object is not a silent miss
+    (review R25A-2 — this helper previously resolved only claims +
+    activity/execution)."""
+    from .substrate import resolve_reference_markings
     out: list[Marking] = []
-    unresolved: list[str] = []
-    for rid in ids:
-        claim = claims.get(rid)
-        if claim and isinstance(claim.get("marking"), dict):
-            out.append(marking_from_record(claim["marking"]))
-        else:
-            unresolved.append(rid)
-    pending = set(unresolved)
-    for family, id_field in (("activity", "activity_id"),
-                             ("fabric_execution", "execution_id")):
-        if not pending:
-            break
-        for record in store.records_of(family):
-            rid = record.get(id_field)
-            if rid in pending and isinstance(record.get("marking"), dict):
-                out.append(marking_from_record(record["marking"]))
-                pending.discard(rid)
+    for marking in resolve_reference_markings(store, refs):
+        if isinstance(marking, Marking):
+            out.append(marking)
+        elif isinstance(marking, Mapping):
+            out.append(marking_from_record(marking))
     return out
 
 

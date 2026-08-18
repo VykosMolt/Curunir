@@ -230,7 +230,9 @@ def analytic_collection_needs(store: AnalyticStore) -> list[dict[str, Any]]:
             continue  # nothing typed to bind the discriminator to
         needs.append(_need(
             "forecast_indicator", indicator["indicator_id"],
-            (f"The absence indicator {indicator['description'][:120]!r} "
+            # cite by id; a PUBLIC collection pass must not embed a
+            # SPECIAL indicator's description (A4 / R25A-1 sibling)
+            (f"The absence indicator {indicator['indicator_id'][:18]} "
              + ("passed its deadline without its declared coverage"
                 if blocked else
                 f"needs its declared coverage ({required}) searched before "

@@ -111,3 +111,48 @@ def test_explanation_keeps_outcome_as_history_not_forecast(tmp_path):
     assert "not a forecast" in explanation["outcome_caveat"]
     assert explanation["matched"] and explanation["transfer_risks"]
     assert explanation["episode_evidence"]
+
+
+def test_retrieve_analogues_cites_episode_not_its_title(tmp_path):
+    # R25A-3: RETRIEVED quoted the SPECIAL episode title into a PUBLIC
+    # analogue transition. Cite the episode id; floor the analogue record
+    # on the episode.
+    from curunir_analytic.substrate import AnalyticContext
+    from curunir_operational.access import AccessContext, can_view, marking_from_record
+    from workbench_support import RESTRICTED_MARK
+    SECRET_TITLE = "OPERATION MOONLIGHT 2014 covert delisting"
+    pipeline, ctx = make_analytic(tmp_path)
+    claims = _seed(pipeline, ctx)
+    other_status = claims[("LEI:OTHERLEI00000000002", "entity_status")]
+    other_event = next(a["activity_id"] for a in ctx.store.records_of("activity")
+                       if ACME_OBJECT not in a["subject_ids"])
+    rctx = AnalyticContext(store=ctx.store, actor="analyst-a",
+                           marking=RESTRICTED_MARK, now_fn=ctx.now_fn)
+    episode = record_episode(
+        rctx, title=SECRET_TITLE, summary="s",
+        actor_object_ids=(world_object_id("LEI:OTHERLEI00000000002"),),
+        event_ids=(other_event,), institutional_setting="GLEIF regime",
+        mechanism="registry lifecycle", outcome="remained issued",
+        outcome_claim_ids=(other_status,), claim_ids=(other_status,))
+    assert "SPECIAL" in marking_from_record(episode["marking"]).compartments
+    theme = create_theme(ctx, title="Acme registry standing",
+                         supporting_claim_ids=[
+                             claims[("LEI:ACMELEI000000000001", "entity_status")]],
+                         event_ids=(next(a["activity_id"]
+                                         for a in ctx.store.records_of("activity")),),
+                         provenance_kind="RULE")
+    analogues = retrieve_analogues(ctx, query_kind="analytic_theme",
+                                   query_id=theme["theme_id"])
+    assert analogues
+    analogue = analogues[0]
+    uncleared = AccessContext("c", "d", "HUMAN", ("ANALYST",),
+                              releasability=("PUBLIC",))
+    assert can_view(analogue["marking"], uncleared) is False, \
+        "analogue record must floor on the SPECIAL episode"
+    leaks = [t for t in ctx.store.records_of("analytic_transition")
+             if SECRET_TITLE in (t.get("detail") or "")
+             and can_view(t["marking"], uncleared)]
+    assert leaks == [], f"SPECIAL episode title leaked: {leaks}"
+    retrieved = [t for t in ctx.store.transitions_for(analogue["analogue_id"])
+                 if t["transition_type"] == "RETRIEVED"]
+    assert retrieved and episode["episode_id"] in retrieved[0]["evidence_refs"]
