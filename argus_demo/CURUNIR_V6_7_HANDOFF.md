@@ -51,12 +51,18 @@ version / the other import family.
    families (`analytic_forecast`, hypothesis, …) whose hidden claim-state
    still fails open; signed vs plain path.
 4. **Export hashes; import is staging-atomic** — `export_to` copies through
-   `get_payload` (torn → `StoreError` at backup time), skips symlinks,
-   `put_payload` holds the append lock. `import_from` writes payloads then
-   events then `store_meta` in a sibling staging dir and renames. Attack:
-   crash windows around rename; export of a legacy dest that already has
-   `store_meta`+events and no payloads (new importer cannot mint this);
-   delta vs full import siblings; B-4 hostile omission.
+   `get_payload` (torn → `StoreError` at backup time). Round 26: a 64-hex
+   symlink/dir/fifo is a `StoreError` (not a skip); dest-side writes refuse
+   symlinks; `put_payload` replaces a symlink slot; `import_delta_bundle`
+   preflights the whole suffix before planting payloads; torn `store_meta`
+   is not a store (retry allowed). Attack the next sibling of each.
+
+5. **Ck2 walks every validate_report family** — `_related_claim_ids` follows
+   material claims, embedded analytic ids, and reverse edges (objective ←
+   assumption/path). Attack any cited family still fail-open.
+
+6. **Collection needs cite ids only** — theme/narrative/forecast/indicator/
+   interest/edge-note text is not interpolated into discriminator questions.
 
 Locks added: `test_apply_probability_does_not_embed_indicator_rationale`,
 `test_fire_does_not_embed_observation_value`,
