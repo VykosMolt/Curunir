@@ -175,6 +175,31 @@ def _looks_like_open_export(root: Path) -> bool:
     return True
 
 
+def _dest_has_payload_evidence(dest: Path) -> bool:
+    payloads = Path(dest) / "payloads"
+    if payloads.is_symlink():
+        return True
+    if not payloads.is_dir():
+        return False
+    try:
+        for child in payloads.iterdir():
+            if len(child.name) == 64 \
+                    and all(c in "0123456789abcdef" for c in child.name):
+                return True
+    except OSError:
+        return False
+    return False
+
+
+def _read_regular_bytes(path: Path) -> bytes:
+    """Read a regular file only. FIFO/symlink/dir must not hang or follow
+    dest-side plants (review R36B-3 / R26B-2)."""
+    path = Path(path)
+    if path.is_symlink() or path.is_dir() or not path.is_file():
+        raise StoreError(f"{path.name} is not a regular file; refusing")
+    return path.read_bytes()
+
+
 def _refuse_dest_store_overlap(
         dest: Path, *, source_root: Path | None = None,
         replace_dest: bool = False,
@@ -184,7 +209,9 @@ def _refuse_dest_store_overlap(
     Shared by export_to / import_from / build_delta_bundle / PACE so the
     next dest-writer cannot skip the class (review R31B-1 / R32B-1 /
     R33B-2). A previous *consistent* open export may be replaced by
-    export_to; a live store (even with a planted manifest name) may not."""
+    export_to; a live store (even with a planted manifest name) may not.
+    Live-marker and payload evidence are checked even when dest is not
+    `_looks_like_complete_store` (FIFO meta fail-open, review R36B-2)."""
     dest = Path(dest).resolve()
     if source_root is not None:
         root = Path(source_root).resolve()
@@ -196,11 +223,11 @@ def _refuse_dest_store_overlap(
             raise StoreError(
                 "dest is an ancestor of the source store; refusing"
             )
-    if _looks_like_complete_store(dest):
+    if _is_live_store_root(dest):
+        raise StoreError("dest is a live store; refusing")
+    if _looks_like_complete_store(dest) or _dest_has_payload_evidence(dest):
         if not (allow_export_replace and _looks_like_open_export(dest)):
             raise StoreError("dest is an existing store; refusing")
-        if _is_live_store_root(dest):
-            raise StoreError("dest is a live store; refusing")
         if source_root is not None:
             try:
                 src_id = json.loads(
@@ -282,7 +309,9 @@ class MissionDataStore:
         if not meta_path.exists():
             raise StoreError(f"not a mission data store: {self.root}")
         try:
-            self.meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            self.meta = json.loads(_read_regular_bytes(meta_path).decode("utf-8"))
+        except StoreError:
+            raise
         except (ValueError, UnicodeDecodeError) as exc:
             raise StoreError(
                 f"store_meta.json is not valid JSON ({self.root}); refusing to "
@@ -309,7 +338,7 @@ class MissionDataStore:
         self._source_watermarks: dict[str, str] = {}
         self._file_offset = 0
         if self.events_path.exists():
-            raw = self.events_path.read_bytes()
+            raw = _read_regular_bytes(self.events_path)
             self._file_offset = len(raw)
             complete, torn = self._split_log(raw)
             # a healthy log ends in \n; a non-empty trailing segment is an
@@ -352,6 +381,12 @@ class MissionDataStore:
         root = Path(root)
         if (root / "store_meta.json").exists():
             raise StoreError(f"store already exists: {root}")
+        leftover_lock = root / ".append.lock"
+        if leftover_lock.is_symlink() or (
+                leftover_lock.exists() and not leftover_lock.is_file()):
+            raise StoreError(
+                "refusing to create a store over a non-regular .append.lock"
+            )
         leftover_events = root / "events.jsonl"
         if leftover_events.exists():
             if leftover_events.is_symlink() or not leftover_events.is_file():
@@ -424,7 +459,7 @@ class MissionDataStore:
         # refuse up front so recovery never reports success on a store that would
         # still refuse to open (the chain-verify below cannot see this — review
         # finding 1 residual).
-        if json.loads(meta_path.read_text(encoding="utf-8")).get("contract_version") \
+        if json.loads(_read_regular_bytes(meta_path).decode("utf-8")).get("contract_version") \
                 not in COMPATIBLE_CONTRACT_VERSIONS:
             raise StoreError(
                 "store contract version is not compatible with this code; not a "
@@ -435,14 +470,18 @@ class MissionDataStore:
         # process) cannot then be mid-append while we truncate/rename, which
         # would orphan its committed bytes. A crashed writer's lock was released
         # on death, so recovery still proceeds.
-        with (root / ".append.lock").open("w") as lock_handle:
+        lock_path = root / ".append.lock"
+        if lock_path.is_symlink() or (
+                lock_path.exists() and not lock_path.is_file()):
+            raise StoreError("append lock is not a regular file; refusing")
+        with lock_path.open("w") as lock_handle:
             fcntl.flock(lock_handle, fcntl.LOCK_EX)
             try:
                 cls(root)  # opens cleanly under the lock → nothing to recover
                 return {"recovered": False, "truncated_bytes": 0}
             except Exception:  # noqa: BLE001 — any open failure (incl. a serialization
                 pass           # crash from a surrogate-bearing record) → try recovery
-            raw = events_path.read_bytes() if events_path.exists() else b""
+            raw = _read_regular_bytes(events_path) if events_path.exists() else b""
             complete, torn = cls._split_log(raw)
             # the recoverable case is EXACTLY a non-empty torn tail (an incomplete
             # final write, i.e. a log not ending in \n). Anything else — a
@@ -573,7 +612,13 @@ class MissionDataStore:
 
         @contextmanager
         def held():
-            with (self.root / ".append.lock").open("w") as lock_handle:
+            lock_path = self.root / ".append.lock"
+            if lock_path.is_symlink() or (
+                    lock_path.exists() and not lock_path.is_file()):
+                raise StoreError(
+                    "append lock is not a regular file; refusing"
+                )
+            with lock_path.open("w") as lock_handle:
                 fcntl.flock(lock_handle, fcntl.LOCK_EX)
                 try:
                     yield
@@ -989,7 +1034,7 @@ class MissionDataStore:
         # a hostile manifest raise an untyped UnicodeDecodeError / AttributeError /
         # KeyError / RecursionError before any guard (review NEW-A1)
         try:
-            manifest = json.loads(manifest_path.read_bytes().decode("utf-8"),
+            manifest = json.loads(_read_regular_bytes(manifest_path).decode("utf-8"),
                                   object_pairs_hook=_no_duplicate_keys)
         except RecursionError as exc:
             raise StoreError("export_manifest.json is nested too deeply; refusing") from exc
@@ -1001,7 +1046,7 @@ class MissionDataStore:
             # dedicated, more-specific "manifest records no store_meta_sha256"
             # check downstream that must remain reachable
             raise StoreError("export_manifest.json is missing required fields; refusing")
-        events_bytes = (source_dir / "events.jsonl").read_bytes()
+        events_bytes = _read_regular_bytes(source_dir / "events.jsonl")
         if hashlib.sha256(events_bytes).hexdigest() != manifest["events_sha256"]:
             raise StoreError("export tampered: events.jsonl hash mismatch")
         # store_meta.json carries store identity, contract_version, package_version
@@ -1011,7 +1056,7 @@ class MissionDataStore:
         # it is unauthenticated and is refused rather than silently trusted.
         if "store_meta_sha256" not in manifest:
             raise StoreError("export unauthenticated: manifest records no store_meta_sha256")
-        store_meta_bytes = (source_dir / "store_meta.json").read_bytes()
+        store_meta_bytes = _read_regular_bytes(source_dir / "store_meta.json")
         if hashlib.sha256(store_meta_bytes).hexdigest() != manifest["store_meta_sha256"]:
             raise StoreError("export tampered: store_meta.json hash mismatch")
         # migration safety: refuse a backup written under a contract version this

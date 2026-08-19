@@ -109,7 +109,11 @@ def verify_delta_bundle(bundle_dir: str | Path) -> dict[str, Any]:
     # UnicodeDecodeError / AttributeError / RecursionError from a later .items() /
     # index (review NEW-A2 / B-4)
     try:
-        manifest = json.loads((bundle_dir / "delta_manifest.json").read_bytes().decode("utf-8"),
+        manifest_path = bundle_dir / "delta_manifest.json"
+        if manifest_path.is_symlink() or manifest_path.is_dir() \
+                or not manifest_path.is_file():
+            return {"valid": False, "reason": "delta_manifest.json missing"}
+        manifest = json.loads(manifest_path.read_bytes().decode("utf-8"),
                               object_pairs_hook=_no_duplicate_keys)
     except FileNotFoundError:
         return {"valid": False, "reason": "delta_manifest.json missing"}

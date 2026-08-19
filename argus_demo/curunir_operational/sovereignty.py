@@ -188,7 +188,7 @@ def verify_pace_bundle(bundle_dir: str | Path) -> dict[str, Any]:
     failures = []
     for name, expected in manifest["members"].items():
         path = bundle_dir / name
-        if not path.exists():
+        if path.is_symlink() or path.is_dir() or not path.is_file():
             failures.append(f"{name}: missing")
             continue
         actual = hashlib.sha256(path.read_bytes()).hexdigest()

@@ -262,6 +262,32 @@ def validate_report(projection: MissionProjection, report: Mapping[str, Any]) ->
                     finding("STALE_BASIS", anchor,
                             f"claim {claim_id} is {state}; a decision option "
                             "presents it as settled support")
+            extra_opts = walked_opts | option_set
+            for wid in extra_opts:
+                rec = None
+                fam = ""
+                if hasattr(store, "current_analytics"):
+                    from curunir_analytic.store import ANALYTIC_ID_FIELDS
+                    for kind in ANALYTIC_ID_FIELDS:
+                        rec = store.current_analytics(kind).get(wid)
+                        if rec is not None:
+                            fam = kind
+                            break
+                if rec is None and hasattr(store, "current_hypotheses"):
+                    rec = store.current_hypotheses().get(wid)
+                    fam = "hypothesis"
+                if rec is not None and _dead(fam, rec.get("status") or ""):
+                    finding("CONTESTED_AS_SETTLED", anchor,
+                            f"{fam} {rec.get('status')} is not live "
+                            "support; a decision option presents it settled")
+            subjects = extra_opts | related_opts
+            for item in projection.family("review_item"):
+                if item.get("status") == "OPEN" \
+                        and item.get("subject_id") in subjects:
+                    finding("CONTESTED_AS_SETTLED", anchor,
+                            f"{item.get('subject_kind')} "
+                            f"{item.get('subject_id')} has open review; "
+                            "a decision option presents it settled")
         for sentence in sentences:
             status = sentence["status"]
             refs = tuple(sentence.get("basis_refs", ()))

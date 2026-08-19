@@ -57,6 +57,15 @@ def requirement_for_discriminator(store: SemanticStore, discriminator: Mapping[s
     # SATISFIED (or otherwise advanced) back to REQUESTED
     current = store.latest_by_id("discriminator", "discriminator_id").get(
         discriminator["discriminator_id"], discriminator)
+    from curunir_analytic.substrate import resolve_reference_markings
+    from curunir_operational.access import inherited_marking
+    req_marking = inherited_marking(
+        marking,
+        resolve_reference_markings(
+            store, (current.get("desired_subject_ref"),
+                    current.get("discriminator_id"),
+                    *tuple(current.get("hypothesis_ids") or ()),
+                    *tuple(current.get("claim_ids") or ()))))
     requirement = workflow.open_requirement(
         mission_context=mission_context, question=current["question"],
         affected_ids=tuple(current["hypothesis_ids"]) + tuple(current["claim_ids"]),
@@ -64,7 +73,7 @@ def requirement_for_discriminator(store: SemanticStore, discriminator: Mapping[s
         rationale="discriminating observation for unresolved world-model uncertainty",
         required_evidence_type="PUBLIC_SOURCE_EVIDENCE", owning_role="ANALYST",
         closure_criteria="human review of the discriminating observation",
-        due_time=None, recorded_time=now, marking=marking, actor=actor)
+        due_time=None, recorded_time=now, marking=req_marking, actor=actor)
     updates: dict = {}
     if current["requirement_id"] != requirement["requirement_id"]:
         updates["requirement_id"] = requirement["requirement_id"]

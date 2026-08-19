@@ -1,7 +1,7 @@
 # CURUNIR V6.7 — HANDOFF
 
 **Date:** 2026-08-19 · **Branch:** `feature/curunir-v67-hardening`
-**Verdict:** `NOT_CONVERGED` — Round 35 whole-tranche review returned `DIFF_BROKEN`. The repair is on HEAD. Do not merge. Next: two fresh whole-tranche reviewers (Round 36).
+**Verdict:** `NOT_CONVERGED` — Round 36 whole-tranche review returned `DIFF_BROKEN`. The repair is on HEAD. Do not merge. Next: two fresh whole-tranche reviewers (Round 37).
 **NOT MERGED.** Do not merge until fresh review of the **whole V6.7 tranche**
 returns `DIFF_SURVIVES` on both domains.
 

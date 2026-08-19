@@ -342,6 +342,22 @@ def test_create_refuses_leftover_payload_fifo(tmp_path):
         MissionDataStore.create(root, "fresh-store", T0)
 
 
+def test_append_lock_symlink_does_not_truncate_events(tmp_path):
+    # R36B B-4: open("w") on a dest-side lock symlink must not clobber
+    # events.jsonl or an outside file.
+    from curunir_operational.store import StoreError
+    from operational_support import make_store
+    store = make_store(tmp_path)
+    sentinel = b"SENTINEL_EVENT_LOG_MUST_SURVIVE\n"
+    store.events_path.write_bytes(sentinel)
+    lock = store.root / ".append.lock"
+    lock.unlink()
+    lock.symlink_to(store.events_path)
+    with pytest.raises(StoreError, match="append lock"):
+        store.put_payload(b"must not truncate the log")
+    assert store.events_path.read_bytes() == sentinel
+
+
 def test_export_refuses_matching_planted_export_manifest_on_a_live_store(tmp_path):
     # R34B-1: a hash-matched export_manifest plant on a live store
     # (next hop of empty/`{}`/symlink) must not rmtree the live root.
@@ -406,12 +422,12 @@ def test_export_refuses_planted_export_manifest_on_a_live_store(tmp_path):
     src = make_store(tmp_path, name="src")
     src.put_payload(b"source payload")
     (live.root / "export_manifest.json").write_bytes(b"")
-    with pytest.raises(StoreError, match="existing store"):
+    with pytest.raises(StoreError, match="live store|existing store"):
         src.export_to(live.root)
     assert live.get_payload(digest) == b"live evidence must survive planted manifest"
     (live.root / "export_manifest.json").unlink()
     (live.root / "export_manifest.json").symlink_to(tmp_path / "src" / "store_meta.json")
-    with pytest.raises(StoreError, match="existing store"):
+    with pytest.raises(StoreError, match="live store|existing store"):
         src.export_to(live.root)
     assert live.get_payload(digest) == b"live evidence must survive planted manifest"
 

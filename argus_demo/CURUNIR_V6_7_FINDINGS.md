@@ -1046,6 +1046,16 @@ Two independent Grok reviewers attacked `8870569`. **BOTH DIFF_BROKEN.**
 - **R35B-1 (MAJOR)** — create() never planted `.append.lock`; same default `store_id` + matching plant replaced dest. Repair: create/import plant the lock; live check is symlink-aware; open-export requires payload-set match.
 - **R35B-2/3** — `_looks_like_complete_store` / delta verify no longer `read_bytes` a FIFO.
 
-## Round 36 — continue from here
+## Round 36 — WHOLE-TRANCHE attack found the next hop; repaired
 
-Do not merge. Attack this repair as Round 36 with two fresh whole-tranche reviewers.
+Two independent Grok reviewers attacked `e1cd937`. **BOTH DIFF_BROKEN.**
+
+- **R36A (CRITICAL)** — option-section official-status/STALE moved; OPEN review and walked-dead (STALE path / ACHIEVED objective) stayed sentence-class gated. Repair: section-level `_dead` + OPEN review on option_ids and walked embeds.
+- **R36A (MAJOR)** — `requirement_for_discriminator` still stamped caller marking. Repair: floor on discriminator subject/claims.
+- **R36B-1/2** — dest overlap only ran after `_looks_like_complete_store`; FIFO meta + live lock/payloads fail-opened. Repair: live-marker and payload-evidence first.
+- **R36B B-4 (silent-wrong)** — `_append_lock` `open("w")` followed a lock symlink onto `events.jsonl` and truncated it. Repair: refuse non-regular lock; same on create/recover.
+- **R36B-3** — remaining exists()-first FIFO reads on import/open/delta-manifest/pace/recover. Repair: `_read_regular_bytes`.
+
+## Round 37 — continue from here
+
+Do not merge. Attack this repair as Round 37 with two fresh whole-tranche reviewers.
