@@ -242,6 +242,65 @@ def test_warning_floors_marking_on_referenced_forecast(tmp_path):
     assert obj["objective_id"] in embedded
 
 
+def test_embed_scan_covers_subject_ref_and_variant_carriers():
+    # R33A: field collection is by key shape, not a family instance list.
+    from curunir_analytic.substrate import _embedded_analytic_ids
+    assert "obj-secret-partner" in _embedded_analytic_ids({
+        "record_type": "forecast_indicator",
+        "forecast_ids": ("forecast-public",),
+        "desired_subject_ref": "obj-secret-partner",
+    })
+    assert "m-secret" in _embedded_analytic_ids({
+        "record_type": "narrative_variant",
+        "narrative_id": "narr-1",
+        "manifestation_ids": ("m-secret",),
+        "observation_ids": ("o-secret",),
+    })
+    # A4: forecast.indicator_ids stays association
+    assert "ind-x" not in _embedded_analytic_ids({
+        "record_type": "analytic_forecast",
+        "indicator_ids": ("ind-x",),
+        "assumption_ids": (),
+    })
+
+
+def test_indicator_floors_on_desired_subject_ref(tmp_path):
+    # R33A-1: shipped arm_indicator persists desired_subject_ref.
+    from curunir_analytic.indicators import arm_indicator
+    from curunir_analytic.substrate import AnalyticContext, _embedded_analytic_ids
+    from curunir_operational.access import AccessContext, can_view
+    from curunir_operational.contracts import ObjectVersion, ProvenanceSummary
+    from workbench_support import RESTRICTED_MARK
+    pipeline, ctx = make_analytic(tmp_path)
+    claims = _seed(pipeline, ctx)
+    fc = _forecast(ctx, claims)
+    now = ctx.now_fn()
+    ctx.store.append("OBJECT_VERSION_APPENDED", ObjectVersion(
+        object_id="obj-secret-partner", version=1, object_type="ORGANISATION",
+        lifecycle="ACTIVE", labels=("Sensitive Partner AS",), external_refs=(),
+        valid_from=None, valid_to=None, source_time=None, time_precision="UNKNOWN",
+        recorded_time=now, geometry=None,
+        attributes={"note": "compartmented counterparty"},
+        quality={"review_state": "UNREVIEWED"}, epistemic_state="REPORTED",
+        marking=RESTRICTED_MARK,
+        provenance=ProvenanceSummary(mode="OPERATIONAL")),
+        recorded_time=now, actor="analyst-a")
+    from curunir_analytic.contracts import IndicatorEffect
+    indicator = arm_indicator(
+        ctx, description="watch the compartmented counterparty",
+        forecast_ids=(fc["forecast_id"],),
+        kind="PRESENCE", direction="SUPPORTS",
+        desired_observation_type="ENTITY_ATTRIBUTE",
+        desired_subject_ref="obj-secret-partner",
+        desired_attribute="entity_status",
+        expected_value="WEAPONIZED",
+        effect=IndicatorEffect(mode="REVIEW_ONLY"))
+    assert "obj-secret-partner" in _embedded_analytic_ids(indicator)
+    uncleared = AccessContext("c", "d", "HUMAN", ("ANALYST",),
+                              releasability=("PUBLIC",))
+    assert can_view(indicator["marking"], uncleared) is False
+
+
 def test_no_derived_record_underclassifies_anything_it_references(tmp_path):
     # CLASS-LEVEL property (review A1/A2/A3, the CORRECT invariant): after the
     # SHIPPED background pass at a lower marking, NO analytic_transition or

@@ -100,16 +100,49 @@ def _looks_like_complete_store(root: Path) -> bool:
     return isinstance(data, dict) and "store_id" in data
 
 
+def _looks_like_open_export(root: Path) -> bool:
+    """True only for a consistent previous open export.
+
+    A dest-side plant of an empty/`{}`/symlink `export_manifest.json` on a
+    live store must not make export_to treat it as replaceable backup
+    bait (review R33B-1)."""
+    manifest_path = Path(root) / "export_manifest.json"
+    if manifest_path.is_symlink() or not manifest_path.is_file():
+        return False
+    try:
+        manifest = json.loads(manifest_path.read_bytes().decode("utf-8"))
+    except (ValueError, UnicodeDecodeError, OSError):
+        return False
+    if not isinstance(manifest, dict):
+        return False
+    if manifest.get("export_format") != "curunir-operational-open-export-v1":
+        return False
+    events = Path(root) / "events.jsonl"
+    meta = Path(root) / "store_meta.json"
+    if events.is_symlink() or meta.is_symlink():
+        return False
+    if not events.is_file() or not meta.is_file():
+        return False
+    try:
+        if hashlib.sha256(events.read_bytes()).hexdigest() != manifest.get("events_sha256"):
+            return False
+        if hashlib.sha256(meta.read_bytes()).hexdigest() != manifest.get("store_meta_sha256"):
+            return False
+    except OSError:
+        return False
+    return True
+
+
 def _refuse_dest_store_overlap(
         dest: Path, *, source_root: Path | None = None,
         replace_dest: bool = False,
         allow_export_replace: bool = False) -> None:
     """Refuse dest that would destroy or pollute a live store.
 
-    Shared by export_to / import_from / build_delta_bundle so the next
-    dest-writer cannot skip the class (review R31B-1 / R32B-1 / R32B-3).
-    A previous open export (store_meta + export_manifest) may be replaced
-    by export_to; a live store may not."""
+    Shared by export_to / import_from / build_delta_bundle / PACE so the
+    next dest-writer cannot skip the class (review R31B-1 / R32B-1 /
+    R33B-2). A previous *consistent* open export may be replaced by
+    export_to; a live store (even with a planted manifest name) may not."""
     dest = Path(dest).resolve()
     if source_root is not None:
         root = Path(source_root).resolve()
@@ -122,8 +155,7 @@ def _refuse_dest_store_overlap(
                 "dest is an ancestor of the source store; refusing"
             )
     if _looks_like_complete_store(dest):
-        if not (allow_export_replace
-                and (dest / "export_manifest.json").is_file()):
+        if not (allow_export_replace and _looks_like_open_export(dest)):
             raise StoreError("dest is an existing store; refusing")
     for ancestor in dest.parents:
         if _looks_like_complete_store(ancestor):
@@ -263,10 +295,20 @@ class MissionDataStore:
         if (root / "store_meta.json").exists():
             raise StoreError(f"store already exists: {root}")
         leftover_events = root / "events.jsonl"
-        if leftover_events.exists() and leftover_events.stat().st_size > 0:
-            raise StoreError(
-                f"refusing to create a store over leftover events.jsonl: {root}"
-            )
+        if leftover_events.exists():
+            if leftover_events.is_symlink() or not leftover_events.is_file():
+                raise StoreError(
+                    "events.jsonl dest is not a regular file; refusing"
+                )
+            leftover_stat = leftover_events.stat()
+            if leftover_stat.st_nlink > 1:
+                raise StoreError(
+                    "refusing to create a store over a hardlinked events.jsonl"
+                )
+            if leftover_stat.st_size > 0:
+                raise StoreError(
+                    f"refusing to create a store over leftover events.jsonl: {root}"
+                )
         root.mkdir(parents=True, exist_ok=True)
         payloads = root / "payloads"
         if payloads.exists() and (payloads.is_symlink() or not payloads.is_dir()):

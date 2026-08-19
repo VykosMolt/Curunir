@@ -1014,6 +1014,16 @@ Still open from R32 (not yet closed): derive `_DEAD` from unused official tuples
 - **`create()`** — leftover 64-hex / non-regular payload slots are refused.
 - **`_looks_like_complete_store`** — a symlink to valid identity still names a store (R32B-5).
 
-## Round 33 — continue from here
+## Round 33 — WHOLE-TRANCHE attack found the next hop; repaired
 
-Do not merge. Attack this repair as Round 33 with two fresh whole-tranche reviewers.
+Two independent Grok reviewers attacked `87e113a`. **BOTH DIFF_BROKEN.**
+
+- **R33A-1 (MAJOR)** — `_embedded_analytic_ids` was still a family instance list; `forecast_indicator.desired_subject_ref` (same field R32 floored on the discriminator) was omitted. Repair: collect embed ids by key shape (`_id`/`_ids`/`_ref`/`_refs` + lineage/depends_on/proposition_refs/edges), minus A4 `indicator_ids` and provenance keys.
+- **R33A-2 (MAJOR)** — `narrative_variant.manifestation_ids` / `observation_ids` were the sibling of `propagation_edge` endpoints. The same key-shape collector covers them.
+- **R33B-1 (MAJOR)** — `allow_export_replace` treated any dest file named `export_manifest.json` as a previous export, so a plant/symlink let `export_to` rmtree a live store. Repair: dest is a previous export only if the manifest is a regular file, `export_format` matches, and events/meta hashes match.
+- **R33B-2 (MAJOR)** — `build_pace_bundle` skipped the dest-overlap helper. Now uses `_refuse_dest_store_overlap`.
+- **R33B-3 (MAJOR)** — `create()` allowed a hardlink of a live store's empty `events.jsonl` (R30 empty-leftover). Repair: leftover events with `st_nlink > 1` are refused.
+
+## Round 34 — continue from here
+
+Do not merge. Attack this repair as Round 34 with two fresh whole-tranche reviewers.

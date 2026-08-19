@@ -25,7 +25,7 @@ from .access import AccessContext
 from .canonical import CONTRACT_VERSION, canonical_line, sha256
 from .projection import Projection, projection_hash
 from .sitrep import build_situation_report, render_text
-from .store import MissionDataStore
+from .store import MissionDataStore, _refuse_dest_store_overlap
 
 OMISSION_POLICY = ("This bundle contains only content releasable to the stated access context. "
                    "Content outside that releasability, if any exists, is omitted; neither its "
@@ -142,6 +142,7 @@ def run_exit_test(store: MissionDataStore, export_dir: str | Path, fresh_root: s
 def build_pace_bundle(store: MissionDataStore, projection: Projection, context: AccessContext,
                       out_dir: str | Path, *, operational_context: str, since_seq: int = 0) -> dict[str, Any]:
     out_dir = Path(out_dir)
+    _refuse_dest_store_overlap(out_dir, source_root=store.root, replace_dest=False)
     out_dir.mkdir(parents=True, exist_ok=True)
     view = projection.view(context)
     changes = projection.changes_since(since_seq, context, store)

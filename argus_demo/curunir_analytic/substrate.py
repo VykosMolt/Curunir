@@ -288,33 +288,39 @@ def ensure_transition(ctx: AnalyticContext, *, subject_kind: str, subject_id: st
                              to_status=to_status)
 
 
-# Scalar / sequence fields whose values are foreign object ids this version
-# embeds or persists (existence + state). forecast.indicator_ids is
-# association and is intentionally absent (review A4).
-_EMBEDDED_ID_FIELDS: dict[str, tuple[str, ...]] = {
-    "historical_analogue": ("episode_id",),
-    "strategic_warning": ("forecast_id", "objective_id", "impact_path_ids"),
-    "forecast_indicator": ("forecast_ids",),
-    "analytic_assumption": ("objective_ids",),
-    "analytic_theme": ("parent_theme_id",),
-    "stakeholder_assessment": ("entity_object_id", "context_id"),
-    "influence_assertion": ("source_object_id", "target_object_id"),
-    "analytic_narrative": ("counter_narrative_ids",),
-    "propagation_edge": ("narrative_id", "from_manifestation_id",
-                         "to_manifestation_id"),
-    "analytic_forecast": ("assumption_ids",),
-    "mission_objective": ("assumption_ids",),
-    "impact_path": ("assumption_ids", "objective_id"),
-    "response_option": ("assumption_ids", "path_id", "objective_id"),
+# Reverse-index association: flooring would reclassify the *watched*
+# object because a more restricted watcher named it (review A4).
+_ASSOCIATION_ONLY_FIELDS: dict[str, frozenset[str]] = {
+    "analytic_forecast": frozenset({"indicator_ids"}),
 }
-# (kind, id) / lineage pairs — second element is the referenced id.
-_EMBEDDED_PAIR_FIELDS: dict[str, tuple[str, ...]] = {
-    "analytic_theme": ("lineage",),
-    "analytic_forecast": ("proposition_refs", "depends_on"),
-    "mission_objective": ("depends_on",),
-    "impact_path": ("depends_on",),
-    "response_option": ("depends_on",),
-}
+# Provenance / rule labels, not foreign object state.
+_EMBED_SKIP_KEYS = frozenset({
+    "record_type", "marking", "history", "change_reason",
+    "proposal_id", "inference_id", "tier_rule_id",
+})
+_ID_KEY_SUFFIXES = ("_id", "_ids", "_ref", "_refs")
+_PAIR_KEYS = frozenset({"lineage", "depends_on", "proposition_refs", "edges"})
+
+
+def _is_embed_key(key: str) -> bool:
+    return key not in _EMBED_SKIP_KEYS and (
+        key.endswith(_ID_KEY_SUFFIXES) or key in _PAIR_KEYS)
+
+
+def _collect_embed_ids(value, ids: list[str]) -> None:
+    if isinstance(value, str) and value:
+        ids.append(value)
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            if isinstance(item, str) and item:
+                ids.append(item)
+            elif isinstance(item, (list, tuple)) and len(item) == 2 and item[1]:
+                if item[0] != "claim":
+                    ids.append(item[1])
+            elif isinstance(item, Mapping):
+                for endpoint in (item.get("from_id"), item.get("to_id")):
+                    if endpoint:
+                        ids.append(endpoint)
 
 
 def _embedded_analytic_ids(record) -> tuple[str, ...]:
@@ -323,31 +329,19 @@ def _embedded_analytic_ids(record) -> tuple[str, ...]:
     it would reclassify a PUBLIC forecast just because a SPECIAL indicator
     watches it (review A4). A historical analogue *embeds* the episode
     (title, setting, matched/mismatched detail) so the episode must floor
-    the analogue record (review R25A-3)."""
+    the analogue record (review R25A-3).
+
+    Field collection is by key shape, not a per-family instance list, so a
+    new id-bearing field (indicator.desired_subject_ref, variant
+    manifestation_ids) is floored without another map edit (review R33A)."""
     mapping = _as_mapping(record)
     kind = mapping.get("record_type") or getattr(record, "RECORD_TYPE", "")
+    deny = _ASSOCIATION_ONLY_FIELDS.get(kind, frozenset())
     ids: list[str] = []
-    for key in _EMBEDDED_ID_FIELDS.get(kind, ()):
-        value = mapping.get(key)
-        if isinstance(value, str) and value:
-            ids.append(value)
-        elif isinstance(value, (list, tuple)):
-            ids.extend(item for item in value if isinstance(item, str) and item)
-    for key in _EMBEDDED_PAIR_FIELDS.get(kind, ()):
-        for reference in mapping.get(key) or ():
-            if isinstance(reference, (list, tuple)) and len(reference) == 2 \
-                    and reference[0] != "claim" and reference[1]:
-                ids.append(reference[1])
-    if kind in ("analytic_forecast", "mission_objective", "impact_path",
-                "response_option"):
-        for edge in mapping.get("edges") or ():
-            edge = _as_mapping(edge)
-            for endpoint in (edge.get("from_id"), edge.get("to_id")):
-                if endpoint:
-                    ids.append(endpoint)
-        for key in ("path_id", "objective_id"):
-            if mapping.get(key):
-                ids.append(mapping[key])
+    for key, value in mapping.items():
+        if key in deny or not _is_embed_key(key):
+            continue
+        _collect_embed_ids(value, ids)
     return tuple(dict.fromkeys(ids))
 
 

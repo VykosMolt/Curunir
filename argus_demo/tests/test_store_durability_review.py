@@ -340,3 +340,53 @@ def test_create_refuses_leftover_payload_fifo(tmp_path):
     leftover.write_bytes(b"torn leftover digest")
     with pytest.raises(StoreError, match="leftover payload"):
         MissionDataStore.create(root, "fresh-store", T0)
+
+
+def test_export_refuses_planted_export_manifest_on_a_live_store(tmp_path):
+    # R33B-1: a dest-side plant of export_manifest.json must not make
+    # export_to rmtree a live store.
+    from curunir_operational.store import StoreError
+    from operational_support import make_store
+    live = make_store(tmp_path, name="live")
+    digest = live.put_payload(b"live evidence must survive planted manifest")
+    src = make_store(tmp_path, name="src")
+    src.put_payload(b"source payload")
+    (live.root / "export_manifest.json").write_bytes(b"")
+    with pytest.raises(StoreError, match="existing store"):
+        src.export_to(live.root)
+    assert live.get_payload(digest) == b"live evidence must survive planted manifest"
+    (live.root / "export_manifest.json").unlink()
+    (live.root / "export_manifest.json").symlink_to(tmp_path / "src" / "store_meta.json")
+    with pytest.raises(StoreError, match="existing store"):
+        src.export_to(live.root)
+    assert live.get_payload(digest) == b"live evidence must survive planted manifest"
+
+
+def test_pace_refuses_dest_inside_the_source_store(tmp_path):
+    from curunir_operational.projection import Projection
+    from curunir_operational.sovereignty import build_pace_bundle
+    from curunir_operational.store import StoreError
+    from operational_support import LOW_CONTEXT, make_store, t
+    store = make_store(tmp_path)
+    projection = Projection(store, snapshot_time=t(1))
+    with pytest.raises(StoreError, match="overlaps the source store"):
+        build_pace_bundle(store, projection, LOW_CONTEXT, store.root,
+                          operational_context="test")
+    with pytest.raises(StoreError, match="overlaps the source store"):
+        build_pace_bundle(store, projection, LOW_CONTEXT, store.payload_dir,
+                          operational_context="test")
+
+
+def test_create_refuses_hardlinked_empty_events(tmp_path):
+    # R33B-3: empty leftover events is allowed (R30) only as a private
+    # inode, not a hardlink to a live store's log.
+    import os
+    from curunir_operational.store import MissionDataStore, StoreError
+    from operational_support import T0, make_store
+    live = make_store(tmp_path, name="live")
+    fresh = tmp_path / "fresh"
+    fresh.mkdir()
+    os.link(live.events_path, fresh / "events.jsonl")
+    with pytest.raises(StoreError, match="hardlinked"):
+        MissionDataStore.create(fresh, "fresh-store", T0)
+    assert live.head()["event_count"] == 0
