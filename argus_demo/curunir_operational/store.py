@@ -213,6 +213,11 @@ class MissionDataStore:
         root = Path(root)
         if (root / "store_meta.json").exists():
             raise StoreError(f"store already exists: {root}")
+        leftover_events = root / "events.jsonl"
+        if leftover_events.exists() and leftover_events.stat().st_size > 0:
+            raise StoreError(
+                f"refusing to create a store over leftover events.jsonl: {root}"
+            )
         root.mkdir(parents=True, exist_ok=True)
         payloads = root / "payloads"
         if payloads.exists() and (payloads.is_symlink() or not payloads.is_dir()):
@@ -534,9 +539,10 @@ class MissionDataStore:
                 for body in bodies:
                     digest = hashlib.sha256(body).hexdigest()
                     slot = self.payload_dir / digest
-                    if slot.is_dir() and not slot.is_symlink():
+                    if slot.exists() and (
+                            slot.is_symlink() or slot.is_dir() or not slot.is_file()):
                         raise StoreError(
-                            f"payload slot {digest[:12]} is a directory; "
+                            f"payload slot {digest[:12]} is not a regular file; "
                             f"refusing the bundle rather than applying a prefix"
                         )
             applied = 0
@@ -733,66 +739,71 @@ class MissionDataStore:
 
     def export_to(self, directory: str | Path) -> dict[str, Any]:
         directory = Path(directory)
-        directory.mkdir(parents=True, exist_ok=True)
-        payload_out = directory / "payloads"
-        if payload_out.is_symlink() or (
-                payload_out.exists() and not payload_out.is_dir()):
-            raise StoreError(
-                "export dest payloads is not a regular directory; refusing"
-            )
-        payload_out.mkdir(exist_ok=True)
-        # HOLD THE APPEND LOCK across catch-up + copy + manifest. The product is
-        # multi-writer (the server re-opens per request), so without this the
-        # copied events.jsonl reflects the on-disk head while the manifest's
-        # head_hash/event_count reflect this instance's STALE in-memory state — a
-        # backup that import_from then refuses ("head hash does not match
-        # manifest"), silently, at restore time. Under the lock: catch up so
-        # in-memory == disk, and no writer can append during the copy (the
-        # lock-and-validate doctrine of recover_torn_tail, applied to backups;
-        # review B-2).
-        with self._append_lock():
-            self._catch_up()
-            _export_write_bytes(directory / "events.jsonl", self.events_path.read_bytes())
-            payload_hashes: dict[str, str] = {}
-            for path in sorted(self.payload_dir.iterdir()):
-                # A 64-hex slot that is not a regular file (symlink, dir,
-                # fifo) must FAIL the backup NOW — skipping it produced a
-                # successful backup that import restored without the
-                # evidence the live store could still serve (R26B-1).
-                # Non-digest names remain ignored (operator notes / temps).
-                name = path.name
-                if not (len(name) == 64
-                        and all(c in "0123456789abcdef" for c in name)):
-                    continue
-                if path.is_symlink() or path.is_dir() or not path.is_file():
-                    raise StoreError(
-                        f"export: payload slot {name[:12]} is not a regular "
-                        f"file; refusing rather than omit it from the backup"
-                    )
-                try:
-                    body = self.get_payload(name)
-                except FileNotFoundError as exc:
-                    raise StoreError(
-                        f"export: payload {name[:12]} disappeared during copy"
-                    ) from exc
-                _export_write_bytes(directory / "payloads" / name, body)
-                payload_hashes[name] = name
-            # store_meta is the commit marker — write AFTER payloads
-            # (review R29B-1)
-            _export_write_bytes(directory / "store_meta.json",
-                                (self.root / "store_meta.json").read_bytes())
-            manifest = {
-                "export_format": "curunir-operational-open-export-v1",
-                "store_id": self.meta["store_id"],
-                "contract_version": self.meta["contract_version"],
-                "event_count": len(self._events),
-                "head_hash": self._head_hash,
-                "events_sha256": hashlib.sha256((directory / "events.jsonl").read_bytes()).hexdigest(),
-                "store_meta_sha256": hashlib.sha256((directory / "store_meta.json").read_bytes()).hexdigest(),
-                "payloads": payload_hashes,
-            }
-            _export_write_bytes(directory / "export_manifest.json",
-                                (canonical_line(manifest) + "\n").encode("utf-8"))
+        # Staging-atomic (review R30B-1): never mutate dest until the
+        # backup is complete. In-place rewrite left dest looking like a
+        # store after a dest-member refusal or crash mid-payload.
+        staging = directory.parent / (
+            f".{directory.name}.exporting.{os.getpid()}.{time.time_ns()}"
+        )
+        renamed = False
+        replaced = None
+        try:
+            staging.mkdir(parents=True)
+            (staging / "payloads").mkdir()
+            with self._append_lock():
+                self._catch_up()
+                _export_write_bytes(staging / "events.jsonl",
+                                    self.events_path.read_bytes())
+                payload_hashes: dict[str, str] = {}
+                for path in sorted(self.payload_dir.iterdir()):
+                    name = path.name
+                    if not (len(name) == 64
+                            and all(c in "0123456789abcdef" for c in name)):
+                        continue
+                    if path.is_symlink() or path.is_dir() or not path.is_file():
+                        raise StoreError(
+                            f"export: payload slot {name[:12]} is not a regular "
+                            f"file; refusing rather than omit it from the backup"
+                        )
+                    try:
+                        body = self.get_payload(name)
+                    except FileNotFoundError as exc:
+                        raise StoreError(
+                            f"export: payload {name[:12]} disappeared during copy"
+                        ) from exc
+                    _export_write_bytes(staging / "payloads" / name, body)
+                    payload_hashes[name] = name
+                _export_write_bytes(staging / "store_meta.json",
+                                    (self.root / "store_meta.json").read_bytes())
+                manifest = {
+                    "export_format": "curunir-operational-open-export-v1",
+                    "store_id": self.meta["store_id"],
+                    "contract_version": self.meta["contract_version"],
+                    "event_count": len(self._events),
+                    "head_hash": self._head_hash,
+                    "events_sha256": hashlib.sha256(
+                        (staging / "events.jsonl").read_bytes()).hexdigest(),
+                    "store_meta_sha256": hashlib.sha256(
+                        (staging / "store_meta.json").read_bytes()).hexdigest(),
+                    "payloads": payload_hashes,
+                }
+                _export_write_bytes(
+                    staging / "export_manifest.json",
+                    (canonical_line(manifest) + "\n").encode("utf-8"))
+            if directory.exists():
+                replaced = directory.parent / (
+                    f".{directory.name}.replaced.{os.getpid()}.{time.time_ns()}"
+                )
+                directory.rename(replaced)
+            staging.rename(directory)
+            renamed = True
+            if replaced is not None:
+                shutil.rmtree(replaced, ignore_errors=True)
+        except BaseException:
+            shutil.rmtree(staging, ignore_errors=True)
+            if replaced is not None and replaced.exists() and not directory.exists():
+                replaced.rename(directory)
+            raise
         return manifest
 
     @classmethod

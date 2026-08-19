@@ -261,8 +261,9 @@ def test_export_refuses_a_symlink_payload_slot(tmp_path):
 
 
 def test_export_refuses_a_dest_symlink(tmp_path):
-    # R26B-2: dest-side writes must not follow a pre-planted symlink.
-    from curunir_operational.store import MissionDataStore, StoreError
+    # R26B-2 / R30B-1: dest-side writes must not follow a pre-planted
+    # symlink. Staging-atomic export replaces dest wholesale, so the
+    # planted member is never opened for write.
     from operational_support import make_store
     store = make_store(tmp_path)
     store.put_payload(b"payload body")
@@ -272,9 +273,10 @@ def test_export_refuses_a_dest_symlink(tmp_path):
     dest.mkdir()
     (dest / "payloads").mkdir()
     (dest / "events.jsonl").symlink_to(victim)
-    with pytest.raises(StoreError, match="not a regular file"):
-        store.export_to(dest)
+    store.export_to(dest)
     assert victim.read_bytes() == b"ORIGINAL VICTIM -- must survive"
+    assert (dest / "events.jsonl").is_file()
+    assert not (dest / "events.jsonl").is_symlink()
 
 
 def test_import_overwrites_dest_with_torn_store_meta(tmp_path):

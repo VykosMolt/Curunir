@@ -969,6 +969,18 @@ Two independent Grok reviewers attacked `0de882d`. **BOTH DIFF_BROKEN.**
 - **R29B-1 (MAJOR)** — `export_to`/`create` wrote `store_meta` before dest-member validation. Repair: validate dest first; write `store_meta` last.
 - **R29B-2 (MAJOR)** — delta apply did not require `payload_dir` itself to be a regular directory. Repair: refuse before any prefix commit.
 
-## Round 30 — WHOLE-TRANCHE confirmatory attack (pending)
+## Round 30 — WHOLE-TRANCHE attack found the next hop; repaired
 
-The Round-29 repair is itself un-attacked. Same stopping condition.
+Two independent Grok reviewers attacked `c5a21c3`. **BOTH DIFF_BROKEN.**
+
+- **R30A C-1 (CRITICAL)** — STALE_BASIS omitted shipped standings `STALE` / `DISPUTED` / `SOURCE_WITHDRAWN`. Those states now block.
+- **R30A C-2 (CRITICAL)** — CONTESTED only saw reviews, not theme CONTESTED / hypothesis DISPUTED / warning RESOLVED. Cited-object status now blocks.
+- **R30A C-4 (CRITICAL)** — `propose_discriminator` CREATE path stamped caller marking. Now floors on claim markings.
+- **R30A M-1/M-2** — `assumption_ids` floor for objective/path; discriminator exists-path also floors `hypothesis_ids`.
+- **R30B-1 (MAJOR)** — `export_to` is now staging-atomic (write staging, swap dest). In-place rewrite after a dest already had `store_meta` is gone.
+- **R30B-2 (MAJOR)** — `create()` refuses leftover non-empty `events.jsonl`.
+- **R30B-3 (MAJOR)** — delta dest-slot preflight is “not a regular file”, not only directory (fifo).
+
+## Round 31 — WHOLE-TRANCHE confirmatory attack (pending)
+
+The Round-30 repair is itself un-attacked. Same stopping condition.

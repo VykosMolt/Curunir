@@ -276,6 +276,12 @@ def propose_discriminator(store: SemanticStore, *, question: str,
         basis_snapshot = tuple(sorted(existing_basis_groups(
             store, {"claim_ids": claim_ids, "hypothesis_ids": hypothesis_ids}))) \
             if independence_required else ()
+        refs = []
+        for cid in claim_ids:
+            claim = store.current_claims().get(cid)
+            if claim is not None and isinstance(claim.get("marking"), dict):
+                refs.append(claim["marking"])
+        create_marking = inherited_marking(marking, refs)
         new_record = DiscriminatingObservation(
             discriminator_id=discriminator_id, question=question,
             hypothesis_ids=hypothesis_ids, claim_ids=claim_ids,
@@ -284,7 +290,8 @@ def propose_discriminator(store: SemanticStore, *, question: str,
             source_family_hints=source_family_hints,
             independence_required=independence_required,
             basis_groups_at_pose=basis_snapshot,
-            requirement_id="", status="OPEN", recorded_time=now, marking=marking)
+            requirement_id="", status="OPEN", recorded_time=now,
+            marking=create_marking)
         store.append("DISCRIMINATOR_RECORDED", new_record, recorded_time=now, actor=actor)
         record = new_record.to_record()
     # the link loop runs on BOTH paths: a crash between the discriminator
@@ -316,6 +323,10 @@ def update_discriminator(store: SemanticStore, discriminator: Mapping[str, Any],
         claim = store.current_claims().get(cid)
         if claim is not None and isinstance(claim.get("marking"), dict):
             refs.append(claim["marking"])
+    for hid in merged.get("hypothesis_ids") or ():
+        hyp = store.current_hypotheses().get(hid)
+        if hyp is not None and isinstance(hyp.get("marking"), dict):
+            refs.append(hyp["marking"])
     merged["marking"] = inherited_marking(own, refs)
     merged["version"] = store.next_family_version(
         "discriminator", "discriminator_id", discriminator["discriminator_id"])

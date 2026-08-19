@@ -250,7 +250,8 @@ def validate_report(projection: MissionProjection, report: Mapping[str, Any]) ->
                     related_for_sentence |= _related_claim_ids(store, cite, walked)
                 for claim_id in related_for_sentence:
                     state = claim_states.get(claim_id, {}).get("state", "ACTIVE")
-                    if state in ("RETRACTED", "SUPERSEDED", "CORRECTED"):
+                    if state in ("RETRACTED", "SUPERSEDED", "CORRECTED",
+                                 "STALE", "DISPUTED", "SOURCE_WITHDRAWN"):
                         finding("STALE_BASIS", sentence,
                                 f"claim {claim_id} is {state}; the sentence "
                                 "presents it as settled support")
@@ -273,6 +274,19 @@ def validate_report(projection: MissionProjection, report: Mapping[str, Any]) ->
                                 f"{item.get('subject_kind')} "
                                 f"{item.get('subject_id')} has open review; "
                                 "the sentence renders it settled")
+                # cited object's own contested/terminal status (theme CONTESTED,
+                # hypothesis DISPUTED, warning RESOLVED) — review-shaped
+                # CONTESTED does not see these (review R30A C-2)
+                _CONTESTED_STATUSES = {
+                    "CONTESTED", "DISPUTED", "RESOLVED", "RESOLVED_TRUE",
+                    "RESOLVED_FALSE", "RESOLVED_VOID", "INVALIDATED", "STALE",
+                }
+                for _fam, rec in resolved:
+                    st = rec.get("status")
+                    if st in _CONTESTED_STATUSES:
+                        finding("CONTESTED_AS_SETTLED", sentence,
+                                f"{_fam} {rec.get('status')} is not live "
+                                "support; the sentence renders it settled")
                 if sentence.get("temporal_scope") != "HISTORICAL":
                     claims = [r for f, r in resolved if f == "semantic_claim"]
                     store = getattr(projection, "store", None)

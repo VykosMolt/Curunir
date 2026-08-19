@@ -300,7 +300,7 @@ def _embedded_analytic_ids(record) -> tuple[str, ...]:
     if kind == "historical_analogue":
         episode_id = mapping.get("episode_id") or ""
         return (episode_id,) if episode_id else ()
-    if kind == "analytic_forecast":
+    if kind in ("analytic_forecast", "mission_objective", "impact_path"):
         # proposition_refs of non-claim kind and assumption_ids are the
         # forecast's material propositions (R28A-4 / R29A M-2).
         # indicator_ids remain association, not embed (A4).
