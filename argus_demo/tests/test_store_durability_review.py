@@ -370,6 +370,32 @@ def test_export_refuses_matching_planted_export_manifest_on_a_live_store(tmp_pat
     assert live.get_payload(digest) == b"live evidence must survive matching plant"
 
 
+def test_export_refuses_empty_live_store_with_matching_plant(tmp_path):
+    # R35B-1: create() now plants .append.lock; two empty stores with the
+    # default store_id must not become replace bait via a matching plant.
+    import hashlib
+    from curunir_operational.canonical import canonical_line
+    from curunir_operational.store import StoreError
+    from operational_support import make_store
+    live = make_store(tmp_path, name="live")
+    src = make_store(tmp_path, name="src")
+    (tmp_path / "live" / "operator-marker").write_text("must survive")
+    events = (live.root / "events.jsonl").read_bytes()
+    meta = (live.root / "store_meta.json").read_bytes()
+    planted = {
+        "export_format": "curunir-operational-open-export-v1",
+        "store_id": live.meta["store_id"],
+        "events_sha256": hashlib.sha256(events).hexdigest(),
+        "store_meta_sha256": hashlib.sha256(meta).hexdigest(),
+        "payloads": {},
+    }
+    (live.root / "export_manifest.json").write_bytes(
+        (canonical_line(planted) + "\n").encode("utf-8"))
+    with pytest.raises(StoreError):
+        src.export_to(live.root)
+    assert (tmp_path / "live" / "operator-marker").read_text() == "must survive"
+
+
 def test_export_refuses_planted_export_manifest_on_a_live_store(tmp_path):
     # R33B-1: a dest-side plant of export_manifest.json must not make
     # export_to rmtree a live store.

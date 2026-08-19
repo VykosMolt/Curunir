@@ -149,6 +149,17 @@ def resolve_reference_markings(store, refs) -> list:
     ids = {r for r in refs if isinstance(r, str) and r}
     if not ids:
         return []
+    # desired_subject_ref is a subject_ref (LEI:…), not object_id
+    # (review R35A Ck1-1)
+    try:
+        from curunir_semantic.worldmodel import world_object_id
+    except ImportError:
+        world_object_id = None
+    if world_object_id is not None:
+        for rid in list(ids):
+            mapped = world_object_id(rid)
+            if mapped:
+                ids.add(mapped)
     out: list = []
     current_claims = getattr(store, "current_claims", None)
     if callable(current_claims):

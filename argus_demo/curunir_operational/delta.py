@@ -126,7 +126,10 @@ def verify_delta_bundle(bundle_dir: str | Path) -> dict[str, Any]:
         failures.append("base_entry_hash is missing or not a string")   # import indexes it (A-F4)
     events_path = bundle_dir / "delta_events.jsonl"
     try:
-        events_bytes = events_path.read_bytes() if events_path.exists() else None
+        if events_path.is_symlink() or events_path.is_dir() or not events_path.is_file():
+            events_bytes = None
+        else:
+            events_bytes = events_path.read_bytes()
     except OSError:                                      # a directory in its place (A-F5)
         events_bytes = None
     if events_bytes is None:
@@ -143,7 +146,10 @@ def verify_delta_bundle(bundle_dir: str | Path) -> dict[str, Any]:
             continue
         path = bundle_dir / "payloads" / digest
         try:
-            ok = path.exists() and hashlib.sha256(path.read_bytes()).hexdigest() == digest
+            if path.is_symlink() or path.is_dir() or not path.is_file():
+                ok = False
+            else:
+                ok = hashlib.sha256(path.read_bytes()).hexdigest() == digest
         except OSError:                                 # a directory named like a digest (A-F5)
             ok = False
         if not ok:

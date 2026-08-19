@@ -250,6 +250,18 @@ def validate_report(projection: MissionProjection, report: Mapping[str, Any]) ->
                 finding("CONTESTED_AS_SETTLED", anchor,
                         f"response_option {rec.get('status')} is not live "
                         "support; the report presents it as a decision option")
+        store = getattr(projection, "store", None)
+        option_set = {i for i in (section.get("option_ids") or ()) if i}
+        if store is not None and option_set:
+            walked_opts: set = set()
+            related_opts = _related_claim_ids(store, option_set, walked_opts)
+            for claim_id in related_opts:
+                state = claim_states.get(claim_id, {}).get("state", "ACTIVE")
+                if state in ("RETRACTED", "SUPERSEDED", "CORRECTED",
+                             "STALE", "DISPUTED", "SOURCE_WITHDRAWN"):
+                    finding("STALE_BASIS", anchor,
+                            f"claim {claim_id} is {state}; a decision option "
+                            "presents it as settled support")
         for sentence in sentences:
             status = sentence["status"]
             refs = tuple(sentence.get("basis_refs", ()))
@@ -495,7 +507,8 @@ def _claims_from_record(store: WorkbenchStore, record: Mapping[str, Any] | None,
     forecast, analogue→episode (review R26A-1)."""
     if not record:
         return
-    from curunir_analytic.substrate import material_claim_ids
+    from curunir_analytic.substrate import (_embedded_analytic_ids,
+                                            material_claim_ids)
     related.update(material_claim_ids(record))
     for key in ("supporting_claim_ids", "contradicting_claim_ids",
                 "unresolved_claim_ids", "outcome_claim_ids", "claim_ids"):
@@ -503,16 +516,9 @@ def _claims_from_record(store: WorkbenchStore, record: Mapping[str, Any] | None,
     basis = record.get("basis") if isinstance(record.get("basis"), Mapping) else {}
     related.update(basis.get("supporting_claim_ids") or ())
     related.update(basis.get("contradicting_claim_ids") or ())
-    for key in ("forecast_id", "episode_id", "objective_id", "path_id",
-                "query_id"):
-        rid = record.get(key) or ""
+    for rid in _embedded_analytic_ids(record):
         if rid and rid not in seen:
             pending.append(rid)
-    for key in ("forecast_ids", "assumption_ids", "indicator_ids",
-                "impact_path_ids"):
-        for rid in record.get(key) or ():
-            if rid and rid not in seen:
-                pending.append(rid)
     # workbench author_forecast stores hypothesis/theme links only in
     # proposition_refs (kind, id) — not supporting_claim_ids (R27A-1)
     for key in ("depends_on", "proposition_refs"):
@@ -604,10 +610,10 @@ def _raw_hidden_basis_concerns(store: WorkbenchStore, projection: MissionProject
     and to every family validate_report accepts as a basis_ref (R25A-4)."""
     cited: set = set()
     for section in report["sections"]:
+        cited |= set(section.get("option_ids", ()))
         for sentence in section["sentences"]:
             cited |= set(sentence.get("basis_refs", ()))
             cited |= set(sentence.get("assumption_ids", ()))
-            cited |= set(section.get("option_ids", ()))
     if not cited:
         return []
     from curunir_operational.access import can_view

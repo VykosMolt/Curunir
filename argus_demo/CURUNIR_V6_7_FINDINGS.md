@@ -1035,6 +1035,17 @@ Two independent Grok reviewers attacked `988b1a0`. **BOTH DIFF_BROKEN.**
 - **R34B-1 (MAJOR)** — a hash-matched `export_manifest` plant on a live store still allowed `export_to` rmtree. Repair: refuse dest with `.append.lock` or a different `store_id`.
 - **R34B-2 (MAJOR)** — dangling dest-slot symlink had `exists() is False`, skipped preflight, prefix committed. Repair: `is_symlink()` first.
 
-## Round 35 — continue from here
+## Round 35 — WHOLE-TRANCHE attack found the next hop; repaired
 
-Do not merge. Attack this repair as Round 35 with two fresh whole-tranche reviewers.
+Two independent Grok reviewers attacked `8870569`. **BOTH DIFF_BROKEN.**
+
+- **R35A Ck1-1 (MAJOR)** — `desired_subject_ref` is a `LEI:…` subject_ref; resolver only knew object ids. Routes copied SPECIAL names at PUBLIC marking. Repair: resolver also maps `world_object_id`; `plan_collection_routes` floors on the discriminator subject.
+- **R35A Ck2-1 (CRITICAL)** — `_raw_hidden_basis_concerns` joined `option_ids` only inside the sentence loop (empty section fail-open). Repair: option_ids at section scope.
+- **R35A Ck2-2 (MAJOR)** — visible STALE_BASIS on option claims was still sentence-class gated. Repair: section-level related-claim walk.
+- **R35A Ck2-3 (CRITICAL)** — cited `stakeholder_assessment` did not walk `influence_ids`. Repair: `_claims_from_record` queues `_embedded_analytic_ids`.
+- **R35B-1 (MAJOR)** — create() never planted `.append.lock`; same default `store_id` + matching plant replaced dest. Repair: create/import plant the lock; live check is symlink-aware; open-export requires payload-set match.
+- **R35B-2/3** — `_looks_like_complete_store` / delta verify no longer `read_bytes` a FIFO.
+
+## Round 36 — continue from here
+
+Do not merge. Attack this repair as Round 36 with two fresh whole-tranche reviewers.

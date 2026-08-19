@@ -13,6 +13,7 @@ import hashlib
 import json
 import os
 import shutil
+import stat
 import time
 from pathlib import Path
 from typing import Any, Mapping
@@ -83,15 +84,38 @@ def _entry_hash(seq: int, event_type: str, recorded_time: str, actor: str, recor
                    "actor": actor, "record": record, "prev_hash": prev_hash})
 
 
+def _is_regular_readable(path: Path) -> bool:
+    """True for a regular file, or a symlink whose target is a regular file.
+
+    FIFO/socket/dir must not be read (review R35B-2 hang)."""
+    try:
+        info = path.lstat()
+    except OSError:
+        return False
+    if stat.S_ISLNK(info.st_mode):
+        try:
+            info = path.stat()
+        except OSError:
+            return False
+    return stat.S_ISREG(info.st_mode)
+
+
+def _is_live_store_root(root: Path) -> bool:
+    """create()/import plant `.append.lock`; treat a symlink (incl. dangling)
+    as a live marker too so exists()-first cannot hide it (review R35B-1)."""
+    lock = Path(root) / ".append.lock"
+    return lock.is_symlink() or lock.exists()
+
+
 def _looks_like_complete_store(root: Path) -> bool:
     """True when store_meta.json parses as a store identity.
 
     Torn/empty/unreadable meta is not a store (review R26B-4) — import may
     overwrite it rather than refuse retry. A symlink to valid identity
     still names a store (review R32B-5): treating it as leftover would
-    rmtree a live root."""
+    rmtree a live root. A FIFO meta is not a store and must not hang."""
     meta = Path(root) / "store_meta.json"
-    if not meta.exists() or meta.is_dir():
+    if meta.is_dir() or not _is_regular_readable(meta):
         return False
     try:
         data = json.loads(meta.read_bytes().decode("utf-8"))
@@ -130,6 +154,24 @@ def _looks_like_open_export(root: Path) -> bool:
             return False
     except OSError:
         return False
+    listed = manifest.get("payloads")
+    if isinstance(listed, dict):
+        listed_names = set(listed)
+    elif isinstance(listed, list):
+        listed_names = set(listed)
+    else:
+        return False
+    payloads_dir = Path(root) / "payloads"
+    if payloads_dir.is_dir() and not payloads_dir.is_symlink():
+        present = {
+            child.name for child in payloads_dir.iterdir()
+            if len(child.name) == 64
+            and all(c in "0123456789abcdef" for c in child.name)
+        }
+        if present != listed_names:
+            return False
+    elif listed_names:
+        return False
     return True
 
 
@@ -157,7 +199,7 @@ def _refuse_dest_store_overlap(
     if _looks_like_complete_store(dest):
         if not (allow_export_replace and _looks_like_open_export(dest)):
             raise StoreError("dest is an existing store; refusing")
-        if (dest / ".append.lock").exists():
+        if _is_live_store_root(dest):
             raise StoreError("dest is a live store; refusing")
         if source_root is not None:
             try:
@@ -350,6 +392,7 @@ class MissionDataStore:
                 "contract_version": CONTRACT_VERSION, "package_version": PACKAGE_VERSION}
         _export_write_bytes(root / "store_meta.json",
                             (canonical_line(meta) + "\n").encode("utf-8"))
+        (root / ".append.lock").touch()
         return cls(root)
 
     @classmethod
@@ -1070,6 +1113,7 @@ class MissionDataStore:
                 shutil.rmtree(new_root)
             staging.rename(new_root)
             renamed = True
+            (Path(new_root) / ".append.lock").touch()
             _fsync_dir(new_root.parent)
             store = cls(new_root)
             check = store.verify_chain()

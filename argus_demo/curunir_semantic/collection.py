@@ -207,6 +207,13 @@ def plan_collection_routes(store: SemanticStore, registry: RegistryView,
     existing_routes = store.latest_by_id("collection_route", "route_id")
     routes = []
     now_time = now
+    from curunir_analytic.substrate import resolve_reference_markings
+    from curunir_operational.access import inherited_marking
+    route_marking = inherited_marking(
+        marking,
+        resolve_reference_markings(
+            store, (discriminator.get("desired_subject_ref"),
+                    discriminator.get("discriminator_id"))))
     for rank, candidate in enumerate(candidates, 1):
         route_id = digest_id("route", requirement_id, discriminator["discriminator_id"],
                              candidate["source_id"], candidate["operation"])
@@ -227,7 +234,8 @@ def plan_collection_routes(store: SemanticStore, registry: RegistryView,
             factors=candidate["factors"], score=candidate["score"], rank=rank,
             explanation=candidate["explanation"],
             status="PROPOSED" if candidate["automatable"] else "HUMAN_REQUIRED",
-            execution_id="", task_id="", recorded_time=now_time, marking=marking)
+            execution_id="", task_id="", recorded_time=now_time,
+            marking=route_marking)
         store.append("COLLECTION_ROUTE_RECORDED", route, recorded_time=now_time, actor=actor)
         routes.append(route.to_record())
     if discriminator["independence_required"] and all(r["score"] == 0 for r in routes):
