@@ -235,6 +235,11 @@ def test_warning_floors_marking_on_referenced_forecast(tmp_path):
     assert "SPECIAL" in marking_from_record(warn["marking"]).compartments  # floored, not PUBLIC
     uncleared = AccessContext("c", "d", "HUMAN", ("ANALYST",), releasability=("PUBLIC",))
     assert can_view(warn["marking"], uncleared) is False                 # invisible to the uncleared
+    # chokepoint, not only the project_warning call-site floor (R32A M-2)
+    from curunir_analytic.substrate import _embedded_analytic_ids
+    embedded = _embedded_analytic_ids(warn)
+    assert fc["forecast_id"] in embedded
+    assert obj["objective_id"] in embedded
 
 
 def test_no_derived_record_underclassifies_anything_it_references(tmp_path):

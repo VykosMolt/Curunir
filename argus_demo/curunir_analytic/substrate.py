@@ -288,6 +288,35 @@ def ensure_transition(ctx: AnalyticContext, *, subject_kind: str, subject_id: st
                              to_status=to_status)
 
 
+# Scalar / sequence fields whose values are foreign object ids this version
+# embeds or persists (existence + state). forecast.indicator_ids is
+# association and is intentionally absent (review A4).
+_EMBEDDED_ID_FIELDS: dict[str, tuple[str, ...]] = {
+    "historical_analogue": ("episode_id",),
+    "strategic_warning": ("forecast_id", "objective_id", "impact_path_ids"),
+    "forecast_indicator": ("forecast_ids",),
+    "analytic_assumption": ("objective_ids",),
+    "analytic_theme": ("parent_theme_id",),
+    "stakeholder_assessment": ("entity_object_id", "context_id"),
+    "influence_assertion": ("source_object_id", "target_object_id"),
+    "analytic_narrative": ("counter_narrative_ids",),
+    "propagation_edge": ("narrative_id", "from_manifestation_id",
+                         "to_manifestation_id"),
+    "analytic_forecast": ("assumption_ids",),
+    "mission_objective": ("assumption_ids",),
+    "impact_path": ("assumption_ids", "objective_id"),
+    "response_option": ("assumption_ids", "path_id", "objective_id"),
+}
+# (kind, id) / lineage pairs — second element is the referenced id.
+_EMBEDDED_PAIR_FIELDS: dict[str, tuple[str, ...]] = {
+    "analytic_theme": ("lineage",),
+    "analytic_forecast": ("proposition_refs", "depends_on"),
+    "mission_objective": ("depends_on",),
+    "impact_path": ("depends_on",),
+    "response_option": ("depends_on",),
+}
+
+
 def _embedded_analytic_ids(record) -> tuple[str, ...]:
     """Analytic-object ids whose state this version *embeds* (not mere
     association). A forecast listing indicator_ids is association — flooring
@@ -297,22 +326,20 @@ def _embedded_analytic_ids(record) -> tuple[str, ...]:
     the analogue record (review R25A-3)."""
     mapping = _as_mapping(record)
     kind = mapping.get("record_type") or getattr(record, "RECORD_TYPE", "")
-    if kind == "historical_analogue":
-        episode_id = mapping.get("episode_id") or ""
-        return (episode_id,) if episode_id else ()
+    ids: list[str] = []
+    for key in _EMBEDDED_ID_FIELDS.get(kind, ()):
+        value = mapping.get(key)
+        if isinstance(value, str) and value:
+            ids.append(value)
+        elif isinstance(value, (list, tuple)):
+            ids.extend(item for item in value if isinstance(item, str) and item)
+    for key in _EMBEDDED_PAIR_FIELDS.get(kind, ()):
+        for reference in mapping.get(key) or ():
+            if isinstance(reference, (list, tuple)) and len(reference) == 2 \
+                    and reference[0] != "claim" and reference[1]:
+                ids.append(reference[1])
     if kind in ("analytic_forecast", "mission_objective", "impact_path",
                 "response_option"):
-        # assumption_ids + (kind, id) refs those families actually store
-        # (R31A M-2: depends_on / edge endpoints, not forecast field names)
-        ids = [a for a in (mapping.get("assumption_ids") or ()) if a]
-        for reference in mapping.get("proposition_refs") or ():
-            if isinstance(reference, (list, tuple)) and len(reference) == 2 \
-                    and reference[0] != "claim" and reference[1]:
-                ids.append(reference[1])
-        for reference in mapping.get("depends_on") or ():
-            if isinstance(reference, (list, tuple)) and len(reference) == 2 \
-                    and reference[0] != "claim" and reference[1]:
-                ids.append(reference[1])
         for edge in mapping.get("edges") or ():
             edge = _as_mapping(edge)
             for endpoint in (edge.get("from_id"), edge.get("to_id")):
@@ -321,8 +348,7 @@ def _embedded_analytic_ids(record) -> tuple[str, ...]:
         for key in ("path_id", "objective_id"):
             if mapping.get(key):
                 ids.append(mapping[key])
-        return tuple(dict.fromkeys(ids))
-    return ()
+    return tuple(dict.fromkeys(ids))
 
 
 def append_version(ctx: AnalyticContext, record) -> dict[str, Any]:

@@ -84,17 +84,66 @@ def _entry_hash(seq: int, event_type: str, recorded_time: str, actor: str, recor
 
 
 def _looks_like_complete_store(root: Path) -> bool:
-    """True only when store_meta.json exists AND parses as a store identity.
-    An empty/torn/symlink meta is not a store (review R26B-4) — import may
-    overwrite it rather than refuse retry."""
+    """True when store_meta.json parses as a store identity.
+
+    Torn/empty/unreadable meta is not a store (review R26B-4) — import may
+    overwrite it rather than refuse retry. A symlink to valid identity
+    still names a store (review R32B-5): treating it as leftover would
+    rmtree a live root."""
     meta = Path(root) / "store_meta.json"
-    if not meta.is_file() or meta.is_symlink():
+    if not meta.exists() or meta.is_dir():
         return False
     try:
         data = json.loads(meta.read_bytes().decode("utf-8"))
     except (ValueError, UnicodeDecodeError, OSError):
         return False
     return isinstance(data, dict) and "store_id" in data
+
+
+def _refuse_dest_store_overlap(
+        dest: Path, *, source_root: Path | None = None,
+        replace_dest: bool = False,
+        allow_export_replace: bool = False) -> None:
+    """Refuse dest that would destroy or pollute a live store.
+
+    Shared by export_to / import_from / build_delta_bundle so the next
+    dest-writer cannot skip the class (review R31B-1 / R32B-1 / R32B-3).
+    A previous open export (store_meta + export_manifest) may be replaced
+    by export_to; a live store may not."""
+    dest = Path(dest).resolve()
+    if source_root is not None:
+        root = Path(source_root).resolve()
+        if dest == root or dest.is_relative_to(root):
+            raise StoreError(
+                "dest overlaps the source store; refusing"
+            )
+        if replace_dest and (dest == root.parent or root.is_relative_to(dest)):
+            raise StoreError(
+                "dest is an ancestor of the source store; refusing"
+            )
+    if _looks_like_complete_store(dest):
+        if not (allow_export_replace
+                and (dest / "export_manifest.json").is_file()):
+            raise StoreError("dest is an existing store; refusing")
+    for ancestor in dest.parents:
+        if _looks_like_complete_store(ancestor):
+            raise StoreError("dest is inside an existing store; refusing")
+    if dest.exists() and replace_dest:
+        for meta in dest.rglob("store_meta.json"):
+            child = meta.parent
+            if child != dest and _looks_like_complete_store(child):
+                raise StoreError("dest contains an existing store; refusing")
+
+
+def _fsync_dir(path: Path) -> None:
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
+    except OSError:
+        return
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
 
 
 def _export_write_bytes(path: Path, body: bytes) -> None:
@@ -222,6 +271,17 @@ class MissionDataStore:
         payloads = root / "payloads"
         if payloads.exists() and (payloads.is_symlink() or not payloads.is_dir()):
             raise StoreError("payloads dest is not a regular directory; refusing")
+        if payloads.exists() and payloads.is_dir():
+            for child in payloads.iterdir():
+                digestish = (
+                    len(child.name) == 64
+                    and all(c in "0123456789abcdef" for c in child.name)
+                )
+                if child.is_symlink() or child.is_dir() \
+                        or not child.is_file() or digestish:
+                    raise StoreError(
+                        "refusing to create a store over leftover payload slots"
+                    )
         payloads.mkdir(exist_ok=True)
         events = root / "events.jsonl"
         if events.is_symlink() or (events.exists() and not events.is_file()):
@@ -746,13 +806,9 @@ class MissionDataStore:
     def export_to(self, directory: str | Path) -> dict[str, Any]:
         directory = Path(directory)
         dest = directory.resolve()
-        root = self.root.resolve()
-        if dest == root or dest == root.parent \
-                or dest.is_relative_to(root) or root.is_relative_to(dest):
-            raise StoreError(
-                "export dest must not be the store root, inside the store, "
-                "or an ancestor of the store (review R31B-1)"
-            )
+        _refuse_dest_store_overlap(
+            dest, source_root=self.root, replace_dest=True,
+            allow_export_replace=True)
         # Staging-atomic (review R30B-1): never mutate dest until the
         # backup is complete. In-place rewrite left dest looking like a
         # store after a dest-member refusal or crash mid-payload.
@@ -915,21 +971,7 @@ class MissionDataStore:
         dest = new_root.resolve()
         if dest == Path(source_dir).resolve():
             raise StoreError("import dest must not be the export source")
-        # dest must not be inside a complete store (e.g. its payload_dir)
-        # or contain one as a child (e.g. the store's parent) — rmtree
-        # would destroy live evidence (review R32B-1)
-        for ancestor in (dest, *dest.parents):
-            if ancestor != dest and _looks_like_complete_store(ancestor):
-                raise StoreError(
-                    "import dest is inside an existing store; refusing"
-                )
-        if dest.exists():
-            for meta in dest.rglob("store_meta.json"):
-                child = meta.parent
-                if child != dest and _looks_like_complete_store(child):
-                    raise StoreError(
-                        "import dest contains an existing store; refusing"
-                    )
+        _refuse_dest_store_overlap(dest, replace_dest=True)
         if _looks_like_complete_store(new_root):
             raise StoreError(f"refusing to import over an existing store: {new_root}")
         # Crash-atomic install (review R25B-2): write into a sibling staging
@@ -958,9 +1000,11 @@ class MissionDataStore:
                 if hashlib.sha256(body).hexdigest() != name:
                     raise StoreError(f"export tampered: payload {name} hash mismatch")
                 _write_file_atomic(staging / "payloads" / name, body, tmp_dir=staging)
-            (staging / "events.jsonl").write_bytes(events_bytes)
+            _export_write_bytes(staging / "events.jsonl", events_bytes)
             # commit marker LAST — a dest without store_meta is not a store
-            (staging / "store_meta.json").write_bytes(store_meta_bytes)
+            _export_write_bytes(staging / "store_meta.json", store_meta_bytes)
+            _fsync_dir(staging)
+            _fsync_dir(staging / "payloads")
             if new_root.exists():
                 # leftover without a complete store (no/invalid store_meta)
                 if _looks_like_complete_store(new_root):
@@ -968,6 +1012,7 @@ class MissionDataStore:
                 shutil.rmtree(new_root)
             staging.rename(new_root)
             renamed = True
+            _fsync_dir(new_root.parent)
             store = cls(new_root)
             check = store.verify_chain()
             if not check["valid"]:

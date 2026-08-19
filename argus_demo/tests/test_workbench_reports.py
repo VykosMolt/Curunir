@@ -431,3 +431,80 @@ def test_hidden_retraction_via_cited_forecast_blocks_approval(mission):
         approve_report(ctx.store, _projection(ctx, CTX_B), report["report_id"],
                        actor="supervisor", actor_kind="HUMAN", marking=MARK,
                        now=ctx.now_fn(), expected_version=submitted["version"])
+
+
+def test_settled_support_is_the_official_vocab_complement():
+    # R32 leftover: _DEAD is derived from official tuples, not a parallel
+    # instance list (COMPLETED was in the map; ACHIEVED is the official
+    # terminal).
+    from curunir_analytic.contracts import (
+        OFFICIAL_STATUS_VOCABULARIES, SETTLED_SUPPORT_STATUSES,
+    )
+    from curunir_semantic.contracts import (
+        HYPOTHESIS_SETTLED_SUPPORT_STATUSES, HYPOTHESIS_STATUSES,
+    )
+    assert set(SETTLED_SUPPORT_STATUSES) == set(OFFICIAL_STATUS_VOCABULARIES)
+    for family, official in OFFICIAL_STATUS_VOCABULARIES.items():
+        settled = SETTLED_SUPPORT_STATUSES[family]
+        assert settled <= set(official), family
+        assert settled, family
+    assert HYPOTHESIS_SETTLED_SUPPORT_STATUSES <= set(HYPOTHESIS_STATUSES)
+    assert "ACHIEVED" not in SETTLED_SUPPORT_STATUSES["mission_objective"]
+    assert "COMPLETED" not in OFFICIAL_STATUS_VOCABULARIES["mission_objective"]
+
+
+def test_achieved_objective_is_not_settled_support(mission):
+    from curunir_analytic.contracts import MissionObjective
+    from curunir_analytic.substrate import append_version
+    from curunir_operational.access import marking_from_record
+    _, ctx, seeded = mission
+    obj = seeded["objective"]
+    append_version(ctx, MissionObjective(
+        objective_id=obj["objective_id"],
+        version=ctx.store.next_analytic_version(
+            "mission_objective", obj["objective_id"]),
+        mission_context=obj["mission_context"],
+        statement=obj["statement"],
+        status="ACHIEVED",
+        priority=obj["priority"],
+        time_horizon=obj.get("time_horizon") or "",
+        depends_on=tuple(tuple(p) for p in (obj.get("depends_on") or ())),
+        assumption_ids=tuple(obj.get("assumption_ids") or ()),
+        change_reason="objective met",
+        history=tuple(obj["history"]) + ("ACHIEVED",),
+        recorded_time=ctx.now_fn(),
+        marking=marking_from_record(obj["marking"])))
+    report = _draft(ctx, seeded, sentences=[
+        {"text": "The visibility objective remains the live mission aim.",
+         "status": "EXPLICITLY_INFERENTIAL",
+         "basis_refs": [obj["objective_id"]],
+         "inference_note": "objective record"},
+        {"text": "Ownership structure is unknown.",
+         "status": "UNRESOLVED",
+         "unresolved_reason": "no ownership evidence collected"},
+    ])
+    submitted = submit_report(ctx.store, report["report_id"], actor="analyst-a",
+                              marking=MARK, now=ctx.now_fn(), expected_version=1,
+                              state_token="tok")
+    with pytest.raises(ReportValidationError) as raised:
+        approve_report(ctx.store, _projection(ctx, CTX_A), report["report_id"],
+                       actor="supervisor", actor_kind="HUMAN", marking=MARK,
+                       now=ctx.now_fn(), expected_version=submitted["version"])
+    codes = {f["code"] for f in raised.value.findings}
+    assert "CONTESTED_AS_SETTLED" in codes
+
+
+def test_discriminator_create_floors_on_desired_subject_ref(mission):
+    # R32A M-1: CREATE already floored hypothesis_ids; the persisted
+    # desired_subject_ref of a SPECIAL object must also raise the record.
+    from curunir_operational.access import can_view
+    from curunir_semantic.hypotheses import propose_discriminator
+    _, ctx, seeded = mission
+    disc = propose_discriminator(
+        ctx.store, question="Is the secret partner still trading?",
+        claim_ids=(seeded["status_claim"]["claim_id"],),
+        desired_observation_type="ENTITY_ATTRIBUTE",
+        desired_subject_ref=seeded["secret_object_id"],
+        desired_attribute="status",
+        now=ctx.now_fn(), actor="analyst-a", marking=MARK)
+    assert can_view(disc["marking"], CTX_B) is False

@@ -19,7 +19,8 @@ from typing import Any
 
 from .canonical import canonical_line, reject_non_finite, sha256, utc_now
 from .store import (CHAIN_GENESIS, MissionDataStore, StoreError,
-                    _export_write_bytes, _no_duplicate_keys)
+                    _export_write_bytes, _no_duplicate_keys,
+                    _refuse_dest_store_overlap)
 
 DELTA_FORMAT = "curunir-operational-delta-v1"
 AUDIENCE = "PRIVILEGED_STORE_SYNC"
@@ -68,6 +69,7 @@ def build_delta_bundle(store: MissionDataStore, out_dir: str | Path, *, base_seq
     if not 0 <= base_seq <= head["event_count"]:
         raise StoreError(f"base_seq {base_seq} outside store range 0..{head['event_count']}")
     out_dir = Path(out_dir)
+    _refuse_dest_store_overlap(out_dir, source_root=store.root, replace_dest=False)
     out_dir.mkdir(parents=True, exist_ok=True)
     events = [e for e in store.events() if e["seq"] > base_seq]
     events_text = "".join(canonical_line(e) + "\n" for e in events)

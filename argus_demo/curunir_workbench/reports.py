@@ -275,29 +275,23 @@ def validate_report(projection: MissionProjection, report: Mapping[str, Any]) ->
                                 f"{item.get('subject_kind')} "
                                 f"{item.get('subject_id')} has open review; "
                                 "the sentence renders it settled")
-                # official family terminals — not an instance list (R31A C-1)
-                from curunir_analytic.contracts import (
-                    FORECAST_TERMINAL_STATUSES, NARRATIVE_STATUSES,
-                    RESPONSE_STATUSES, THEME_STATUSES, WARNING_STATUSES,
+                # official vocabs: settled-support is declared next to the
+                # status tuples; the complement is not-settled (R32 leftover)
+                from curunir_analytic.contracts import SETTLED_SUPPORT_STATUSES
+                from curunir_semantic.contracts import (
+                    HYPOTHESIS_SETTLED_SUPPORT_STATUSES,
                 )
-                from curunir_semantic.contracts import HYPOTHESIS_STATUSES
-                _DEAD = {
-                    "analytic_forecast": set(FORECAST_TERMINAL_STATUSES),
-                    "strategic_warning": {"RESOLVED", "WITHDRAWN"},
-                    "analytic_theme": {"STALE", "RESOLVED", "MERGED", "SPLIT",
-                                       "CONTESTED"},
-                    "analytic_narrative": {"RESOLVED", "SUPERSEDED", "CONTESTED"},
-                    "hypothesis": {"REJECTED", "SUPERSEDED", "DISPUTED"},
-                    "response_option": {"REJECTED", "WITHDRAWN"},
-                    "forecast_indicator": {"EXPIRED_UNFIRED", "RETIRED"},
-                    "analytic_assumption": {"INVALIDATED", "UNCERTAIN",
-                                            "SUPERSEDED"},
-                    "impact_path": {"STALE", "INVALIDATED", "RESOLVED"},
-                    "mission_objective": {"ABANDONED", "COMPLETED", "SUPERSEDED"},
-                    "stakeholder_assessment": {"WITHDRAWN", "SUPERSEDED"},
+                _SETTLED = {
+                    **SETTLED_SUPPORT_STATUSES,
+                    "hypothesis": HYPOTHESIS_SETTLED_SUPPORT_STATUSES,
                 }
                 def _dead(family: str, status: str) -> bool:
-                    return bool(status) and status in _DEAD.get(family, ())
+                    if not status:
+                        return False
+                    live = _SETTLED.get(family)
+                    if live is None:
+                        return False
+                    return status not in live
 
                 for _fam, rec in resolved:
                     if _dead(_fam, rec.get("status") or ""):

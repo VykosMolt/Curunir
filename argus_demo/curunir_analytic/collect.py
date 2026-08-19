@@ -267,7 +267,9 @@ def open_analytic_requirements(ctx: AnalyticContext, *, mission_context: str,
         marking = inherited_marking(
             ctx.marking,
             [*claim_markings(store, need["claim_ids"]),
-             *resolve_reference_markings(store, (need.get("source_id"),))])
+             *resolve_reference_markings(
+                 store, (need.get("source_id"),
+                         need.get("desired_subject_ref")))])
         discriminator = propose_discriminator(
             store, question=need["question"],
             claim_ids=tuple(need["claim_ids"]),

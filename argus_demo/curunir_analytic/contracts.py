@@ -869,6 +869,33 @@ INDICATOR_EFFECT_MODES = ("REVIEW_ONLY", "APPLY_PROBABILITY")
 
 WARNING_TIERS = ("ROUTINE", "ATTENTION", "PRIORITY", "CRITICAL")
 WARNING_STATUSES = ("ACTIVE", "ESCALATED", "DOWNGRADED", "RESOLVED", "WITHDRAWN")
+# Statuses that may be presented as settled support. validate_report treats
+# the official-vocab complement as not-settled, so a newly added official
+# status is fail-closed until it is explicitly classified here.
+SETTLED_SUPPORT_STATUSES: dict[str, frozenset[str]] = {
+    "analytic_forecast": frozenset(FORECAST_STATUSES) - frozenset(FORECAST_TERMINAL_STATUSES),
+    "strategic_warning": frozenset(("ACTIVE", "ESCALATED", "DOWNGRADED")),
+    "analytic_theme": frozenset(("EMERGING", "ACTIVE", "DECLINING")),
+    "analytic_narrative": frozenset(("ACTIVE", "DORMANT")),
+    "response_option": frozenset(("PROPOSED", "UNDER_REVIEW", "ACCEPTED")),
+    "forecast_indicator": frozenset(("ARMED", "FIRED", "COVERAGE_BLOCKED")),
+    "analytic_assumption": frozenset(("HELD",)),
+    "impact_path": frozenset(("PROPOSED", "ASSESSED", "CHANGED")),
+    "mission_objective": frozenset(("ACTIVE", "EXPOSED")),
+    "stakeholder_assessment": frozenset(("ACTIVE",)),
+}
+OFFICIAL_STATUS_VOCABULARIES: dict[str, tuple[str, ...]] = {
+    "analytic_forecast": FORECAST_STATUSES,
+    "strategic_warning": WARNING_STATUSES,
+    "analytic_theme": THEME_STATUSES,
+    "analytic_narrative": NARRATIVE_STATUSES,
+    "response_option": RESPONSE_STATUSES,
+    "forecast_indicator": INDICATOR_STATUSES,
+    "analytic_assumption": ASSUMPTION_STATUSES,
+    "impact_path": IMPACT_STATUSES,
+    "mission_objective": OBJECTIVE_STATUSES,
+    "stakeholder_assessment": STAKEHOLDER_STATUSES,
+}
 PROBABILITY_BANDS = ("REMOTE", "POSSIBLE", "LIKELY", "VERY_LIKELY")
 TIME_PRESSURES = ("DISTANT", "NEAR", "CLOSE", "IMMINENT", "PASSED")
 EVIDENCE_CONFIDENCES = ("NONE", "WEAK", "MODERATE", "STRONG")

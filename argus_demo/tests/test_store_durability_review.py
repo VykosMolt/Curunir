@@ -292,3 +292,51 @@ def test_import_overwrites_dest_with_torn_store_meta(tmp_path):
     (dest / "store_meta.json").write_bytes(b"")
     restored = MissionDataStore.import_from(exp, dest)
     assert restored.get_payload(digest) == b"must survive retry over torn meta"
+
+
+def test_import_refuses_dest_inside_or_containing_a_live_store(tmp_path):
+    # R32B-1: dest = live.payload_dir or live.parent must not rmtree evidence.
+    from curunir_operational.store import MissionDataStore, StoreError
+    from operational_support import make_store
+    live = make_store(tmp_path, name="live")
+    digest = live.put_payload(b"live evidence must survive dest overlap")
+    exp = tmp_path / "exp"
+    live.export_to(exp)
+    with pytest.raises(StoreError, match="inside an existing store"):
+        MissionDataStore.import_from(exp, live.payload_dir)
+    assert live.get_payload(digest) == b"live evidence must survive dest overlap"
+    with pytest.raises(StoreError, match="contains an existing store"):
+        MissionDataStore.import_from(exp, tmp_path)
+    assert (tmp_path / "live" / "store_meta.json").is_file()
+    assert live.get_payload(digest) == b"live evidence must survive dest overlap"
+
+
+def test_delta_refuses_dest_inside_the_source_store(tmp_path):
+    from curunir_operational.delta import build_delta_bundle
+    from curunir_operational.store import StoreError
+    from operational_support import make_store
+    store = make_store(tmp_path)
+    store.put_payload(b"payload that a delta must not plant onto itself")
+    with pytest.raises(StoreError, match="overlaps the source store"):
+        build_delta_bundle(store, store.root, base_seq=0)
+    with pytest.raises(StoreError, match="overlaps the source store"):
+        build_delta_bundle(store, store.payload_dir, base_seq=0)
+
+
+def test_create_refuses_leftover_payload_fifo(tmp_path):
+    # R32B-2 sibling: leftover 64-hex FIFOs / digest files in payloads/
+    # must not become a fresh store's evidence slots.
+    import os
+    from curunir_operational.store import MissionDataStore, StoreError
+    from operational_support import T0
+    root = tmp_path / "fresh"
+    payloads = root / "payloads"
+    payloads.mkdir(parents=True)
+    leftover = payloads / ("ab" * 32)
+    os.mkfifo(leftover)
+    with pytest.raises(StoreError, match="leftover payload"):
+        MissionDataStore.create(root, "fresh-store", T0)
+    leftover.unlink()
+    leftover.write_bytes(b"torn leftover digest")
+    with pytest.raises(StoreError, match="leftover payload"):
+        MissionDataStore.create(root, "fresh-store", T0)

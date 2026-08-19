@@ -1004,6 +1004,16 @@ Two independent Grok reviewers attacked `f5ea3c7`. **BOTH DIFF_BROKEN.** Partial
 
 Still open from R32 (not yet closed): derive `_DEAD` from unused official tuples rather than a map; discriminator CREATE floor on `desired_subject_ref`; `_embedded_analytic_ids` for warning/indicator/assumption/theme lineage; `build_delta_bundle` dest-overlap; import fsync of events/meta; `create()` leftover payload FIFOs.
 
+## Round 32 leftovers — closed at the chokepoints
+
+- **`_DEAD`** — `SETTLED_SUPPORT_STATUSES` is declared next to the official vocabs; validate_report treats the complement as not-settled (so `ACHIEVED` is dead and the unofficial `COMPLETED` is gone).
+- **Discriminator CREATE** — floors `desired_subject_ref` (and the exists-path update) through `resolve_reference_markings`.
+- **`_embedded_analytic_ids`** — warning / indicator / assumption / theme lineage / stakeholder entity / influence endpoints / narrative counters, still excluding forecast `indicator_ids` (A4).
+- **Dest overlap** — shared `_refuse_dest_store_overlap` on `export_to` / `import_from` / `build_delta_bundle`.
+- **`import_from`** — events/meta go through `_export_write_bytes` (fsync) and the staging dir is fsynced before rename.
+- **`create()`** — leftover 64-hex / non-regular payload slots are refused.
+- **`_looks_like_complete_store`** — a symlink to valid identity still names a store (R32B-5).
+
 ## Round 33 — continue from here
 
-Do not merge. Dispatch two fresh whole-tranche reviewers against this HEAD after any remaining R32 items, or attack the leftovers first.
+Do not merge. Attack this repair as Round 33 with two fresh whole-tranche reviewers.

@@ -141,6 +141,32 @@ def test_merge_is_human_only_and_preserves_lineage(tmp_path):
     assert len(ctx.store.analytic_versions("analytic_theme", right["theme_id"])) == 2
 
 
+def test_merge_floors_survivor_on_embedded_lineage(tmp_path):
+    # R32A M-2: lineage theme ids are embeds; a PUBLIC merge of a SPECIAL
+    # theme must not leave the survivor readable by CTX_B.
+    from curunir_analytic.substrate import AnalyticContext, _embedded_analytic_ids
+    from curunir_operational.access import AccessContext, can_view, marking_from_record
+    from workbench_support import RESTRICTED_MARK
+    pipeline, ctx = make_analytic(tmp_path)
+    by_predicate = _seed_acme(pipeline, ctx)
+    public = create_theme(ctx, title="Public standing",
+                          supporting_claim_ids=[by_predicate["entity_status"]],
+                          provenance_kind="RULE")
+    rctx = AnalyticContext(store=ctx.store, actor="analyst-a",
+                           marking=RESTRICTED_MARK, now_fn=ctx.now_fn)
+    secret = create_theme(rctx, title="Compartmented standing",
+                          supporting_claim_ids=[by_predicate["legal_name"]],
+                          provenance_kind="RULE")
+    survivor = apply_merge(ctx, public["theme_id"], secret["theme_id"],
+                           actor_id="jan", actor_kind="HUMAN",
+                           rationale="same standing issue")
+    assert secret["theme_id"] in _embedded_analytic_ids(survivor)
+    uncleared = AccessContext("c", "d", "HUMAN", ("ANALYST",),
+                              releasability=("PUBLIC",))
+    assert can_view(survivor["marking"], uncleared) is False
+    assert "SPECIAL" in marking_from_record(survivor["marking"]).compartments
+
+
 def test_split_preserves_lineage_both_ways(tmp_path):
     pipeline, ctx = make_analytic(tmp_path)
     by_predicate = _seed_acme(pipeline, ctx)

@@ -226,6 +226,27 @@ def refresh_hypotheses_for_claims(ctx: IntegrationContext,
     return refreshed
 
 
+def _discriminator_reference_markings(
+        store: SemanticStore, *, claim_ids, hypothesis_ids,
+        desired_subject_ref: str) -> list:
+    """Every object whose id the discriminator persists. CREATE/update both
+    floor here so a SPECIAL desired_subject_ref cannot land in a PUBLIC
+    record (review R32A M-1)."""
+    refs: list = []
+    for cid in claim_ids:
+        claim = store.current_claims().get(cid)
+        if claim is not None and isinstance(claim.get("marking"), dict):
+            refs.append(claim["marking"])
+    for hid in hypothesis_ids:
+        hyp = store.current_hypotheses().get(hid)
+        if hyp is not None and isinstance(hyp.get("marking"), dict):
+            refs.append(hyp["marking"])
+    if desired_subject_ref:
+        from curunir_analytic.substrate import resolve_reference_markings
+        refs.extend(resolve_reference_markings(store, (desired_subject_ref,)))
+    return refs
+
+
 def propose_discriminator(store: SemanticStore, *, question: str,
                           hypothesis_ids: tuple[str, ...] = (),
                           claim_ids: tuple[str, ...] = (),
@@ -276,15 +297,9 @@ def propose_discriminator(store: SemanticStore, *, question: str,
         basis_snapshot = tuple(sorted(existing_basis_groups(
             store, {"claim_ids": claim_ids, "hypothesis_ids": hypothesis_ids}))) \
             if independence_required else ()
-        refs = []
-        for cid in claim_ids:
-            claim = store.current_claims().get(cid)
-            if claim is not None and isinstance(claim.get("marking"), dict):
-                refs.append(claim["marking"])
-        for hid in hypothesis_ids:
-            hyp = store.current_hypotheses().get(hid)
-            if hyp is not None and isinstance(hyp.get("marking"), dict):
-                refs.append(hyp["marking"])
+        refs = _discriminator_reference_markings(
+            store, claim_ids=claim_ids, hypothesis_ids=hypothesis_ids,
+            desired_subject_ref=desired_subject_ref)
         create_marking = inherited_marking(marking, refs)
         new_record = DiscriminatingObservation(
             discriminator_id=discriminator_id, question=question,
@@ -322,15 +337,10 @@ def update_discriminator(store: SemanticStore, discriminator: Mapping[str, Any],
     # (review R29A M-3 — exists-path absorb of a SPECIAL claim_id)
     own = marking_from_record(discriminator["marking"]) \
         if isinstance(discriminator.get("marking"), dict) else discriminator["marking"]
-    refs = []
-    for cid in merged.get("claim_ids") or ():
-        claim = store.current_claims().get(cid)
-        if claim is not None and isinstance(claim.get("marking"), dict):
-            refs.append(claim["marking"])
-    for hid in merged.get("hypothesis_ids") or ():
-        hyp = store.current_hypotheses().get(hid)
-        if hyp is not None and isinstance(hyp.get("marking"), dict):
-            refs.append(hyp["marking"])
+    refs = _discriminator_reference_markings(
+        store, claim_ids=merged.get("claim_ids") or (),
+        hypothesis_ids=merged.get("hypothesis_ids") or (),
+        desired_subject_ref=merged.get("desired_subject_ref") or "")
     merged["marking"] = inherited_marking(own, refs)
     merged["version"] = store.next_family_version(
         "discriminator", "discriminator_id", discriminator["discriminator_id"])
