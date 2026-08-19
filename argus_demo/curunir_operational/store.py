@@ -218,14 +218,15 @@ class MissionDataStore:
         if payloads.exists() and (payloads.is_symlink() or not payloads.is_dir()):
             raise StoreError("payloads dest is not a regular directory; refusing")
         payloads.mkdir(exist_ok=True)
+        events = root / "events.jsonl"
+        if events.is_symlink() or (events.exists() and not events.is_file()):
+            raise StoreError("events.jsonl dest is not a regular file; refusing")
+        # store_meta is the commit marker — write it LAST (review R29B-1)
+        events.touch()
         meta = {"store_id": store_id, "created_time": created_time,
                 "contract_version": CONTRACT_VERSION, "package_version": PACKAGE_VERSION}
         _export_write_bytes(root / "store_meta.json",
                             (canonical_line(meta) + "\n").encode("utf-8"))
-        events = root / "events.jsonl"
-        if events.is_symlink() or (events.exists() and not events.is_file()):
-            raise StoreError("events.jsonl dest is not a regular file; refusing")
-        events.touch()
         return cls(root)
 
     @classmethod
@@ -522,6 +523,11 @@ class MissionDataStore:
         `load_payloads(event)` yields payload bodies to install first."""
         with self._append_lock():
             self._catch_up()
+            if self.payload_dir.is_symlink() or not self.payload_dir.is_dir():
+                raise StoreError(
+                    "payload_dir is not a regular directory; refusing the "
+                    "bundle rather than applying a prefix"
+                )
             self.preflight_imported_events(events)
             bodies_by_event = [list(load_payloads(event)) for event in events]
             for bodies in bodies_by_event:
@@ -728,7 +734,13 @@ class MissionDataStore:
     def export_to(self, directory: str | Path) -> dict[str, Any]:
         directory = Path(directory)
         directory.mkdir(parents=True, exist_ok=True)
-        (directory / "payloads").mkdir(exist_ok=True)
+        payload_out = directory / "payloads"
+        if payload_out.is_symlink() or (
+                payload_out.exists() and not payload_out.is_dir()):
+            raise StoreError(
+                "export dest payloads is not a regular directory; refusing"
+            )
+        payload_out.mkdir(exist_ok=True)
         # HOLD THE APPEND LOCK across catch-up + copy + manifest. The product is
         # multi-writer (the server re-opens per request), so without this the
         # copied events.jsonl reflects the on-disk head while the manifest's
@@ -741,14 +753,6 @@ class MissionDataStore:
         with self._append_lock():
             self._catch_up()
             _export_write_bytes(directory / "events.jsonl", self.events_path.read_bytes())
-            _export_write_bytes(directory / "store_meta.json",
-                                (self.root / "store_meta.json").read_bytes())
-            payload_out = directory / "payloads"
-            if payload_out.exists() and (
-                    payload_out.is_symlink() or not payload_out.is_dir()):
-                raise StoreError(
-                    "export dest payloads is not a regular directory; refusing"
-                )
             payload_hashes: dict[str, str] = {}
             for path in sorted(self.payload_dir.iterdir()):
                 # A 64-hex slot that is not a regular file (symlink, dir,
@@ -773,6 +777,10 @@ class MissionDataStore:
                     ) from exc
                 _export_write_bytes(directory / "payloads" / name, body)
                 payload_hashes[name] = name
+            # store_meta is the commit marker — write AFTER payloads
+            # (review R29B-1)
+            _export_write_bytes(directory / "store_meta.json",
+                                (self.root / "store_meta.json").read_bytes())
             manifest = {
                 "export_format": "curunir-operational-open-export-v1",
                 "store_id": self.meta["store_id"],

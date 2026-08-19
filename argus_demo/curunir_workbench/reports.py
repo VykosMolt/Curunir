@@ -242,11 +242,12 @@ def validate_report(projection: MissionProjection, report: Mapping[str, Any]) ->
                     if fam == "semantic_claim" and rec.get("claim_id")
                 }
                 store = getattr(projection, "store", None)
+                walked: set = set()
+                cite = {i for i in (*sentence.get("basis_refs", ()),
+                                    *sentence.get("assumption_ids", ()))
+                        if i}
                 if store is not None:
-                    cite = {i for i in (*sentence.get("basis_refs", ()),
-                                        *sentence.get("assumption_ids", ()))
-                            if i}
-                    related_for_sentence |= _related_claim_ids(store, cite)
+                    related_for_sentence |= _related_claim_ids(store, cite, walked)
                 for claim_id in related_for_sentence:
                     state = claim_states.get(claim_id, {}).get("state", "ACTIVE")
                     if state in ("RETRACTED", "SUPERSEDED", "CORRECTED"):
@@ -261,23 +262,29 @@ def validate_report(projection: MissionProjection, report: Mapping[str, Any]) ->
                         finding("CONTESTED_AS_SETTLED", sentence,
                                 f"claim {claim_id} is contested/under review; "
                                 "the sentence renders it settled")
-            if status == "SUPPORTED":
-                for family, record in resolved:
-                    if family not in _OBSERVATIONAL_BASIS:
-                        finding("INFERENCE_AS_OBSERVATION", sentence,
-                                f"basis {family} is analytical inference; the "
-                                "sentence must be EXPLICITLY_INFERENTIAL")
-                    elif family == "semantic_claim" \
-                            and record.get("epistemic_state") in _INFERENTIAL_STATES:
-                        finding("INFERENCE_AS_OBSERVATION", sentence,
-                                f"claim {record['claim_id']} is "
-                                f"{record['epistemic_state']}; the sentence must "
-                                "be EXPLICITLY_INFERENTIAL")
-                # historical rendered as current — derived from the BASIS,
-                # not from an author-supplied flag: omitting temporal_scope
-                # does not opt out
+                # visible OPEN reviews on cited/walked analytic subjects
+                # (forecast COVERAGE_GAP, hypothesis STALE_BASIS) — Ck2 only
+                # sees the hidden half (review R29A C-1)
+                subjects = cite | walked | related_for_sentence
+                for item in projection.family("review_item"):
+                    if item.get("status") == "OPEN" \
+                            and item.get("subject_id") in subjects:
+                        finding("CONTESTED_AS_SETTLED", sentence,
+                                f"{item.get('subject_kind')} "
+                                f"{item.get('subject_id')} has open review; "
+                                "the sentence renders it settled")
                 if sentence.get("temporal_scope") != "HISTORICAL":
                     claims = [r for f, r in resolved if f == "semantic_claim"]
+                    store = getattr(projection, "store", None)
+                    if store is not None and hasattr(store, "current_claims"):
+                        related = _related_claim_ids(store, cite)
+                        current = store.current_claims()
+                        for cid in related:
+                            rec = current.get(cid)
+                            if rec is not None \
+                                    and projection.get("semantic_claim", cid) is not None \
+                                    and rec not in claims:
+                                claims.append(rec)
                     expired = [c for c in claims if c.get("valid_to")
                                and parse_time(c["valid_to"])
                                <= parse_time(projection.snapshot_time)]
@@ -294,6 +301,18 @@ def validate_report(projection: MissionProjection, report: Mapping[str, Any]) ->
                         finding("PARTIALLY_HISTORICAL_BASIS", sentence,
                                 f"{len(expired)}/{len(claims)} supporting claims "
                                 "have ended validity", blocking=False)
+            if status == "SUPPORTED":
+                for family, record in resolved:
+                    if family not in _OBSERVATIONAL_BASIS:
+                        finding("INFERENCE_AS_OBSERVATION", sentence,
+                                f"basis {family} is analytical inference; the "
+                                "sentence must be EXPLICITLY_INFERENTIAL")
+                    elif family == "semantic_claim" \
+                            and record.get("epistemic_state") in _INFERENTIAL_STATES:
+                        finding("INFERENCE_AS_OBSERVATION", sentence,
+                                f"claim {record['claim_id']} is "
+                                f"{record['epistemic_state']}; the sentence must "
+                                "be EXPLICITLY_INFERENTIAL")
                 # independence honesty
                 if sentence.get("asserts_independent"):
                     claims = [r for f, r in resolved if f == "semantic_claim"]

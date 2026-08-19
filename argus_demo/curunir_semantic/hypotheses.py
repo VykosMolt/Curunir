@@ -15,7 +15,8 @@ from __future__ import annotations
 from typing import Any, Mapping
 
 from argus.source_intelligence.models import digest_id
-from curunir_operational.access import Marking, marking_from_record, most_restrictive
+from curunir_operational.access import (Marking, inherited_marking,
+                                         marking_from_record, most_restrictive)
 
 from .contracts import DiscriminatingObservation, HypothesisRecord
 from .store import SemanticStore
@@ -306,9 +307,16 @@ def update_discriminator(store: SemanticStore, discriminator: Mapping[str, Any],
     for key in ("hypothesis_ids", "claim_ids", "source_family_hints", "basis_groups_at_pose"):
         merged[key] = tuple(merged.get(key, ()))
     merged["recorded_time"] = now
-    # a re-append NEVER re-classifies: the discriminator keeps its own marking
-    merged["marking"] = marking_from_record(discriminator["marking"]) \
+    # never re-classify DOWN; raise to cover newly folded claims
+    # (review R29A M-3 — exists-path absorb of a SPECIAL claim_id)
+    own = marking_from_record(discriminator["marking"]) \
         if isinstance(discriminator.get("marking"), dict) else discriminator["marking"]
+    refs = []
+    for cid in merged.get("claim_ids") or ():
+        claim = store.current_claims().get(cid)
+        if claim is not None and isinstance(claim.get("marking"), dict):
+            refs.append(claim["marking"])
+    merged["marking"] = inherited_marking(own, refs)
     merged["version"] = store.next_family_version(
         "discriminator", "discriminator_id", discriminator["discriminator_id"])
     record = DiscriminatingObservation(**merged)

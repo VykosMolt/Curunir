@@ -958,6 +958,17 @@ Two independent Grok reviewers attacked `9a77e9a`. **BOTH DIFF_BROKEN.**
 - **R28B-2 (MAJOR)** — `recover_torn_tail` dest-side dangling symlink write. Repair: `_export_write_bytes` + refuse symlink dests.
 - **R28B-3 (MAJOR)** — delta apply preflighted events but not dest payload slots; a directory on digest 2 aborted after event 1 committed. Repair: preflight every payload slot before any commit.
 
-## Round 29 — WHOLE-TRANCHE confirmatory attack (pending)
+## Round 29 — WHOLE-TRANCHE attack found the next hop; repaired
 
-The Round-28 repair is itself un-attacked. Same stopping condition.
+Two independent Grok reviewers attacked `0de882d`. **BOTH DIFF_BROKEN.**
+
+- **R29A C-1 (CRITICAL)** — visible OPEN reviews on cited forecasts/hypotheses never hit CONTESTED_AS_SETTLED (that loop was claim-ids only; Ck2 is the hidden half). Repair: also scan projection open reviews whose subject is cited/walked.
+- **R29A C-2 (CRITICAL)** — HISTORICAL_AS_CURRENT did not walk observation/manifestation → claim and stayed SUPPORTED-only. Repair: walk related visible claims for SUPPORTED and EXPLICITLY_INFERENTIAL.
+- **R29A M-2 (MAJOR)** — `append_version` missed forecast `assumption_ids`. Now in `_embedded_analytic_ids`.
+- **R29A M-3 (MAJOR)** — discriminator exists-path never raised. `update_discriminator` now `inherited_marking` on folded claim_ids.
+- **R29B-1 (MAJOR)** — `export_to`/`create` wrote `store_meta` before dest-member validation. Repair: validate dest first; write `store_meta` last.
+- **R29B-2 (MAJOR)** — delta apply did not require `payload_dir` itself to be a regular directory. Repair: refuse before any prefix commit.
+
+## Round 30 — WHOLE-TRANCHE confirmatory attack (pending)
+
+The Round-29 repair is itself un-attacked. Same stopping condition.
