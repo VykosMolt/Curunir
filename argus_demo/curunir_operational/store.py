@@ -242,13 +242,22 @@ def _refuse_dest_store_overlap(
                 raise StoreError(
                     "dest is an export of a different store; refusing"
                 )
+    def _protected(root: Path) -> bool:
+        return (_is_live_store_root(root)
+                or _looks_like_complete_store(root)
+                or _dest_has_payload_evidence(root)
+                or (root / "events.jsonl").exists())
+
     for ancestor in dest.parents:
-        if _looks_like_complete_store(ancestor):
+        if _protected(ancestor):
             raise StoreError("dest is inside an existing store; refusing")
     if dest.exists() and replace_dest:
         for meta in dest.rglob("store_meta.json"):
             child = meta.parent
-            if child != dest and _looks_like_complete_store(child):
+            if child != dest and _protected(child):
+                raise StoreError("dest contains an existing store; refusing")
+        for child in dest.iterdir() if dest.is_dir() else ():
+            if child.is_dir() and _protected(child):
                 raise StoreError("dest contains an existing store; refusing")
 
 
@@ -387,6 +396,10 @@ class MissionDataStore:
             raise StoreError(
                 "refusing to create a store over a non-regular .append.lock"
             )
+        if leftover_lock.exists() and leftover_lock.stat().st_nlink > 1:
+            raise StoreError(
+                "refusing to create a store over a hardlinked .append.lock"
+            )
         leftover_events = root / "events.jsonl"
         if leftover_events.exists():
             if leftover_events.is_symlink() or not leftover_events.is_file():
@@ -474,6 +487,8 @@ class MissionDataStore:
         if lock_path.is_symlink() or (
                 lock_path.exists() and not lock_path.is_file()):
             raise StoreError("append lock is not a regular file; refusing")
+        if lock_path.exists() and lock_path.stat().st_nlink > 1:
+            raise StoreError("append lock is hardlinked; refusing")
         with lock_path.open("w") as lock_handle:
             fcntl.flock(lock_handle, fcntl.LOCK_EX)
             try:
@@ -618,6 +633,8 @@ class MissionDataStore:
                 raise StoreError(
                     "append lock is not a regular file; refusing"
                 )
+            if lock_path.exists() and lock_path.stat().st_nlink > 1:
+                raise StoreError("append lock is hardlinked; refusing")
             with lock_path.open("w") as lock_handle:
                 fcntl.flock(lock_handle, fcntl.LOCK_EX)
                 try:
@@ -1142,7 +1159,7 @@ class MissionDataStore:
                 if not (isinstance(name, str) and len(name) == 64
                         and all(c in "0123456789abcdef" for c in name)):
                     raise StoreError(f"export manifest names a non-digest payload {name!r}; refusing")
-                body = (source_dir / "payloads" / name).read_bytes()
+                body = _read_regular_bytes(source_dir / "payloads" / name)
                 if hashlib.sha256(body).hexdigest() != name:
                     raise StoreError(f"export tampered: payload {name} hash mismatch")
                 _write_file_atomic(staging / "payloads" / name, body, tmp_dir=staging)

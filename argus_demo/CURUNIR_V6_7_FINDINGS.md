@@ -1056,6 +1056,17 @@ Two independent Grok reviewers attacked `e1cd937`. **BOTH DIFF_BROKEN.**
 - **R36B B-4 (silent-wrong)** — `_append_lock` `open("w")` followed a lock symlink onto `events.jsonl` and truncated it. Repair: refuse non-regular lock; same on create/recover.
 - **R36B-3** — remaining exists()-first FIFO reads on import/open/delta-manifest/pace/recover. Repair: `_read_regular_bytes`.
 
-## Round 37 — continue from here
+## Round 37 — WHOLE-TRANCHE attack found the next hop; repaired
 
-Do not merge. Attack this repair as Round 37 with two fresh whole-tranche reviewers.
+Two independent Grok reviewers attacked `659d3fe`. **BOTH DIFF_BROKEN.**
+
+- **Ck1 exists-path** — `open_requirement` kept the prior PUBLIC marking while folding SPECIAL `affected_ids`. Repair: floor via `inherited_marking` + `resolve_reference_markings`.
+- **Ck2 remaining sentence-class gates** — `assumption_ids` / DISPUTED / HISTORICAL / walked-dead still skipped UNRESOLVED carriers. Repair: section-wide cite set (option_ids + every sentence's basis_refs/assumption_ids) runs those gates.
+- **Ck2 official families** — `influence_assertion` / `historical_analogue` now in `SETTLED_SUPPORT_STATUSES`.
+- **B-4 lock hardlink** — `open("w")` truncated a hardlinked `events.jsonl`. Repair: refuse `st_nlink > 1`.
+- **Dest ancestor FIFO meta** — overlap now treats live lock / payloads / `events.jsonl` as protected, not only parseable `store_meta`.
+- **Remaining FIFO reads** — import payload slots and PACE manifest.
+
+## Round 38 — continue from here
+
+Do not merge. Attack this repair as Round 38 with two fresh whole-tranche reviewers.

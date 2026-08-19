@@ -252,6 +252,9 @@ def validate_report(projection: MissionProjection, report: Mapping[str, Any]) ->
                         "support; the report presents it as a decision option")
         store = getattr(projection, "store", None)
         option_set = {i for i in (section.get("option_ids") or ()) if i}
+        for sentence in sentences:
+            option_set |= {i for i in (sentence.get("basis_refs") or ()) if i}
+            option_set |= {i for i in (sentence.get("assumption_ids") or ()) if i}
         if store is not None and option_set:
             walked_opts: set = set()
             related_opts = _related_claim_ids(store, option_set, walked_opts)
@@ -288,6 +291,23 @@ def validate_report(projection: MissionProjection, report: Mapping[str, Any]) ->
                             f"{item.get('subject_kind')} "
                             f"{item.get('subject_id')} has open review; "
                             "a decision option presents it settled")
+            live_claims = []
+            for claim_id in related_opts:
+                rec = projection.get("semantic_claim", claim_id)
+                if rec is None:
+                    continue
+                live_claims.append(rec)
+                if rec.get("epistemic_state") == "DISPUTED":
+                    finding("CONTESTED_AS_SETTLED", anchor,
+                            f"claim {claim_id} is contested; a cited object "
+                            "presents it as settled support")
+            expired = [c for c in live_claims if c.get("valid_to")
+                       and parse_time(c["valid_to"])
+                       <= parse_time(projection.snapshot_time)]
+            if live_claims and len(expired) == len(live_claims):
+                finding("HISTORICAL_AS_CURRENT", anchor,
+                        "every supporting claim's validity has ended; "
+                        "the report presents it as current")
         for sentence in sentences:
             status = sentence["status"]
             refs = tuple(sentence.get("basis_refs", ()))

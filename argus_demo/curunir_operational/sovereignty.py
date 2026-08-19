@@ -182,7 +182,11 @@ def build_pace_bundle(store: MissionDataStore, projection: Projection, context: 
 def verify_pace_bundle(bundle_dir: str | Path) -> dict[str, Any]:
     bundle_dir = Path(bundle_dir)
     try:
-        manifest = json.loads((bundle_dir / "bundle_manifest.json").read_text(encoding="utf-8"))
+        manifest_path = bundle_dir / "bundle_manifest.json"
+        if manifest_path.is_symlink() or manifest_path.is_dir() \
+                or not manifest_path.is_file():
+            return {"valid": False, "reason": "bundle_manifest.json missing"}
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     except FileNotFoundError:
         return {"valid": False, "reason": "bundle_manifest.json missing"}
     failures = []

@@ -358,6 +358,21 @@ def test_append_lock_symlink_does_not_truncate_events(tmp_path):
     assert store.events_path.read_bytes() == sentinel
 
 
+def test_append_lock_hardlink_does_not_truncate_events(tmp_path):
+    import os
+    from curunir_operational.store import StoreError
+    from operational_support import make_store
+    store = make_store(tmp_path)
+    sentinel = b"SENTINEL_EVENT_LOG_MUST_SURVIVE\n"
+    store.events_path.write_bytes(sentinel)
+    lock = store.root / ".append.lock"
+    lock.unlink()
+    os.link(store.events_path, lock)
+    with pytest.raises(StoreError, match="hardlinked"):
+        store.put_payload(b"must not truncate the log")
+    assert store.events_path.read_bytes() == sentinel
+
+
 def test_export_refuses_matching_planted_export_manifest_on_a_live_store(tmp_path):
     # R34B-1: a hash-matched export_manifest plant on a live store
     # (next hop of empty/`{}`/symlink) must not rmtree the live root.

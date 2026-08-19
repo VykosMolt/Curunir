@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 
-from .access import AccessContext, Marking, marking_from_record
+from .access import AccessContext, Marking, inherited_marking, marking_from_record
 from .canonical import digest_id
 from .contracts import (REQUIREMENT_PRIORITIES, AnalystTask, EvidenceRequest,
                         InformationRequirement, WorkflowTransition)
@@ -86,13 +86,14 @@ class MissionWorkflow:
             if merged_priority == latest["priority"] \
                     and merged_affected == tuple(latest["affected_ids"]):
                 return latest
+            from curunir_analytic.substrate import resolve_reference_markings
+            own = marking_from_record(latest["marking"])
+            refs = resolve_reference_markings(self.store, merged_affected)
             updated = InformationRequirement(
                 **{**{k: v for k, v in latest.items() if k != "record_type"},
                    "priority": merged_priority, "affected_ids": merged_affected,
                    "version": latest.get("version", 1) + 1,
-                   # a fold escalates priority / widens scope; it never
-                   # re-classifies: the record keeps its own marking
-                   "marking": marking_from_record(latest["marking"])})
+                   "marking": inherited_marking(own, [marking, *refs])})
             self.store.append("REQUIREMENT_RECORDED", updated,
                               recorded_time=recorded_time, actor=actor)
             return updated.to_record()

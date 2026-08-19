@@ -883,6 +883,8 @@ SETTLED_SUPPORT_STATUSES: dict[str, frozenset[str]] = {
     "impact_path": frozenset(("PROPOSED", "ASSESSED", "CHANGED")),
     "mission_objective": frozenset(("ACTIVE", "EXPOSED")),
     "stakeholder_assessment": frozenset(("ACTIVE",)),
+    "influence_assertion": frozenset(("ACTIVE",)),
+    "historical_analogue": frozenset(("PROPOSED", "REVIEWED")),
 }
 OFFICIAL_STATUS_VOCABULARIES: dict[str, tuple[str, ...]] = {
     "analytic_forecast": FORECAST_STATUSES,
@@ -895,6 +897,8 @@ OFFICIAL_STATUS_VOCABULARIES: dict[str, tuple[str, ...]] = {
     "impact_path": IMPACT_STATUSES,
     "mission_objective": OBJECTIVE_STATUSES,
     "stakeholder_assessment": STAKEHOLDER_STATUSES,
+    "influence_assertion": INFLUENCE_STATUSES,
+    "historical_analogue": ANALOGUE_STATUSES,
 }
 PROBABILITY_BANDS = ("REMOTE", "POSSIBLE", "LIKELY", "VERY_LIKELY")
 TIME_PRESSURES = ("DISTANT", "NEAR", "CLOSE", "IMMINENT", "PASSED")
