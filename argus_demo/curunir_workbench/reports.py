@@ -274,19 +274,55 @@ def validate_report(projection: MissionProjection, report: Mapping[str, Any]) ->
                                 f"{item.get('subject_kind')} "
                                 f"{item.get('subject_id')} has open review; "
                                 "the sentence renders it settled")
-                # cited object's own contested/terminal status (theme CONTESTED,
-                # hypothesis DISPUTED, warning RESOLVED) — review-shaped
-                # CONTESTED does not see these (review R30A C-2)
-                _CONTESTED_STATUSES = {
-                    "CONTESTED", "DISPUTED", "RESOLVED", "RESOLVED_TRUE",
-                    "RESOLVED_FALSE", "RESOLVED_VOID", "INVALIDATED", "STALE",
+                # official family terminals — not an instance list (R31A C-1)
+                from curunir_analytic.contracts import (
+                    FORECAST_TERMINAL_STATUSES, NARRATIVE_STATUSES,
+                    RESPONSE_STATUSES, THEME_STATUSES, WARNING_STATUSES,
+                )
+                from curunir_semantic.contracts import HYPOTHESIS_STATUSES
+                _DEAD = {
+                    "analytic_forecast": set(FORECAST_TERMINAL_STATUSES),
+                    "strategic_warning": {"RESOLVED", "WITHDRAWN"},
+                    "analytic_theme": {"STALE", "RESOLVED", "MERGED", "SPLIT",
+                                       "CONTESTED"},
+                    "analytic_narrative": {"RESOLVED", "SUPERSEDED", "CONTESTED"},
+                    "hypothesis": {"REJECTED", "SUPERSEDED", "DISPUTED"},
+                    "response_option": {"REJECTED", "WITHDRAWN"},
+                    "forecast_indicator": {"EXPIRED_UNFIRED", "RETIRED"},
+                    "analytic_assumption": {"INVALIDATED"},
+                    "impact_path": {"STALE", "INVALIDATED"},
                 }
+                def _dead(family: str, status: str) -> bool:
+                    return bool(status) and status in _DEAD.get(family, ())
+
                 for _fam, rec in resolved:
-                    st = rec.get("status")
-                    if st in _CONTESTED_STATUSES:
+                    if _dead(_fam, rec.get("status") or ""):
                         finding("CONTESTED_AS_SETTLED", sentence,
                                 f"{_fam} {rec.get('status')} is not live "
                                 "support; the sentence renders it settled")
+                # walked / assumption_ids objects, not only direct basis_refs
+                # (review R31A C-2)
+                store = getattr(projection, "store", None)
+                extra_ids = (walked | set(sentence.get("assumption_ids") or ())) \
+                    - {r.get("id") for _, r in resolved}
+                if store is not None:
+                    from curunir_analytic.store import ANALYTIC_ID_FIELDS
+                    for wid in extra_ids:
+                        rec = None
+                        fam = ""
+                        if hasattr(store, "current_analytics"):
+                            for kind in ANALYTIC_ID_FIELDS:
+                                rec = store.current_analytics(kind).get(wid)
+                                if rec is not None:
+                                    fam = kind
+                                    break
+                        if rec is None and hasattr(store, "current_hypotheses"):
+                            rec = store.current_hypotheses().get(wid)
+                            fam = "hypothesis"
+                        if rec is not None and _dead(fam, rec.get("status") or ""):
+                            finding("CONTESTED_AS_SETTLED", sentence,
+                                    f"{fam} {rec.get('status')} is not live "
+                                    "support; the sentence renders it settled")
                 if sentence.get("temporal_scope") != "HISTORICAL":
                     claims = [r for f, r in resolved if f == "semantic_claim"]
                     store = getattr(projection, "store", None)

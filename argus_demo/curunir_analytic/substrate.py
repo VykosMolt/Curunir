@@ -300,16 +300,28 @@ def _embedded_analytic_ids(record) -> tuple[str, ...]:
     if kind == "historical_analogue":
         episode_id = mapping.get("episode_id") or ""
         return (episode_id,) if episode_id else ()
-    if kind in ("analytic_forecast", "mission_objective", "impact_path"):
-        # proposition_refs of non-claim kind and assumption_ids are the
-        # forecast's material propositions (R28A-4 / R29A M-2).
-        # indicator_ids remain association, not embed (A4).
+    if kind in ("analytic_forecast", "mission_objective", "impact_path",
+                "response_option"):
+        # assumption_ids + (kind, id) refs those families actually store
+        # (R31A M-2: depends_on / edge endpoints, not forecast field names)
         ids = [a for a in (mapping.get("assumption_ids") or ()) if a]
         for reference in mapping.get("proposition_refs") or ():
             if isinstance(reference, (list, tuple)) and len(reference) == 2 \
                     and reference[0] != "claim" and reference[1]:
                 ids.append(reference[1])
-        return tuple(ids)
+        for reference in mapping.get("depends_on") or ():
+            if isinstance(reference, (list, tuple)) and len(reference) == 2 \
+                    and reference[0] != "claim" and reference[1]:
+                ids.append(reference[1])
+        for edge in mapping.get("edges") or ():
+            edge = _as_mapping(edge)
+            for endpoint in (edge.get("from_id"), edge.get("to_id")):
+                if endpoint:
+                    ids.append(endpoint)
+        for key in ("path_id", "objective_id"):
+            if mapping.get(key):
+                ids.append(mapping[key])
+        return tuple(dict.fromkeys(ids))
     return ()
 
 

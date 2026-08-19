@@ -281,6 +281,10 @@ def propose_discriminator(store: SemanticStore, *, question: str,
             claim = store.current_claims().get(cid)
             if claim is not None and isinstance(claim.get("marking"), dict):
                 refs.append(claim["marking"])
+        for hid in hypothesis_ids:
+            hyp = store.current_hypotheses().get(hid)
+            if hyp is not None and isinstance(hyp.get("marking"), dict):
+                refs.append(hyp["marking"])
         create_marking = inherited_marking(marking, refs)
         new_record = DiscriminatingObservation(
             discriminator_id=discriminator_id, question=question,

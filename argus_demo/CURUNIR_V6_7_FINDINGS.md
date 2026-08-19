@@ -981,6 +981,18 @@ Two independent Grok reviewers attacked `c5a21c3`. **BOTH DIFF_BROKEN.**
 - **R30B-2 (MAJOR)** — `create()` refuses leftover non-empty `events.jsonl`.
 - **R30B-3 (MAJOR)** — delta dest-slot preflight is “not a regular file”, not only directory (fifo).
 
-## Round 31 — WHOLE-TRANCHE confirmatory attack (pending)
+## Round 31 — WHOLE-TRANCHE attack found the next hop; repaired
 
-The Round-30 repair is itself un-attacked. Same stopping condition.
+Two independent Grok reviewers attacked `a8cacc7`. **BOTH DIFF_BROKEN.**
+
+- **R31A C-1 (CRITICAL)** — `_CONTESTED_STATUSES` was an instance list and missed official terminals (`WITHDRAWN` forecast, `REJECTED` hypothesis, `MERGED` theme, `REJECTED` option). Repair: derive dead statuses from each family’s official vocabulary.
+- **R31A C-2 (CRITICAL)** — object-status gate ran only on direct `basis_refs`. Repair: also walk `assumption_ids` and walked objects.
+- **R31A M-1/M-2** — discriminator CREATE now floors `hypothesis_ids`; `_embedded_analytic_ids` reads `depends_on` / path edges / `path_id` / `objective_id`.
+- **R31B-1 (MAJOR, repair-induced)** — staging `export_to` could swap over the store parent or `payload_dir` and destroy the live store. Repair: refuse dest that is the root, inside the store, or an ancestor of the store.
+- **R31B-3** — `put_payload` refuses FIFO/non-regular slots (does not hang `get_payload`).
+
+B-4 remains LIMITATION. **Not yet independently re-attacked.**
+
+## Round 32 — WHOLE-TRANCHE confirmatory attack (pending)
+
+Same stopping condition. Do not merge.

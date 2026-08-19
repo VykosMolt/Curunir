@@ -702,9 +702,11 @@ class MissionDataStore:
         path = self.payload_dir / digest
         if path.is_dir() and not path.is_symlink():
             raise StoreError(f"payload slot {digest[:12]} is a directory; refusing")
-        if path.is_symlink():
-            path.unlink()
-        elif path.exists():
+        if path.is_symlink() or (path.exists() and not path.is_file()):
+            raise StoreError(
+                f"payload slot {digest[:12]} is not a regular file; refusing"
+            )
+        if path.exists():
             try:
                 if hashlib.sha256(path.read_bytes()).hexdigest() == digest:
                     return digest
@@ -739,6 +741,14 @@ class MissionDataStore:
 
     def export_to(self, directory: str | Path) -> dict[str, Any]:
         directory = Path(directory)
+        dest = directory.resolve()
+        root = self.root.resolve()
+        if dest == root or dest == root.parent \
+                or dest.is_relative_to(root) or root.is_relative_to(dest):
+            raise StoreError(
+                "export dest must not be the store root, inside the store, "
+                "or an ancestor of the store (review R31B-1)"
+            )
         # Staging-atomic (review R30B-1): never mutate dest until the
         # backup is complete. In-place rewrite left dest looking like a
         # store after a dest-member refusal or crash mid-payload.
