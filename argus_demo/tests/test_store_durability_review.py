@@ -342,6 +342,34 @@ def test_create_refuses_leftover_payload_fifo(tmp_path):
         MissionDataStore.create(root, "fresh-store", T0)
 
 
+def test_export_refuses_matching_planted_export_manifest_on_a_live_store(tmp_path):
+    # R34B-1: a hash-matched export_manifest plant on a live store
+    # (next hop of empty/`{}`/symlink) must not rmtree the live root.
+    import hashlib
+    import json
+    from curunir_operational.canonical import canonical_line
+    from curunir_operational.store import StoreError
+    from operational_support import make_store
+    live = make_store(tmp_path, name="live")
+    digest = live.put_payload(b"live evidence must survive matching plant")
+    src = make_store(tmp_path, name="src")
+    src.put_payload(b"source payload")
+    events = (live.root / "events.jsonl").read_bytes()
+    meta = (live.root / "store_meta.json").read_bytes()
+    planted = {
+        "export_format": "curunir-operational-open-export-v1",
+        "store_id": live.meta["store_id"],
+        "events_sha256": hashlib.sha256(events).hexdigest(),
+        "store_meta_sha256": hashlib.sha256(meta).hexdigest(),
+        "payloads": {},
+    }
+    (live.root / "export_manifest.json").write_bytes(
+        (canonical_line(planted) + "\n").encode("utf-8"))
+    with pytest.raises(StoreError):
+        src.export_to(live.root)
+    assert live.get_payload(digest) == b"live evidence must survive matching plant"
+
+
 def test_export_refuses_planted_export_manifest_on_a_live_store(tmp_path):
     # R33B-1: a dest-side plant of export_manifest.json must not make
     # export_to rmtree a live store.

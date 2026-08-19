@@ -1024,6 +1024,17 @@ Two independent Grok reviewers attacked `87e113a`. **BOTH DIFF_BROKEN.**
 - **R33B-2 (MAJOR)** — `build_pace_bundle` skipped the dest-overlap helper. Now uses `_refuse_dest_store_overlap`.
 - **R33B-3 (MAJOR)** — `create()` allowed a hardlink of a live store's empty `events.jsonl` (R30 empty-leftover). Repair: leftover events with `st_nlink > 1` are refused.
 
-## Round 34 — continue from here
+## Round 34 — WHOLE-TRANCHE attack found the next hop; repaired
 
-Do not merge. Attack this repair as Round 34 with two fresh whole-tranche reviewers.
+Two independent Grok reviewers attacked `988b1a0`. **BOTH DIFF_BROKEN.**
+
+- **R34A-1 (MAJOR)** — embed collector was top-level only; nested `positions.relationship_ids` / analogue carriers were invisible. Repair: recursive key-shape walk.
+- **R34A-2 (MAJOR)** — `relationship_version` was absent from the resolver; VERSIONED families are now swept and relation endpoints followed.
+- **R34A-3 (MAJOR)** — `link_claim` / hypothesis `_reappend` skipped `append_version`, kept PUBLIC marking, and quoted SPECIAL rationale in history. Repair: floor on linked claims; cite the claim by id only.
+- **R34A-4 (MAJOR)** — `section.option_ids` official-status gate ran only for SUPPORTED/INFERENTIAL sentences. Repair: section-level, any sentence class.
+- **R34B-1 (MAJOR)** — a hash-matched `export_manifest` plant on a live store still allowed `export_to` rmtree. Repair: refuse dest with `.append.lock` or a different `store_id`.
+- **R34B-2 (MAJOR)** — dangling dest-slot symlink had `exists() is False`, skipped preflight, prefix committed. Repair: `is_symlink()` first.
+
+## Round 35 — continue from here
+
+Do not merge. Attack this repair as Round 35 with two fresh whole-tranche reviewers.

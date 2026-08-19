@@ -136,6 +136,7 @@ _REFERENCED_RECORD_ID_FIELDS: tuple[tuple[str, str], ...] = (
     ("fabric_manifestation", "manifestation_id"),
     ("object_version", "object_id"),
     ("information_requirement", "requirement_id"),
+    ("relationship_version", "relationship_id"),
 )
 
 
@@ -172,28 +173,44 @@ def resolve_reference_markings(store, refs) -> list:
     if not callable(records_of):
         return out
     latest_by_id = getattr(store, "latest_by_id", None)
-    for family, id_field in _REFERENCED_RECORD_ID_FIELDS:
+    families: list[tuple[str, str]] = list(_REFERENCED_RECORD_ID_FIELDS)
+    seen_families = {family for family, _ in families}
+    versioned = getattr(store, "VERSIONED_RECORD_TYPES", {}) or {}
+    for family, id_field in versioned.items():
+        if family not in seen_families:
+            families.append((family, id_field))
+            seen_families.add(family)
+    # relationship → endpoint objects may be added mid-walk; a second
+    # pass resolves them (review R34A-2).
+    for _pass in range(3):
         if not ids:
             break
-        # last-wins / latest-by-id: a PUBLIC v1 then SPECIAL v2 must
-        # resolve as SPECIAL (review R26A-3). First-match on records_of
-        # was the write-down.
-        current: dict = {}
-        if callable(latest_by_id):
-            try:
-                current = latest_by_id(family, id_field)
-            except Exception:
-                current = {}
-        if not current and callable(records_of):
-            for rec in records_of(family):
-                rid = rec.get(id_field)
-                if rid in ids:
-                    current[rid] = rec
-        for rid in list(ids):
-            rec = current.get(rid)
-            if rec is not None and isinstance(rec.get("marking"), dict):
-                out.append(rec["marking"])
+        for family, id_field in families:
+            if not ids:
+                break
+            current: dict = {}
+            if callable(latest_by_id):
+                try:
+                    current = latest_by_id(family, id_field)
+                except Exception:
+                    current = {}
+            if not current and callable(records_of):
+                for rec in records_of(family):
+                    rid = rec.get(id_field)
+                    if rid in ids:
+                        current[rid] = rec
+            for rid in list(ids):
+                rec = current.get(rid)
+                if rec is None:
+                    continue
+                if isinstance(rec.get("marking"), dict):
+                    out.append(rec["marking"])
                 ids.discard(rid)
+                for endpoint in (rec.get("source_object_id"),
+                                 rec.get("target_object_id"),
+                                 rec.get("entity_object_id")):
+                    if isinstance(endpoint, str) and endpoint:
+                        ids.add(endpoint)
     return out
 
 
@@ -300,27 +317,42 @@ _EMBED_SKIP_KEYS = frozenset({
 })
 _ID_KEY_SUFFIXES = ("_id", "_ids", "_ref", "_refs")
 _PAIR_KEYS = frozenset({"lineage", "depends_on", "proposition_refs", "edges"})
+_EXTRA_EMBED_KEYS = frozenset({"caused_by", "from_id", "to_id"})
 
 
 def _is_embed_key(key: str) -> bool:
     return key not in _EMBED_SKIP_KEYS and (
-        key.endswith(_ID_KEY_SUFFIXES) or key in _PAIR_KEYS)
+        key.endswith(_ID_KEY_SUFFIXES) or key in _PAIR_KEYS
+        or key in _EXTRA_EMBED_KEYS)
 
 
-def _collect_embed_ids(value, ids: list[str]) -> None:
-    if isinstance(value, str) and value:
-        ids.append(value)
+def _walk_embed_ids(value, ids: list[str], *, key: str | None = None,
+                    deny: frozenset[str] = frozenset()) -> None:
+    """Walk nested mappings so positions.relationship_ids / analogue
+    matched.basis_ids / identity_caveats are collected (review R34A-1)."""
+    if key is not None and (key in deny or key in _EMBED_SKIP_KEYS):
+        return
+    if key is not None and _is_embed_key(key):
+        if isinstance(value, str) and value:
+            ids.append(value)
+            return
+        if isinstance(value, (list, tuple)):
+            for item in value:
+                if isinstance(item, str) and item:
+                    ids.append(item)
+                elif isinstance(item, (list, tuple)) and len(item) == 2 \
+                        and item[1]:
+                    if item[0] != "claim":
+                        ids.append(item[1])
+                elif isinstance(item, Mapping):
+                    _walk_embed_ids(item, ids, deny=deny)
+            return
+    if isinstance(value, Mapping):
+        for nested_key, nested in value.items():
+            _walk_embed_ids(nested, ids, key=nested_key, deny=deny)
     elif isinstance(value, (list, tuple)):
         for item in value:
-            if isinstance(item, str) and item:
-                ids.append(item)
-            elif isinstance(item, (list, tuple)) and len(item) == 2 and item[1]:
-                if item[0] != "claim":
-                    ids.append(item[1])
-            elif isinstance(item, Mapping):
-                for endpoint in (item.get("from_id"), item.get("to_id")):
-                    if endpoint:
-                        ids.append(endpoint)
+            _walk_embed_ids(item, ids, deny=deny)
 
 
 def _embedded_analytic_ids(record) -> tuple[str, ...]:
@@ -331,17 +363,15 @@ def _embedded_analytic_ids(record) -> tuple[str, ...]:
     (title, setting, matched/mismatched detail) so the episode must floor
     the analogue record (review R25A-3).
 
-    Field collection is by key shape, not a per-family instance list, so a
-    new id-bearing field (indicator.desired_subject_ref, variant
-    manifestation_ids) is floored without another map edit (review R33A)."""
+    Collection is recursive key-shape, not a per-family instance list, so a
+    nested id-bearing field (position.relationship_ids, variant
+    manifestation_ids) is floored without another map edit (review R33A /
+    R34A-1)."""
     mapping = _as_mapping(record)
     kind = mapping.get("record_type") or getattr(record, "RECORD_TYPE", "")
     deny = _ASSOCIATION_ONLY_FIELDS.get(kind, frozenset())
     ids: list[str] = []
-    for key, value in mapping.items():
-        if key in deny or not _is_embed_key(key):
-            continue
-        _collect_embed_ids(value, ids)
+    _walk_embed_ids(mapping, ids, deny=deny)
     return tuple(dict.fromkeys(ids))
 
 

@@ -508,3 +508,48 @@ def test_discriminator_create_floors_on_desired_subject_ref(mission):
         desired_attribute="status",
         now=ctx.now_fn(), actor="analyst-a", marking=MARK)
     assert can_view(disc["marking"], CTX_B) is False
+
+
+def test_rejected_option_ids_block_even_on_unresolved_section(mission):
+    # R34A-4: option_ids are report-level; an UNRESOLVED-only section
+    # still cannot present a REJECTED option as a decision option.
+    from curunir_analytic.impact import propose_response_option, review_response_option
+    _, ctx, seeded = mission
+    option = propose_response_option(
+        ctx, objective_id=seeded["objective"]["objective_id"],
+        path_id=seeded["path"]["path_id"],
+        description="Sanction the secret partner CLASSIFIEDOPTION",
+        tradeoffs=("cost",), uncertainty_note="unverified")
+    review_response_option(ctx, option["option_id"], accept=False,
+                           actor_id="supervisor", actor_kind="HUMAN",
+                           note="rejected")
+    claim_id = seeded["status_claim"]["claim_id"]
+    report = create_report(
+        ctx.store, actor="analyst-a", marking=MARK, now=ctx.now_fn(),
+        title="Acme standing dossier", question="Is Acme a viable counterparty?",
+        sections=[
+            {"kind": "key_judgments", "title": "Key judgments",
+             "sentences": [
+                 {"text": "Acme Industri AS holds an ISSUED GLEIF registration.",
+                  "status": "SUPPORTED", "basis_refs": [claim_id]},
+                 {"text": "Ownership structure is unknown.",
+                  "status": "UNRESOLVED",
+                  "unresolved_reason": "no ownership evidence collected"},
+             ]},
+            {"kind": "decision_options", "title": "Options",
+             "option_ids": [option["option_id"]],
+             "sentences": [
+                 {"text": "Options remain to be written.",
+                  "status": "UNRESOLVED",
+                  "unresolved_reason": "decision not yet drafted"},
+             ]},
+        ],
+        state_token=_projection(ctx).state_token)
+    submitted = submit_report(ctx.store, report["report_id"], actor="analyst-a",
+                              marking=MARK, now=ctx.now_fn(), expected_version=1,
+                              state_token="tok")
+    with pytest.raises(ReportValidationError) as raised:
+        approve_report(ctx.store, _projection(ctx, CTX_A), report["report_id"],
+                       actor="supervisor", actor_kind="HUMAN", marking=MARK,
+                       now=ctx.now_fn(), expected_version=submitted["version"])
+    assert "CONTESTED_AS_SETTLED" in {f["code"] for f in raised.value.findings}

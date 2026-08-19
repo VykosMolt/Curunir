@@ -262,6 +262,16 @@ def test_embed_scan_covers_subject_ref_and_variant_carriers():
         "indicator_ids": ("ind-x",),
         "assumption_ids": (),
     })
+    # nested position / analogue carriers (R34A-1)
+    assert "rel-owns-classified" in _embedded_analytic_ids({
+        "record_type": "stakeholder_assessment",
+        "entity_object_id": "obj-public",
+        "positions": ({
+            "relationship_ids": ("rel-owns-classified",),
+            "claim_ids": (),
+            "statement": "holds a stated role",
+        },),
+    })
 
 
 def test_indicator_floors_on_desired_subject_ref(tmp_path):

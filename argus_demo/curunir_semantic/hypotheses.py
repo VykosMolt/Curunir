@@ -64,10 +64,19 @@ def _reappend(store: SemanticStore, hypothesis: Mapping[str, Any], updates: dict
     merged = {**{k: v for k, v in hypothesis.items() if k != "record_type"}, **updates}
     merged["history"] = tuple(hypothesis["history"]) + (history_note,)
     merged["recorded_time"] = now
-    # a re-append NEVER re-classifies: the hypothesis keeps its own marking
-    # (the caller's marking governs only records the caller newly creates)
-    merged["marking"] = marking_from_record(hypothesis["marking"]) \
+    # never re-classify DOWN; raise to cover linked claims / discriminators
+    # (review R34A-3 — link_claim of a SPECIAL claim must not leave a
+    # PUBLIC hypothesis whose history quotes the claim)
+    own = marking_from_record(hypothesis["marking"]) \
         if isinstance(hypothesis.get("marking"), dict) else hypothesis["marking"]
+    from curunir_analytic.substrate import resolve_reference_markings
+    refs = resolve_reference_markings(store, (
+        *merged.get("supporting_claim_ids", ()),
+        *merged.get("contradicting_claim_ids", ()),
+        *merged.get("unresolved_claim_ids", ()),
+        *merged.get("discriminator_ids", ()),
+    ))
+    merged["marking"] = inherited_marking(own, refs)
     merged["version"] = store.next_family_version("hypothesis", "hypothesis_id",
                                                   hypothesis["hypothesis_id"])
     for key in ("assumptions", "unknowns", "supporting_claim_ids", "contradicting_claim_ids",
@@ -96,7 +105,7 @@ def link_claim(store: SemanticStore, hypothesis_id: str, claim_id: str, stance: 
         if other != key:
             updates[other] = tuple(c for c in hypothesis[other] if c != claim_id)
     return _reappend(store, hypothesis, updates,
-                     f"LINKED_{stance.upper()}:{claim_id[:18]}:{rationale[:80]}",
+                     f"LINKED_{stance.upper()}:{claim_id[:18]}",
                      now=now, actor=actor, marking=marking)
 
 

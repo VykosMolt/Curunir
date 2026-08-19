@@ -157,6 +157,22 @@ def _refuse_dest_store_overlap(
     if _looks_like_complete_store(dest):
         if not (allow_export_replace and _looks_like_open_export(dest)):
             raise StoreError("dest is an existing store; refusing")
+        if (dest / ".append.lock").exists():
+            raise StoreError("dest is a live store; refusing")
+        if source_root is not None:
+            try:
+                src_id = json.loads(
+                    (Path(source_root) / "store_meta.json").read_bytes()
+                    .decode("utf-8")).get("store_id")
+                dst_id = json.loads(
+                    (dest / "store_meta.json").read_bytes()
+                    .decode("utf-8")).get("store_id")
+            except (ValueError, UnicodeDecodeError, OSError):
+                raise StoreError("dest is an existing store; refusing")
+            if src_id != dst_id:
+                raise StoreError(
+                    "dest is an export of a different store; refusing"
+                )
     for ancestor in dest.parents:
         if _looks_like_complete_store(ancestor):
             raise StoreError("dest is inside an existing store; refusing")
@@ -641,8 +657,8 @@ class MissionDataStore:
                 for body in bodies:
                     digest = hashlib.sha256(body).hexdigest()
                     slot = self.payload_dir / digest
-                    if slot.exists() and (
-                            slot.is_symlink() or slot.is_dir() or not slot.is_file()):
+                    if slot.is_symlink() or slot.is_dir() \
+                            or (slot.exists() and not slot.is_file()):
                         raise StoreError(
                             f"payload slot {digest[:12]} is not a regular file; "
                             f"refusing the bundle rather than applying a prefix"

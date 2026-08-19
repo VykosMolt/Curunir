@@ -216,8 +216,41 @@ def validate_report(projection: MissionProjection, report: Mapping[str, Any]) ->
                 return family, record
         return None
 
+    from curunir_analytic.contracts import SETTLED_SUPPORT_STATUSES
+    from curunir_semantic.contracts import HYPOTHESIS_SETTLED_SUPPORT_STATUSES
+    _SETTLED = {
+        **SETTLED_SUPPORT_STATUSES,
+        "hypothesis": HYPOTHESIS_SETTLED_SUPPORT_STATUSES,
+    }
+
+    def _dead(family: str, status: str) -> bool:
+        if not status:
+            return False
+        live = _SETTLED.get(family)
+        if live is None:
+            return False
+        return status not in live
+
     for section in report["sections"]:
-        for sentence in section["sentences"]:
+        # option_ids are report-level decision options — not only live
+        # when a SUPPORTED/INFERENTIAL sentence happens to sit nearby
+        # (review R34A-4)
+        sentences = section["sentences"]
+        anchor = sentences[0] if sentences else {
+            "sentence_id": section.get("section_id") or "section",
+            "text": section.get("title") or "section",
+        }
+        for option_id in section.get("option_ids") or ():
+            rec = projection.get("response_option", option_id)
+            if rec is None:
+                store = getattr(projection, "store", None)
+                if store is not None and hasattr(store, "current_analytics"):
+                    rec = store.current_analytics("response_option").get(option_id)
+            if rec is not None and _dead("response_option", rec.get("status") or ""):
+                finding("CONTESTED_AS_SETTLED", anchor,
+                        f"response_option {rec.get('status')} is not live "
+                        "support; the report presents it as a decision option")
+        for sentence in sentences:
             status = sentence["status"]
             refs = tuple(sentence.get("basis_refs", ()))
             if status == "SUPPORTED" and not refs:
@@ -275,24 +308,6 @@ def validate_report(projection: MissionProjection, report: Mapping[str, Any]) ->
                                 f"{item.get('subject_kind')} "
                                 f"{item.get('subject_id')} has open review; "
                                 "the sentence renders it settled")
-                # official vocabs: settled-support is declared next to the
-                # status tuples; the complement is not-settled (R32 leftover)
-                from curunir_analytic.contracts import SETTLED_SUPPORT_STATUSES
-                from curunir_semantic.contracts import (
-                    HYPOTHESIS_SETTLED_SUPPORT_STATUSES,
-                )
-                _SETTLED = {
-                    **SETTLED_SUPPORT_STATUSES,
-                    "hypothesis": HYPOTHESIS_SETTLED_SUPPORT_STATUSES,
-                }
-                def _dead(family: str, status: str) -> bool:
-                    if not status:
-                        return False
-                    live = _SETTLED.get(family)
-                    if live is None:
-                        return False
-                    return status not in live
-
                 for _fam, rec in resolved:
                     if _dead(_fam, rec.get("status") or ""):
                         finding("CONTESTED_AS_SETTLED", sentence,
