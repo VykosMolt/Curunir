@@ -993,6 +993,17 @@ Two independent Grok reviewers attacked `a8cacc7`. **BOTH DIFF_BROKEN.**
 
 B-4 remains LIMITATION. **Not yet independently re-attacked.**
 
-## Round 32 — WHOLE-TRANCHE confirmatory attack (pending)
+## Round 32 — WHOLE-TRANCHE attack found the next hop; partial repair on HEAD
 
-Same stopping condition. Do not merge.
+Two independent Grok reviewers attacked `f5ea3c7`. **BOTH DIFF_BROKEN.** Partial repair landed with this commit:
+
+- **R32A C-1** — `_DEAD` now includes assumption UNCERTAIN/SUPERSEDED, objective ABANDONED/COMPLETED, stakeholder WITHDRAWN, path RESOLVED.
+- **R32A C-2** — `section.option_ids` join the cited set for Ck2 and validate_report.
+- **R32B-1** — `import_from` refuses dest inside or containing a complete store.
+- **R32B-2** — `get_payload` refuses FIFO/non-regular slots.
+
+Still open from R32 (not yet closed): derive `_DEAD` from unused official tuples rather than a map; discriminator CREATE floor on `desired_subject_ref`; `_embedded_analytic_ids` for warning/indicator/assumption/theme lineage; `build_delta_bundle` dest-overlap; import fsync of events/meta; `create()` leftover payload FIFOs.
+
+## Round 33 — continue from here
+
+Do not merge. Dispatch two fresh whole-tranche reviewers against this HEAD after any remaining R32 items, or attack the leftovers first.

@@ -244,7 +244,8 @@ def validate_report(projection: MissionProjection, report: Mapping[str, Any]) ->
                 store = getattr(projection, "store", None)
                 walked: set = set()
                 cite = {i for i in (*sentence.get("basis_refs", ()),
-                                    *sentence.get("assumption_ids", ()))
+                                    *sentence.get("assumption_ids", ()),
+                                    *section.get("option_ids", ()))
                         if i}
                 if store is not None:
                     related_for_sentence |= _related_claim_ids(store, cite, walked)
@@ -289,8 +290,11 @@ def validate_report(projection: MissionProjection, report: Mapping[str, Any]) ->
                     "hypothesis": {"REJECTED", "SUPERSEDED", "DISPUTED"},
                     "response_option": {"REJECTED", "WITHDRAWN"},
                     "forecast_indicator": {"EXPIRED_UNFIRED", "RETIRED"},
-                    "analytic_assumption": {"INVALIDATED"},
-                    "impact_path": {"STALE", "INVALIDATED"},
+                    "analytic_assumption": {"INVALIDATED", "UNCERTAIN",
+                                            "SUPERSEDED"},
+                    "impact_path": {"STALE", "INVALIDATED", "RESOLVED"},
+                    "mission_objective": {"ABANDONED", "COMPLETED", "SUPERSEDED"},
+                    "stakeholder_assessment": {"WITHDRAWN", "SUPERSEDED"},
                 }
                 def _dead(family: str, status: str) -> bool:
                     return bool(status) and status in _DEAD.get(family, ())
@@ -594,6 +598,7 @@ def _raw_hidden_basis_concerns(store: WorkbenchStore, projection: MissionProject
         for sentence in section["sentences"]:
             cited |= set(sentence.get("basis_refs", ()))
             cited |= set(sentence.get("assumption_ids", ()))
+            cited |= set(section.get("option_ids", ()))
     if not cited:
         return []
     from curunir_operational.access import can_view

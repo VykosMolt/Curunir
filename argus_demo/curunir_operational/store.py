@@ -719,6 +719,10 @@ class MissionDataStore:
         path = self.payload_dir / digest
         if path.is_dir():                                 # a directory-named slot (B-6)
             raise StoreError(f"payload {digest[:12]} is a directory; refusing to serve it")
+        if path.is_symlink() or (path.exists() and not path.is_file()):
+            raise StoreError(
+                f"payload {digest[:12]} is not a regular file; refusing to serve it"
+            )
         body = path.read_bytes()                          # FileNotFoundError if genuinely absent
         if hashlib.sha256(body).hexdigest() != digest:
             # a torn/corrupt payload must fail LOUDLY, never be served as silent
@@ -908,6 +912,24 @@ class MissionDataStore:
             # a file/symlink-to-file target would make mkdir + the rollback unlink
             # raise NotADirectoryError untyped; refuse it up front as a StoreError (M1)
             raise StoreError(f"import target exists and is not a directory: {new_root}")
+        dest = new_root.resolve()
+        if dest == Path(source_dir).resolve():
+            raise StoreError("import dest must not be the export source")
+        # dest must not be inside a complete store (e.g. its payload_dir)
+        # or contain one as a child (e.g. the store's parent) — rmtree
+        # would destroy live evidence (review R32B-1)
+        for ancestor in (dest, *dest.parents):
+            if ancestor != dest and _looks_like_complete_store(ancestor):
+                raise StoreError(
+                    "import dest is inside an existing store; refusing"
+                )
+        if dest.exists():
+            for meta in dest.rglob("store_meta.json"):
+                child = meta.parent
+                if child != dest and _looks_like_complete_store(child):
+                    raise StoreError(
+                        "import dest contains an existing store; refusing"
+                    )
         if _looks_like_complete_store(new_root):
             raise StoreError(f"refusing to import over an existing store: {new_root}")
         # Crash-atomic install (review R25B-2): write into a sibling staging
