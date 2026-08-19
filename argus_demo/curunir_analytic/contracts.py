@@ -885,6 +885,7 @@ SETTLED_SUPPORT_STATUSES: dict[str, frozenset[str]] = {
     "stakeholder_assessment": frozenset(("ACTIVE",)),
     "influence_assertion": frozenset(("ACTIVE",)),
     "historical_analogue": frozenset(("PROPOSED", "REVIEWED")),
+    "discriminator": frozenset(("SATISFIED",)),
 }
 OFFICIAL_STATUS_VOCABULARIES: dict[str, tuple[str, ...]] = {
     "analytic_forecast": FORECAST_STATUSES,
@@ -899,6 +900,7 @@ OFFICIAL_STATUS_VOCABULARIES: dict[str, tuple[str, ...]] = {
     "stakeholder_assessment": STAKEHOLDER_STATUSES,
     "influence_assertion": INFLUENCE_STATUSES,
     "historical_analogue": ANALOGUE_STATUSES,
+    "discriminator": ("OPEN", "REQUESTED", "SATISFIED", "UNSATISFIABLE"),
 }
 PROBABILITY_BANDS = ("REMOTE", "POSSIBLE", "LIKELY", "VERY_LIKELY")
 TIME_PRESSURES = ("DISTANT", "NEAR", "CLOSE", "IMMINENT", "PASSED")

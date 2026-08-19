@@ -279,6 +279,10 @@ def validate_report(projection: MissionProjection, report: Mapping[str, Any]) ->
                 if rec is None and hasattr(store, "current_hypotheses"):
                     rec = store.current_hypotheses().get(wid)
                     fam = "hypothesis"
+                if rec is None and hasattr(store, "latest_by_id"):
+                    rec = store.latest_by_id("discriminator", "discriminator_id").get(wid)
+                    if rec is not None:
+                        fam = "discriminator"
                 if rec is not None and _dead(fam, rec.get("status") or ""):
                     finding("CONTESTED_AS_SETTLED", anchor,
                             f"{fam} {rec.get('status')} is not live "
@@ -308,6 +312,10 @@ def validate_report(projection: MissionProjection, report: Mapping[str, Any]) ->
                 finding("HISTORICAL_AS_CURRENT", anchor,
                         "every supporting claim's validity has ended; "
                         "the report presents it as current")
+            elif expired and not any(s.get("temporal_scope") for s in sentences):
+                finding("TEMPORAL_SCOPE_REQUIRED", anchor,
+                        f"{len(expired)}/{len(live_claims)} supporting claims "
+                        "have ended validity; state the temporal scope")
         for sentence in sentences:
             status = sentence["status"]
             refs = tuple(sentence.get("basis_refs", ()))
@@ -390,6 +398,11 @@ def validate_report(projection: MissionProjection, report: Mapping[str, Any]) ->
                         if rec is None and hasattr(store, "current_hypotheses"):
                             rec = store.current_hypotheses().get(wid)
                             fam = "hypothesis"
+                        if rec is None and hasattr(store, "latest_by_id"):
+                            rec = store.latest_by_id(
+                                "discriminator", "discriminator_id").get(wid)
+                            if rec is not None:
+                                fam = "discriminator"
                         if rec is not None and _dead(fam, rec.get("status") or ""):
                             finding("CONTESTED_AS_SETTLED", sentence,
                                     f"{fam} {rec.get('status')} is not live "
@@ -422,6 +435,20 @@ def validate_report(projection: MissionProjection, report: Mapping[str, Any]) ->
                         finding("PARTIALLY_HISTORICAL_BASIS", sentence,
                                 f"{len(expired)}/{len(claims)} supporting claims "
                                 "have ended validity", blocking=False)
+            if sentence.get("asserts_independent"):
+                claims = [r for f, r in resolved if f == "semantic_claim"]
+                if not claims and store is not None:
+                    related = _related_claim_ids(
+                        store, set(sentence.get("basis_refs") or ())
+                        | set(sentence.get("assumption_ids") or ()))
+                    current = store.current_claims() if hasattr(store, "current_claims") else {}
+                    claims = [current[cid] for cid in related if cid in current]
+                best = max((c.get("independent_basis_count", 0) for c in claims),
+                           default=0)
+                if best < 2:
+                    finding("INDEPENDENCE_MISREPRESENTED", sentence,
+                            f"independent basis count is {best}; the sentence "
+                            "asserts independent corroboration")
             if status == "SUPPORTED":
                 for family, record in resolved:
                     if family not in _OBSERVATIONAL_BASIS:
@@ -434,15 +461,6 @@ def validate_report(projection: MissionProjection, report: Mapping[str, Any]) ->
                                 f"claim {record['claim_id']} is "
                                 f"{record['epistemic_state']}; the sentence must "
                                 "be EXPLICITLY_INFERENTIAL")
-                # independence honesty
-                if sentence.get("asserts_independent"):
-                    claims = [r for f, r in resolved if f == "semantic_claim"]
-                    best = max((c.get("independent_basis_count", 0) for c in claims),
-                               default=0)
-                    if best < 2:
-                        finding("INDEPENDENCE_MISREPRESENTED", sentence,
-                                f"independent basis count is {best}; the sentence "
-                                "asserts independent corroboration")
             # forecast probability fidelity (any status): EVERY quoted
             # numeric probability must equal some AUTHORED version of one of
             # the forecasts the sentence references (union across refs, so an

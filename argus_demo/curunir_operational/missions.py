@@ -62,13 +62,17 @@ class MissionWorkflow:
                          priority: str, rationale: str, required_evidence_type: str, owning_role: str,
                          closure_criteria: str, due_time: str | None, recorded_time: str,
                          marking: Marking, actor: str, source_alert_id: str | None = None) -> dict[str, Any]:
+        from curunir_analytic.substrate import resolve_reference_markings
+        affected = tuple(affected_ids) + ((source_alert_id,) if source_alert_id else ())
+        create_marking = inherited_marking(
+            marking, resolve_reference_markings(self.store, affected))
         requirement = InformationRequirement(
             requirement_id=digest_id("req", question, mission_context),
             mission_context=mission_context, question=question,
-            affected_ids=tuple(affected_ids) + ((source_alert_id,) if source_alert_id else ()),
+            affected_ids=affected,
             priority=priority, rationale=rationale, required_evidence_type=required_evidence_type,
             owning_role=owning_role, created_time=recorded_time, due_time=due_time,
-            status="OPEN", closure_criteria=closure_criteria, marking=marking,
+            status="OPEN", closure_criteria=closure_criteria, marking=create_marking,
         )
         latest = None
         for existing in self.store.records_of("information_requirement"):
@@ -104,11 +108,14 @@ class MissionWorkflow:
                          affected_ids: tuple[str, ...], due_time: str | None,
                          recorded_time: str, marking: Marking, actor: str) -> dict[str, Any]:
         self._status_of("requirement", requirement_id)  # must exist
+        from curunir_analytic.substrate import resolve_reference_markings
+        req_marking = inherited_marking(
+            marking, resolve_reference_markings(self.store, affected_ids))
         request = EvidenceRequest(
             request_id=digest_id("evreq", requirement_id, request_kind, detail),
             requirement_id=requirement_id, request_kind=request_kind, detail=detail,
             affected_ids=tuple(affected_ids), status="OPEN", created_time=recorded_time,
-            due_time=due_time, marking=marking,
+            due_time=due_time, marking=req_marking,
         )
         self.store.append("EVIDENCE_REQUEST_RECORDED", request, recorded_time=recorded_time, actor=actor)
         current, _ = self._status_of("requirement", requirement_id)
@@ -122,12 +129,15 @@ class MissionWorkflow:
                     affected_ids: tuple[str, ...], required_action: str, due_time: str | None,
                     depends_on: tuple[str, ...], recorded_time: str, marking: Marking,
                     actor: str) -> dict[str, Any]:
+        from curunir_analytic.substrate import resolve_reference_markings
+        task_marking = inherited_marking(
+            marking, resolve_reference_markings(self.store, affected_ids))
         task = AnalystTask(
             task_id=digest_id("task", required_action, assigned_actor, recorded_time),
             assigned_role=assigned_role, assigned_actor=assigned_actor, task_type=task_type,
             affected_ids=tuple(affected_ids), required_action=required_action, status="ASSIGNED",
             created_time=recorded_time, due_time=due_time, depends_on=tuple(depends_on),
-            evidence_refs=(), completion_result="", marking=marking,
+            evidence_refs=(), completion_result="", marking=task_marking,
         )
         self.store.append("TASK_RECORDED", task, recorded_time=recorded_time, actor=actor)
         return task.to_record()
@@ -149,11 +159,15 @@ class MissionWorkflow:
             raise MissionWorkflowError("explicit failure or abandonment requires a stated reason")
         if subject_kind == "analyst_task" and to_status == "DONE" and actor_id != record["assigned_actor"]:
             raise MissionWorkflowError("only the assigned actor can complete the task")
+        from curunir_analytic.substrate import resolve_reference_markings
+        trans_marking = inherited_marking(
+            marking, resolve_reference_markings(
+                self.store, (subject_id, *tuple(evidence_refs))))
         transition = WorkflowTransition(
             transition_id=digest_id("wft", subject_kind, subject_id, to_status, recorded_time),
             subject_kind=subject_kind, subject_id=subject_id, from_status=current, to_status=to_status,
             actor_id=actor_id, actor_kind=actor_kind, evidence_refs=tuple(evidence_refs), note=note,
-            recorded_time=recorded_time, marking=marking,
+            recorded_time=recorded_time, marking=trans_marking,
         )
         self.store.append("WORKFLOW_TRANSITIONED", transition, recorded_time=recorded_time, actor=actor_id)
         return transition.to_record()

@@ -223,9 +223,17 @@ def _refuse_dest_store_overlap(
             raise StoreError(
                 "dest is an ancestor of the source store; refusing"
             )
+    def _protected(root: Path) -> bool:
+        return (_is_live_store_root(root)
+                or _looks_like_complete_store(root)
+                or _dest_has_payload_evidence(root)
+                or ((root / "events.jsonl").is_file()
+                    and not (root / "events.jsonl").is_symlink()
+                    and (root / "events.jsonl").stat().st_size > 0))
+
     if _is_live_store_root(dest):
         raise StoreError("dest is a live store; refusing")
-    if _looks_like_complete_store(dest) or _dest_has_payload_evidence(dest):
+    if _protected(dest):
         if not (allow_export_replace and _looks_like_open_export(dest)):
             raise StoreError("dest is an existing store; refusing")
         if source_root is not None:
@@ -242,12 +250,6 @@ def _refuse_dest_store_overlap(
                 raise StoreError(
                     "dest is an export of a different store; refusing"
                 )
-    def _protected(root: Path) -> bool:
-        return (_is_live_store_root(root)
-                or _looks_like_complete_store(root)
-                or _dest_has_payload_evidence(root)
-                or (root / "events.jsonl").exists())
-
     for ancestor in dest.parents:
         if _protected(ancestor):
             raise StoreError("dest is inside an existing store; refusing")
@@ -986,7 +988,7 @@ class MissionDataStore:
             with self._append_lock():
                 self._catch_up()
                 _export_write_bytes(staging / "events.jsonl",
-                                    self.events_path.read_bytes())
+                                    _read_regular_bytes(self.events_path))
                 payload_hashes: dict[str, str] = {}
                 for path in sorted(self.payload_dir.iterdir()):
                     name = path.name

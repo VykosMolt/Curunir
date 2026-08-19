@@ -1067,6 +1067,15 @@ Two independent Grok reviewers attacked `659d3fe`. **BOTH DIFF_BROKEN.**
 - **Dest ancestor FIFO meta** — overlap now treats live lock / payloads / `events.jsonl` as protected, not only parseable `store_meta`.
 - **Remaining FIFO reads** — import payload slots and PACE manifest.
 
-## Round 38 — continue from here
+## Round 38 — WHOLE-TRANCHE attack found the next hop; repaired
 
-Do not merge. Attack this repair as Round 38 with two fresh whole-tranche reviewers.
+Two independent Grok reviewers attacked `5e5281b`. **BOTH DIFF_BROKEN.**
+
+- **Ck1 CREATE** — `open_requirement` / `request_evidence` / `assign_task` / workflow `transition` now floor on referenced ids at CREATE, not only exists-path fold.
+- **Ck2** — `asserts_independent` and mixed-expired `TEMPORAL_SCOPE_REQUIRED` run regardless of sentence class; `discriminator` is in SETTLED (`SATISFIED` only) and walked via `latest_by_id`.
+- **Ck3 dest-self** — `_protected` (lock / complete / payloads / non-empty regular `events.jsonl`) applies to dest itself; empty leftover events still retryable.
+- **Ck3 export FIFO** — `export_to` copies events through `_read_regular_bytes`.
+
+## Round 39 — continue from here
+
+Do not merge. Attack this repair as Round 39 with two fresh whole-tranche reviewers.
