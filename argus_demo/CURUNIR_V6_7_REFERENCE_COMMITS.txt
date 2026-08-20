@@ -1,0 +1,45 @@
+Clean base: 97053154fd73707fdb9b66509bf4490a8f5a4ce6
+Archived reference: archive/curunir-v67-round38-33330efe6ae3
+
+da44a460fd926749d84c45b9360b1b6bfa9b6985 fix(curunir): generalize information-flow marking across background runtime paths
+73e9111cb06831683054f1a93c662a0ddaa83f45 feat(curunir): SSRF egress guard, provider egress gate, backup + subprocess hardening
+b46432eb258de67b2a81061c3271b0d55da87a94 feat(curunir): cryptographic actor identity and signed actions (Ed25519)
+6c6dbb6483c75442f0a1db6482de51a7ca0fdad1 feat(curunir): browser cryptographic identity last mile (WebCrypto Ed25519)
+577c14100164f5429152543e6ff69c2cb881ae79 harden(curunir): resource governance & limit-truthfulness (V6.7 §3)
+fbe7af0ff8aeba5dead2fcefde1665cf8f09469f harden(curunir): failure recovery, migration safety, clean reconstruction (V6.7 §4-7)
+db74b62d7a8ac366a677e67db3ee11b282b6c5bc test(curunir): bounded endurance exercise (V6.7 §8)
+9c014a31da1c83603b366cb2266469f4389ab508 test(curunir): integrated mission survives crash+restore with signatures (V6.7 §14/§9)
+f714c9ec7827c6ed5ff747a9fd7fd4467e1636cb fix(curunir): repair all adversarial-review findings (V6.7 continuation)
+4eabe4646fa022a91611d002529703c5e85b6946 fix(curunir): four-eyes must not over-restrict a reviewer who rejected
+6268515bb2728d1d287345eb5cc44628e0642d38 fix(curunir): repair confirmatory-review findings (V6.7 round 2)
+4183091aa1d9b3a6b31c47183749cb62e671d66d fix(curunir): repair round-4 convergence-check findings (2 MAJOR over-corrections)
+f8a0049c465889d098ff5654ffbc3284884f5aa9 fix(curunir): repair round-5 CRITICAL — F8 fault boundary by data provenance
+eda60d61b91692e3592ce2c4db89d380f17f057a fix(curunir): repair round-7 CRITICAL — scrub source surrogates at the edge
+7b59e5e85af1f79dbf44c3e1936b74699ddcd246 fix(curunir): close the surrogate class in the semantic plane (round 10)
+fc909f6bf4609a668694b1c134b54bf8c22af3a3 fix(curunir): close surrogate class at provider+workbench render; import/watch durability (round 12)
+193af2c9496d768b315ec0d1f0018dcaf749ef70 fix(curunir): close 4 MAJOR from round-13 audit + correct a false premise (round 14)
+8af85a3c2fdd2c8e3a7de81000067173d048584e fix(curunir): close the non-finite-float twin + 2 more render vectors (round 16)
+b8213d3d97cf95ae2a926c6fa4e0a4529012c62e fix(curunir): close the unswept halves of NEW-C + F-P1, self-review (round 18)
+04dbc3478aace879b2bb1b5f9cc6329b146b7802 fix(curunir): make _scrub_output total + strict import parse, self-review (round 20)
+9d48cd0e4b7a84995ef6050e91f0944db5b3350f fix(curunir): close 5 MAJOR from the two-reviewer round 21 (round 22)
+24f97f42958af7d3d71a94fb11c0dcc57a4e1a2a fix(curunir): scrub non-str dict KEYS through _scrub_output (N-1 sibling)
+72b3696c540259d328bac3c0714ddd0a03471dfa fix(curunir): don't require store_meta_sha256 in the import-manifest key check
+9d0760de26ad1cadb468f1d70d0848e0bb4910f2 fix(curunir): root-cause pass — close the classes, not the instances (round 23)
+06060c0a26b8401a2c63052977769d3ba0f344d3 fix(curunir): repair the root-cause diff the confirmatory attack broke (round 24)
+f16db69addbd4d5a590776975c3760f25099b004 docs(curunir): V6.7 handoff — verdict, stopping condition, next fresh review
+5b5125a061689e3a3b8dd9bc42c1338adfaf1db1 fix(curunir): close round-25 confirmatory findings at the chokepoints
+cf7d685fde0cc3c0fb1afc18ea37c56e88f41529 fix(curunir): close round-26 whole-tranche findings at the chokepoints
+8a36d87b2879cc46dbeb48915257c6b57a1e3272 docs(curunir): point the handoff at the round-26 repair
+9a77e9a9d297056cf786e707d02cc0678be0ec55 fix(curunir): close round-27 whole-tranche findings at the chokepoints
+0de882dcd7afc2903be6566bf4112302835584ce fix(curunir): close round-28 whole-tranche findings at the chokepoints
+c5a21c320ddbb88bf9516bf9759706a34cebbdb4 fix(curunir): close round-29 whole-tranche findings at the chokepoints
+a8cacc7c3214fbc1da610cf70ee4fef231904373 fix(curunir): close round-30 whole-tranche findings at the chokepoints
+f5ea3c78acf7fdb7cc54c3db21aeb60dc48e082b fix(curunir): close round-31 whole-tranche findings at the chokepoints
+9b8320052364acd80448185bb8a90005f956b05a fix(curunir): start round-32 closures (option_ids, import dest overlap)
+87e113a5fd470194ea22a90c4bb7e02c59fe3958 fix(curunir): close remaining round-32 leftovers at the chokepoints
+988b1a0a27b7cfe6fcf038085d4879298d807671 fix(curunir): close round-33 whole-tranche findings at the chokepoints
+8870569c69018cd74f2db0e45f76b7438e8a9bc3 fix(curunir): close round-34 whole-tranche findings at the chokepoints
+e1cd93727eb2e594d23a18ef5049ffe8c9786f79 fix(curunir): close round-35 whole-tranche findings at the chokepoints
+659d3fecb1e683635d088fef3c7060ad0cedd92c fix(curunir): close round-36 whole-tranche findings at the chokepoints
+5e5281b77a0ae6047e063c7913e9a2817d0f20d2 fix(curunir): close round-37 whole-tranche findings at the chokepoints
+33330efe6ae3504150b012c88bfd1934f0871136 fix(curunir): close round-38 whole-tranche findings at the chokepoints

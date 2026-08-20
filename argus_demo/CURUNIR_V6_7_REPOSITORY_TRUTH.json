@@ -1,0 +1,84 @@
+{
+  "captured_date": "2026-08-21",
+  "repository_root": "/home/moloch/Saulot",
+  "foreground": {
+    "branch": "feature/curunir-v67-hardening",
+    "head": "33330efe6ae3504150b012c88bfd1934f0871136",
+    "status": {
+      "modified": 14,
+      "untracked": 382,
+      "porcelain_v1_z_sha256_after_freeze": "b12eb62947fbad959c157c0f66ff8dc7699421722ea9fcc90f6d1eb23d0345de",
+      "interpretation": "Dirty unrelated user work is present. It was not copied, staged, reset, or modified by the rewrite setup."
+    }
+  },
+  "main": {
+    "head": "97053154fd73707fdb9b66509bf4490a8f5a4ce6",
+    "subject": "fix(curunir): close the two derivation surfaces the root fix missed (5th review)",
+    "parent": "023348bbe26bbbe0284c317429acaf89988a1144"
+  },
+  "v6_6_terminal": {
+    "commit": "97053154fd73707fdb9b66509bf4490a8f5a4ce6",
+    "verified_as_pre_v6_7_base": true,
+    "evidence": [
+      "It is main HEAD.",
+      "It is the merge base of main and the archived V6.7 branch.",
+      "It is the sole parent of the first V6.7 commit da44a460fd926749d84c45b9360b1b6bfa9b6985.",
+      "The V6.7 branch contains 42 commits after it and main contains zero commits not in the V6.7 branch."
+    ]
+  },
+  "v6_7_reference": {
+    "historical_branch": "feature/curunir-v67-hardening",
+    "head": "33330efe6ae3504150b012c88bfd1934f0871136",
+    "tree": "36effa85d29f450c18a54f6803c85a8287cf183a",
+    "archival_ref": "refs/heads/archive/curunir-v67-round38-33330efe6ae3",
+    "commits_after_base": 42,
+    "round_at_head": 38,
+    "merge_state": "NOT_CONVERGED",
+    "commits_file": "CURUNIR_V6_7_REFERENCE_COMMITS.txt",
+    "review_artifacts": [
+      "CURUNIR_V6_7_FINDINGS.md",
+      "CURUNIR_V6_7_SECURITY.md",
+      "CURUNIR_V6_7_HANDOFF.md",
+      "CURUNIR_RECONSTRUCTION.md"
+    ],
+    "prompt_discrepancy": "The prompt described approximately 37 rounds. Repository HEAD is an explicit round-38 repair and its handoff requires round 39; it is not converged."
+  },
+  "rewrite": {
+    "branch": "feature/curunir-v67-clean-rewrite",
+    "worktree": "/home/moloch/Saulot/.worktrees/curunir-v67-clean-rewrite",
+    "base": "97053154fd73707fdb9b66509bf4490a8f5a4ce6",
+    "initial_status": "clean"
+  },
+  "tags": [
+    {"name": "report-surface-audit-v0", "object": "b78bcdc56a794c37b75c6f69d6ce117d51a897e2"},
+    {"name": "report-surface-v0-weak", "object": "5b702227897c1d01abd01a4e4fb8c64fbd61f708"},
+    {"name": "tiny256-story-capsule-v0", "object": "e1783279ed52f685165ed0892a46f4ec5cd2469d"}
+  ],
+  "tracked_structure": {
+    "base_files": 1012,
+    "reference_files": 1049,
+    "base_test_files": 213,
+    "reference_test_files": 233,
+    "product_packages": [
+      "curunir_operational",
+      "curunir_fabric",
+      "curunir_semantic",
+      "curunir_analytic",
+      "curunir_workbench"
+    ],
+    "v6_7_added_package": "curunir_identity",
+    "external_kernel_mount": "argus_demo/argus"
+  },
+  "baseline_measurement": {
+    "command_shape": "python -m pytest tests/ -q -p no:cacheprovider with the exact tree first on PYTHONPATH and the external argus kernel mount second",
+    "accepted_base_collected": 5543,
+    "accepted_base_result": {"passed": 362, "skipped": 5179, "failed": 2},
+    "archived_v6_7_collected": 5843,
+    "archived_v6_7_result": {"passed": 362, "skipped": 5479, "failed": 2},
+    "failures": [
+      "tests/test_codec_stage2_field_head_study.py::test_no_symbolic_inverse",
+      "tests/test_neural_carrier_no_symbolic_decoder.py::test_capsule_package_has_no_forbidden_inverse_or_payload_decoder"
+    ],
+    "reproducibility_defect": "The tracked tests/conftest.py autouse database fixture skips no_db tests when Postgres is absent, and pytest.ini is not tracked. The archived handoff's 6509-pass number is not reproducible from its clean tracked checkout. The rewrite must make its non-DB suite independently runnable and must continue to report the two accepted-baseline capsule failures separately."
+  }
+}
