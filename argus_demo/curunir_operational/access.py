@@ -13,6 +13,8 @@ from typing import Any, Mapping
 
 ROLE_RANK = {"OBSERVER": 0, "ANALYST": 1, "SUPERVISOR": 2}
 ACTOR_KINDS = ("HUMAN", "SERVICE")
+MOST_RESTRICTIVE_ROLE = max(ROLE_RANK, key=ROLE_RANK.get)
+UNJOINABLE_SEAL_COMPARTMENT = "curunir:unjoinable-seal"
 
 
 @dataclass(frozen=True)
@@ -39,7 +41,8 @@ class Marking:
 
 def marking_from_record(record: Mapping[str, Any]) -> Marking:
     return Marking(record["owning_authority"], tuple(record.get("compartments", ())),
-                   tuple(record.get("releasability", ())), record.get("min_role", "OBSERVER"),
+                   tuple(record.get("releasability", ())),
+                   record.get("min_role") or MOST_RESTRICTIVE_ROLE,
                    tuple(record.get("caveats", ())))
 
 
@@ -59,6 +62,8 @@ class AccessContext:
         unknown = [r for r in self.roles if r not in ROLE_RANK]
         if unknown:
             raise ValueError(f"unknown roles: {unknown}")
+        if UNJOINABLE_SEAL_COMPARTMENT in self.compartments:
+            raise ValueError("the reserved deny-all compartment cannot be granted")
 
     @property
     def max_role_rank(self) -> int:
@@ -93,6 +98,47 @@ def can_view(marking: Marking | Mapping[str, Any] | None, context: AccessContext
 
 def visible(records: list[dict[str, Any]], context: AccessContext, marking_key: str = "marking") -> list[dict[str, Any]]:
     return [r for r in records if can_view(r.get(marking_key), context)]
+
+
+def _deny_all_seal(markings: list[Marking]) -> Marking:
+    compartments = {UNJOINABLE_SEAL_COMPARTMENT}
+    caveats: list[str] = []
+    for marking in markings:
+        compartments.update(marking.compartments)
+        caveats.extend(marking.caveats)
+    caveats.append("SEALED_UNJOINABLE_MARKINGS")
+    return Marking(
+        owning_authority=markings[0].owning_authority,
+        compartments=tuple(sorted(compartments)),
+        releasability=(),
+        min_role=MOST_RESTRICTIVE_ROLE,
+        caveats=tuple(dict.fromkeys(caveats)),
+    )
+
+
+def inherited_marking(
+    base: Marking,
+    references: list[Marking | Mapping[str, Any] | None],
+) -> Marking:
+    """Total high-water join for background/derived records.
+
+    Interactive reclassification calls :func:`most_restrictive` directly and
+    receives a loud refusal when one marking cannot express the conjunction.
+    Background derivation must keep running without writing down, so the same
+    unrepresentable join is recorded under a reserved deny-all seal.
+    """
+    markings = [base]
+    for reference in references:
+        if reference is None:
+            continue
+        markings.append(
+            reference if isinstance(reference, Marking)
+            else marking_from_record(reference)
+        )
+    try:
+        return most_restrictive(markings)
+    except ValueError:
+        return _deny_all_seal(markings)
 
 
 def most_restrictive(markings: list[Marking]) -> Marking:

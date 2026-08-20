@@ -1,0 +1,13 @@
+# Product and test environment used by the V6.7 terminal validation.
+# The inherited argus kernel is a separately hash-pinned source dependency.
+psycopg[binary]==3.3.4
+python-dotenv==1.2.2
+cryptography==44.0.0
+fastapi==0.138.0
+uvicorn==0.49.0
+pydantic==2.13.4
+httpx==0.28.1
+pytest==9.1.1
+playwright==1.62.0
+
+# Optional live-path system dependency: poppler-utils supplies pdftotext.

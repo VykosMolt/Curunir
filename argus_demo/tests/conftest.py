@@ -29,6 +29,18 @@ _parts = conninfo_to_dict(_base)
 _TEST_DB = os.environ.get("ARGUS_TEST_DB", "argus_test")
 ADMIN_DSN = make_conninfo(**{**_parts, "dbname": "postgres"})
 TEST_DSN = make_conninfo(**{**_parts, "dbname": _TEST_DB})
+_DB_AVAILABLE = False
+_DB_SKIP_REASON = ""
+
+
+def pytest_configure(config):
+    config.addinivalue_line(
+        "markers", "no_db: test does not require the ARGUS Postgres fixture")
+
+
+def _session_requires_db(request) -> bool:
+    return any(item.get_closest_marker("no_db") is None
+               for item in getattr(request.session, "items", ()))
 
 
 def _ensure_database() -> None:
@@ -40,22 +52,35 @@ def _ensure_database() -> None:
 
 
 @pytest.fixture(scope="session", autouse=True)
-def _db_setup():
+def _db_setup(request):
+    global _DB_AVAILABLE, _DB_SKIP_REASON
+    if not _session_requires_db(request):
+        _DB_SKIP_REASON = "No selected tests require the ARGUS Postgres fixture."
+        yield
+        return
     try:
         _ensure_database()
     except psycopg.OperationalError as exc:  # no server reachable
-        pytest.skip(f"Postgres not reachable at {ADMIN_DSN!r}: {exc}. "
-                    f"Run `docker compose up -d` first.", allow_module_level=True)
+        _DB_SKIP_REASON = (f"Postgres not reachable at {ADMIN_DSN!r}: {exc}. "
+                           "Run `docker compose up -d` first.")
+        yield
+        return
     # Point the action handlers at the test database. python-dotenv does not
     # override an already-set env var, so this wins over .env.
     os.environ["DATABASE_URL"] = TEST_DSN
     db.init_db(reset=True, dsn=TEST_DSN)
+    _DB_AVAILABLE = True
     yield
 
 
 @pytest.fixture(autouse=True)
-def clean_db():
+def clean_db(request):
     """Truncate every table before each test for isolation."""
+    if request.node.get_closest_marker("no_db") is not None:
+        yield
+        return
+    if not _DB_AVAILABLE:
+        pytest.skip(_DB_SKIP_REASON)
     with psycopg.connect(TEST_DSN, autocommit=True) as conn:
         with conn.cursor() as cur:
             cur.execute("select tablename from pg_tables where schemaname = 'public'")
