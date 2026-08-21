@@ -40,6 +40,39 @@ review, then found one sibling write-down and one retry-semantics defect:
 | `V67-REV2-C1` | Critical | Arming a SPECIAL indicator copied its description into a PUBLIC forecast version; later updates left the leaking version visible in history. | Forecast folding now records only the indicator ID. The indicator-prose lock plants separate secrets in description and rationale and inspects every PUBLIC-visible forecast version. |
 | `V67-REV2-m1` | Minor | Session-capacity refusal consumed an otherwise valid, verified challenge. | Authentication restores the pending challenge only when capacity admission refuses; the retry lock proves the same signed nonce succeeds after capacity is released. |
 
-The second reviewer made no repository edits.  Closure of these findings
-requires fresh independent review of the new repair commit; this document
-does not claim that third review has occurred.
+The second reviewer made no repository edits.
+
+## Third review and acceptance
+
+Grok 4.6 xhigh independently reviewed repair commit
+`dcbba239d222173da66abe0e974b25400864490b` read-only and returned
+`ACCEPT` / `MERGE`.  It found no critical, major, or minor defect.  The
+reviewer independently established all of the following:
+
+- SPECIAL indicator description and rationale are absent from every
+  PUBLIC-visible forecast version, transition, and review item across
+  `APPLY_PROBABILITY`, `REVIEW_ONLY`, multiple forecasts, idempotent re-arm,
+  and firing;
+- restoring the old description interpolation makes the history-wide lock
+  fail, while an irrelevant indicator-history perturbation remains stable;
+- session-capacity refusal preserves the verified nonce without changing a
+  victim session, the same signature succeeds once after capacity is
+  released, and deleting nonce restoration makes that retry lock fail;
+- expired, invalid-signature, and wrong-actor challenges retain their
+  pre-existing consume-on-attempt behavior, actor-owned eviction remains
+  confined to the actor, and four concurrent newcomers cannot evict the
+  victim;
+- both retained terminal reports have the recorded hashes and agree on 130
+  focused tests, 630 product-plane tests, 5,676 full-suite tests, zero
+  rewrite-only nonpasses, zero outcome-kind changes, and identical clean
+  reconstruction identities.
+
+The accepted nonblocking notes are that indicator-owned `ARMED` transitions
+may quote their own SPECIAL description, PUBLIC forecasts retain an
+association-only indicator ID, and invalid or confused authentication
+attempts consume unguessable one-time nonces.  The reviewer did not rerun the
+complete terminal validator or live network tests; it hash-checked the two
+primary engineer terminal reports and executed focused causal, concurrency,
+identity, and product probes.  It made no repository, ref, worktree, or
+dependency edits.  This independent disposition closes the review gate for
+the executable tree at `dcbba239d222173da66abe0e974b25400864490b`.
