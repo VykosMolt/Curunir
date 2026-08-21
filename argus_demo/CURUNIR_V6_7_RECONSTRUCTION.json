@@ -1,0 +1,27 @@
+{
+  "format": "curunir-v6.7-reconstruction-v1",
+  "repository_layout": {
+    "package_root": "argus_demo",
+    "tracked_source": "git archive of the requested commit"
+  },
+  "external_kernel": {
+    "availability": "operator-supplied; this repository has no download locator",
+    "mount_path": "argus_demo/argus",
+    "identity_algorithm": "sha256 over sorted Python source paths and bytes as path NUL bytes NUL",
+    "python_file_count": 140,
+    "tree_sha256": "4c173df7412952b8318b7838a06ee991638fd9144eee2be36232c64aecfb7906"
+  },
+  "runtime": {
+    "implementation": "CPython",
+    "major_minor": "3.12",
+    "platform": "Linux x86_64, glibc 2.28 or newer",
+    "requirements_file": "argus_demo/requirements.txt",
+    "requirements_sha256": "c38db687b51b28ba785f608db4e7bcbd0d9da4564dc1ee84af04641daac0ac04"
+  },
+  "system_dependencies": {
+    "pdftotext": "optional live PDF extraction path; missing binary is a recorded bounded failure",
+    "playwright_chromium": "required only for browser-marked validation; install with playwright install chromium",
+    "postgresql": "required only for DB-marked legacy tests; absent service is reported as skipped"
+  },
+  "canonical_command": "uv run --python 3.12 --with-requirements requirements.txt python tools/reconstruct_v67.py --kernel /path/to/pinned/argus --output /tmp/curunir-v67-reconstructed"
+}
