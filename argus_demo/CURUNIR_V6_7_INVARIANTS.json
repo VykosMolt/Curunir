@@ -176,10 +176,10 @@
     {
       "id": "V67-RESOURCE-002",
       "name": "bounded_work_and_fault_provenance",
-      "protected_property": "Hostile input cannot cause unbounded fetch, parse, retry, fan-out, subprocess output, pending-auth state, or provider serialization. Source/content/network faults are contained as source failures; local custody, memory, and store-integrity faults propagate.",
+      "protected_property": "Hostile input cannot cause unbounded fetch, address failover, redirect time, parse, retry, fan-out, subprocess output, pending-auth state, or provider serialization. Source/content/network faults are contained as source failures; local custody, memory, and store-integrity faults propagate.",
       "objects_resources": ["connector bodies", "RSS/XML", "pdftotext", "processing retries", "pivot proposals", "auth maps", "provider outputs"],
       "trust_boundary": "hostile content or remote failure to local availability and truthful blame",
-      "canonical_enforcement_point": "connector/executor provenance boundary, shared XML admission guard, streaming bounded PDF subprocess wrapper, semantic retry budget, pivot cap, session caps, and strict provider-response admission",
+      "canonical_enforcement_point": "one transport deadline shared across address attempts and redirects, connector/executor provenance boundary, shared XML admission guard, streaming bounded PDF subprocess wrapper, semantic retry budget, pivot cap, session caps, and strict provider-response admission",
       "historical_motivators": ["F3/F6 RSS DTD", "F5 auth bounds", "F8 rounds 2/4/5/7", "F8-E1/E2/E3", "semantic poison retry", "fan-out cap", "pdftotext output bound", "N-1 provider totality"],
       "regression_tests": ["tests/v67/test_egress_and_resources.py", "tests/v67/test_semantic_resource_limits.py", "tests/test_identity_server.py"],
       "failure_behavior": "Bounded, typed, provenance-correct failure. Local integrity faults stop the operation; a bad remote source cannot abort unrelated plan/watch work.",

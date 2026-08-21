@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import ipaddress
 import json
+import time
 from pathlib import Path
 
 import pytest
@@ -15,7 +16,7 @@ from curunir_fabric.connectors import (ConnectorRequest, EdgarFullTextConnector,
                                        WaybackConnector, WikidataConnector)
 from curunir_fabric.contracts import ManifestationRecord
 from curunir_fabric.transport import (SafePublicTransport, UnsafeUrlError,
-                                      assert_url_safe)
+                                      _request_once, assert_url_safe)
 
 from analytic_support import make_analytic
 from semantic_support import MARK, T0, plant_manifestation
@@ -204,6 +205,65 @@ def test_connection_receives_only_the_prevalidated_address():
     assert result["body"] == b"public"
     assert resolutions == ["public.example"]
     assert requests == [("93.184.216.34",)]
+
+
+def test_address_failover_consumes_one_shared_deadline(monkeypatch):
+    timeouts: list[float] = []
+
+    class Response:
+        status = 200
+
+        @staticmethod
+        def getheaders():
+            return ()
+
+        @staticmethod
+        def read(_size):
+            return b"ok"
+
+    class Connection:
+        sock = None
+
+        def __init__(self, _host, address, _port, timeout):
+            self.address = address
+            timeouts.append(timeout)
+
+        def request(self, *_args, **_kwargs):
+            if self.address == "93.184.216.34":
+                time.sleep(0.02)
+                raise OSError("first address failed")
+
+        @staticmethod
+        def getresponse():
+            return Response()
+
+        @staticmethod
+        def close():
+            return None
+
+    monkeypatch.setattr("curunir_fabric.transport._PinnedHTTPConnection", Connection)
+    status, _, body, _ = _request_once(
+        scheme="http", host="public.example", port=80, target="/",
+        addresses=("93.184.216.34", "93.184.216.35"), request_headers={},
+        timeout_seconds=0.2, maximum_bytes=8)
+    assert status == 200 and body == b"ok"
+    assert len(timeouts) == 2
+    assert timeouts[1] < timeouts[0] - 0.01
+
+
+def test_transport_refuses_a_late_success_past_the_total_deadline():
+    def request_once(**_request):
+        time.sleep(0.02)
+        return 200, {}, b"late", False
+
+    result = SafePublicTransport(
+        resolver=lambda _host, _port: ("93.184.216.34",),
+        request_once=request_once,
+    )(
+        url="https://public.example/", request_headers={},
+        timeout_seconds=0.005, maximum_bytes=8)
+    assert result["body"] == b""
+    assert result["error"] == "TimeoutError: total transport deadline exceeded"
 
 
 def _transport(body: bytes, *, status: int = 200):

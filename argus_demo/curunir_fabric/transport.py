@@ -134,12 +134,16 @@ def _request_once(*, scheme: str, host: str, port: int, target: str,
                   ) -> tuple[int, dict[str, str], bytes, bool]:
     """GET one already-validated hop, connecting only to its pinned addresses."""
     last_error: OSError | None = None
+    deadline = time.monotonic() + timeout_seconds
     for address in addresses:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("validated-address connection deadline exceeded")
         connection: http.client.HTTPConnection
         if scheme == "https":
-            connection = _PinnedHTTPSConnection(host, address, port, timeout_seconds)
+            connection = _PinnedHTTPSConnection(host, address, port, remaining)
         else:
-            connection = _PinnedHTTPConnection(host, address, port, timeout_seconds)
+            connection = _PinnedHTTPConnection(host, address, port, remaining)
         try:
             headers = {str(key): str(value) for key, value in request_headers.items()
                        if str(key).casefold() != "host"}
@@ -152,6 +156,11 @@ def _request_once(*, scheme: str, host: str, port: int, target: str,
                 body = b""
                 truncated = False
             else:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError("response deadline exceeded")
+                if connection.sock is not None:
+                    connection.sock.settimeout(remaining)
                 body = response.read(maximum_bytes + 1)
                 truncated = len(body) > maximum_bytes
                 body = body[:maximum_bytes]
@@ -199,6 +208,9 @@ class SafePublicTransport:
                 return _blocked(
                     f"{type(error).__name__}:{str(error)[:240]}",
                     current, tuple(redirects))
+            if time.monotonic() > deadline:
+                return _blocked("TimeoutError: total transport deadline exceeded",
+                                current, tuple(redirects))
             if status in REDIRECT_STATUSES:
                 location = headers.get("location")
                 if not location:

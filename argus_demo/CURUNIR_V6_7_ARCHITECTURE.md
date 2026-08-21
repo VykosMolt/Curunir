@@ -44,7 +44,8 @@ campaign are outside scope.
    the signed-action audit record is committed only after success.
 8. `curunir_fabric/transport.py` is the only product public-web transport. It
    validates every initial/redirect destination before request, resolves each
-   hop once, and connects only to the validated public address set. Connector
+   hop once, connects only to the validated public address set, and spends one
+   total deadline across address failover, response, and redirects. Connector
    overrides remain an offline-test seam, not a second production transport.
 9. `curunir_analytic/providers.py` resolves both declared input references and
    record identifiers carried in provider cargo against raw state before the
