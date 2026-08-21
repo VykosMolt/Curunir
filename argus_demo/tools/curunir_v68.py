@@ -2396,7 +2396,7 @@ def _v67_report_findings(v67: Mapping[str, Any], executable_sha: str) \
     from tools.validate_v67 import (
         MAXIMUM_FOCUSED_SKIPS, MAXIMUM_FULL_SKIPS_WITHOUT_POSTGRES,
         MAXIMUM_PRODUCT_SKIPS, MINIMUM_FOCUSED_TESTS, MINIMUM_FULL_TESTS,
-        MINIMUM_PRODUCT_TESTS,
+        MINIMUM_PRODUCT_TESTS, PRODUCT_BASELINE_DESELECT,
     )
     findings: list[dict[str, Any]] = []
 
@@ -2437,7 +2437,25 @@ def _v67_report_findings(v67: Mapping[str, Any], executable_sha: str) \
         add("V67_PRODUCT_RESULT_INVALID", product)
 
     baseline = _read_json(PACKAGE_ROOT / "CURUNIR_V6_7_BASELINE_NONPASSING.json")
+    if clean.get("requirements_sha256") != baseline["harness"]["requirements_sha256"]:
+        add("V67_RECONSTRUCTION_REQUIREMENTS_MISMATCH",
+            clean.get("requirements_sha256"))
+
+    def arithmetic_valid(result: Mapping[str, Any]) -> bool:
+        fields = ("tests", "passed", "skipped", "failed", "errors")
+        return all(type(result.get(field)) is int and result[field] >= 0 for field in fields) \
+            and result["tests"] == sum(result[field]
+                                       for field in ("passed", "skipped", "failed", "errors"))
+
+    if not arithmetic_valid(focused):
+        add("V67_FOCUSED_ARITHMETIC_INVALID")
+    if not arithmetic_valid(product):
+        add("V67_PRODUCT_ARITHMETIC_INVALID")
+    if product.get("deselected_accepted_baseline_nodes") != list(PRODUCT_BASELINE_DESELECT):
+        add("V67_PRODUCT_DESELECTION_INVALID")
     full = v67.get("full_repository", {})
+    if not arithmetic_valid(full):
+        add("V67_FULL_ARITHMETIC_INVALID")
     current = full.get("nonpassing_nodeids", [])
     outcomes = full.get("nonpassing_outcomes", {})
     if not isinstance(current, list) or not all(isinstance(item, str) for item in current):
@@ -2456,6 +2474,9 @@ def _v67_report_findings(v67: Mapping[str, Any], executable_sha: str) \
         if isinstance(outcomes, dict) else ["nonpassing_outcomes is not an object"]
     if not isinstance(outcomes, dict) or set(outcomes) != current_set:
         add("V67_NONPASSING_OUTCOME_SET_INVALID")
+    elif full.get("failed") != sum(value == "failure" for value in outcomes.values()) \
+            or full.get("errors") != sum(value == "error" for value in outcomes.values()):
+        add("V67_NONPASSING_OUTCOME_ARITHMETIC_INVALID")
     if outcome_changes:
         add("V67_OUTCOME_KIND_CHANGES", outcome_changes)
     expected_set_hash = _sha256_bytes(("\n".join(sorted(current_set)) + "\n").encode())
@@ -2464,6 +2485,8 @@ def _v67_report_findings(v67: Mapping[str, Any], executable_sha: str) \
     if full.get("rewrite_only_nonpassing") != [] \
             or full.get("outcome_kind_changes") != []:
         add("V67_REPORTED_REGRESSION_FIELDS_NONEMPTY")
+    if full.get("accepted_baseline_nonpassing_fixed") != len(allowed - current_set):
+        add("V67_ACCEPTED_BASELINE_FIXED_COUNT_INVALID")
     if full.get("tests", 0) < MINIMUM_FULL_TESTS \
             or full.get("skipped", 10**9) > MAXIMUM_FULL_SKIPS_WITHOUT_POSTGRES:
         add("V67_FULL_COLLECTION_BOUNDS_FAILED", {
