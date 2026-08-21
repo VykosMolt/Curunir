@@ -138,15 +138,24 @@ def _diverged_target(store, root, keep_seq):
 
 
 def _truncate_import(store: MissionDataStore, root: Path, keep_seq: int) -> None:
-    store.export_to(root.parent / "_full_export_tmp")
-    events = (root.parent / "_full_export_tmp" / "events.jsonl").read_text().splitlines()
-    root.mkdir(parents=True, exist_ok=True)
-    (root / "payloads").mkdir(exist_ok=True)
     import shutil
-    shutil.copyfile(root.parent / "_full_export_tmp" / "store_meta.json", root / "store_meta.json")
-    (root / "events.jsonl").write_text("\n".join(events[:keep_seq]) + ("\n" if events[:keep_seq] else ""))
-    for payload in (root.parent / "_full_export_tmp" / "payloads").iterdir():
-        shutil.copyfile(payload, root / "payloads" / payload.name)
+    import tempfile
+    # The full store exporter is intentionally one-shot and refuses an existing
+    # path.  Each synthetic truncation therefore gets its own disposable export
+    # root; sharing one scratch path made the second scenario depend on an
+    # unsafe overwrite behavior that V6.7 correctly removed.
+    with tempfile.TemporaryDirectory(
+            prefix=f".{root.name}.full-export.", dir=root.parent) as scratch:
+        full_export = Path(scratch) / "export"
+        store.export_to(full_export)
+        events = (full_export / "events.jsonl").read_text().splitlines()
+        root.mkdir(parents=True, exist_ok=False)
+        (root / "payloads").mkdir()
+        shutil.copyfile(full_export / "store_meta.json", root / "store_meta.json")
+        (root / "events.jsonl").write_text(
+            "\n".join(events[:keep_seq]) + ("\n" if events[:keep_seq] else ""))
+        for payload in (full_export / "payloads").iterdir():
+            shutil.copyfile(payload, root / "payloads" / payload.name)
 
 
 def _fresh_from_open_export(store, export_dir, root, drop_to):

@@ -26,6 +26,9 @@ campaign are outside scope.
    floors a marked record on its previous version and all resolved material
    dependencies before hashing. Import never repairs authenticated history; it
    validates the complete artifact before installation.
+   Access projections independently filter every embedded transition and
+   resolution, and derive visible workflow status only from visible children;
+   a visible parent is never a carrier for a more-restricted audit child.
 4. `curunir_analytic/substrate.py::append_version` and
    `record_transition` remain the domain-facing version/transition APIs, but
    delegate marking admission to the shared security policy. Callers provide

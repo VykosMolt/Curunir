@@ -217,6 +217,17 @@ class Projection:
     # ---- access-aware views -------------------------------------------------
 
     def view(self, context: AccessContext) -> dict[str, Any]:
+        def _visible_transitions(entry: Mapping[str, Any]) -> list[dict[str, Any]]:
+            return [
+                transition for transition in entry.get("transitions", ())
+                if can_view(transition.get("marking"), context)
+            ]
+
+        def _projected_status(entry: Mapping[str, Any]) -> tuple[str, list[dict[str, Any]]]:
+            transitions = _visible_transitions(entry)
+            status = transitions[-1]["to_status"] if transitions else entry["record"]["status"]
+            return status, transitions
+
         objects = []
         visible_ids = set()
         for object_id in sorted(self.objects):
@@ -241,8 +252,9 @@ class Projection:
         for alert_id in sorted(self.alerts):
             entry = self.alerts[alert_id]
             if can_view(entry["record"].get("marking"), context):
-                alerts.append({**entry["record"], "status": entry["status"],
-                               "transitions": entry["transitions"]})
+                status, transitions = _projected_status(entry)
+                alerts.append({**entry["record"], "status": status,
+                               "transitions": transitions})
         recommendations = [r for r in (self.recommendations[k] for k in sorted(self.recommendations))
                            if can_view(r.get("marking"), context)]
         decisions = [d for d in self.decisions if can_view(d.get("marking"), context)]
@@ -253,7 +265,13 @@ class Projection:
             proposal = entry["proposal"]
             if proposal["left_object_id"] in visible_ids and proposal["right_object_id"] in visible_ids \
                     and can_view(proposal.get("marking"), context):
-                proposals.append({**proposal, "resolutions": entry["resolutions"]})
+                proposals.append({
+                    **proposal,
+                    "resolutions": [
+                        resolution for resolution in entry["resolutions"]
+                        if can_view(resolution.get("marking"), context)
+                    ],
+                })
         dependence_groups = [{"group_id": group, "member_object_ids": [m for m in members if m in visible_ids]}
                              for group, members in self.dependence_groups.items()]
         dependence_groups = [g for g in dependence_groups if len(g["member_object_ids"]) >= 2]
@@ -279,23 +297,26 @@ class Projection:
         for requirement_id in sorted(self.requirements):
             entry = self.requirements[requirement_id]
             if can_view(entry["record"].get("marking"), context):
-                requirements.append(_redact_record({**entry["record"], "status": entry["status"],
-                                                    "transitions": entry["transitions"]}))
+                status, transitions = _projected_status(entry)
+                requirements.append(_redact_record({**entry["record"], "status": status,
+                                                    "transitions": transitions}))
         analyst_tasks = []
         for task_id in sorted(self.analyst_tasks):
             entry = self.analyst_tasks[task_id]
             if can_view(entry["record"].get("marking"), context):
+                status, transitions = _projected_status(entry)
                 overdue = bool(entry["record"].get("due_time")
-                               and entry["status"] in ("ASSIGNED", "IN_PROGRESS", "BLOCKED")
+                               and status in ("ASSIGNED", "IN_PROGRESS", "BLOCKED")
                                and parse_time(entry["record"]["due_time"]) < parse_time(self.snapshot_time))
-                analyst_tasks.append(_redact_record({**entry["record"], "status": entry["status"],
-                                                    "overdue": overdue, "transitions": entry["transitions"]}))
+                analyst_tasks.append(_redact_record({**entry["record"], "status": status,
+                                                    "overdue": overdue, "transitions": transitions}))
         evidence_requests = []
         for request_id in sorted(self.evidence_requests):
             entry = self.evidence_requests[request_id]
             if can_view(entry["record"].get("marking"), context):
-                evidence_requests.append(_redact_record({**entry["record"], "status": entry["status"],
-                                                         "transitions": entry["transitions"]}))
+                status, transitions = _projected_status(entry)
+                evidence_requests.append(_redact_record({**entry["record"], "status": status,
+                                                         "transitions": transitions}))
         view = {
             # meta carries an opaque state token, never the raw event sequence:
             # a global seq is a hidden-activity side channel for lower contexts.
