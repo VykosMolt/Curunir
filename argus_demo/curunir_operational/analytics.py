@@ -96,8 +96,10 @@ class _ProviderBase:
             inference_id=inference_id, proposal_type=proposal_type, content=dict(content),
             status="PROPOSED", recorded_time=recorded_time, marking=marking,
         )
-        self.store.append("ANALYTICAL_PROPOSAL_RECORDED", proposal, recorded_time=recorded_time, actor=self.provider_actor)
-        return proposal.to_record()
+        event = self.store.append(
+            "ANALYTICAL_PROPOSAL_RECORDED", proposal,
+            recorded_time=recorded_time, actor=self.provider_actor)
+        return event["record"]
 
 
 class DeterministicRuleProvider(_ProviderBase):

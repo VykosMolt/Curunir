@@ -426,11 +426,12 @@ def resolve_review_item(ctx: CommandContext, item_id: str, *,
         marking=marking_from_record(raw["marking"]),
         version=raw["version"] + 1)
     try:
-        ctx.store.append("REVIEW_ITEM_RECORDED", record,
-                         recorded_time=record.recorded_time, actor=ctx.actor)
+        event = ctx.store.append(
+            "REVIEW_ITEM_RECORDED", record,
+            recorded_time=record.recorded_time, actor=ctx.actor)
     except ValueError as error:
         raise Conflict(str(error)) from error
-    return record.to_record()
+    return event["record"]
 
 
 def resolve_model_proposal(ctx: CommandContext, proposal_id: str, *,
@@ -512,11 +513,12 @@ def assess_hypothesis(ctx: CommandContext, hypothesis_id: str, *,
         "recorded_time": ctx.now_fn(),
         "marking": marking_from_record(raw["marking"])})
     try:
-        ctx.store.append("HYPOTHESIS_RECORDED", record,
-                         recorded_time=record.recorded_time, actor=ctx.actor)
+        event = ctx.store.append(
+            "HYPOTHESIS_RECORDED", record,
+            recorded_time=record.recorded_time, actor=ctx.actor)
     except ValueError as error:
         raise Conflict(str(error)) from error
-    return record.to_record()
+    return event["record"]
 
 
 # ---- forecasts ---------------------------------------------------------------
@@ -777,11 +779,12 @@ def save_view(ctx: CommandContext, *, title: str, view_kind: str,
         definition=dict(definition), recorded_time=now, marking=view_marking,
         version=(existing["version"] + 1) if existing else 1)
     try:
-        ctx.store.append("WORKBENCH_SAVED_VIEW_RECORDED", record,
-                         recorded_time=now, actor=ctx.actor)
+        event = ctx.store.append(
+            "WORKBENCH_SAVED_VIEW_RECORDED", record,
+            recorded_time=now, actor=ctx.actor)
     except ValueError as error:
         raise Conflict(str(error)) from error
-    return record.to_record()
+    return event["record"]
 
 
 # ---- reports -----------------------------------------------------------------

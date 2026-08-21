@@ -12,16 +12,23 @@ from typing import Any, Iterable, Mapping
 from .access import Marking, inherited_marking, marking_from_record
 
 
-# Record identity is explicit.  Actor, model, rule, connector, inference, and
-# proposal identifiers are intentionally absent: they are authority/provenance
-# labels, not material state whose contents are embedded by every mention.
+# Record identity is explicit.  Actor, model, rule, and connector identifiers
+# remain authority/provenance labels; inference and proposal records are
+# included because downstream records can embed their retained outputs.
 PRIMARY_ID_FIELDS: dict[str, str] = {
     "source": "source_id",
     "ingestion": "ingestion_id",
     "object_version": "object_id",
     "relationship_version": "relationship_id",
     "activity": "activity_id",
+    "association_proposal": "proposal_id",
+    "association_resolution": "resolution_id",
+    "inference": "inference_id",
+    "analytical_proposal": "proposal_id",
     "alert": "alert_id",
+    "recommendation": "recommendation_id",
+    "analyst_action": "action_id",
+    "decision": "decision_id",
     "information_requirement": "requirement_id",
     "evidence_request": "request_id",
     "analyst_task": "task_id",
@@ -55,6 +62,8 @@ PRIMARY_ID_FIELDS: dict[str, str] = {
     "analytic_transition": "transition_id",
     "workbench_annotation": "annotation_id",
     "workbench_report": "report_id",
+    "workbench_report_disposition": "disposition_id",
+    "workbench_saved_view": "view_id",
     "actor_key": "key_id",
     "signed_action": "action_id",
 }
@@ -71,6 +80,10 @@ KIND_ALIASES = {
     "forecast": "analytic_forecast",
     "indicator": "forecast_indicator",
     "warning": "strategic_warning",
+    "report": "workbench_report",
+    "report_sentence": "workbench_report",
+    "report_section": "workbench_report",
+    "annotation": "workbench_annotation",
     "objective": "mission_objective",
     "assumption": "analytic_assumption",
     "path": "impact_path",
@@ -135,6 +148,15 @@ FIELD_KINDS: dict[str, tuple[str, ...]] = {
     "indicator_id": ("forecast_indicator",),
     "indicator_ids": ("forecast_indicator",),
     "warning_id": ("strategic_warning",),
+    "alert_id": ("alert",),
+    "alert_ids": ("alert",),
+    "recommendation_id": ("recommendation",),
+    "decision_id": ("decision",),
+    "proposal_id": ("analytical_proposal", "association_proposal"),
+    "inference_id": ("inference",),
+    "reply_to": ("workbench_annotation",),
+    "report_id": ("workbench_report",),
+    "view_id": ("workbench_saved_view",),
     "relationship_id": ("relationship_version",),
     "relationship_ids": ("relationship_version",),
     "source_object_id": ("object_version",),
@@ -149,10 +171,19 @@ FIELD_KINDS: dict[str, tuple[str, ...]] = {
     "supersedes_key_id": ("actor_key",),
 }
 
-TYPED_PAIR_FIELDS = frozenset({"basis_refs", "proposition_refs", "depends_on"})
+TYPED_PAIR_FIELDS = frozenset({"proposition_refs", "depends_on"})
+DYNAMIC_PAIR_FIELDS = (
+    ("subject_kind", "subject_id"),
+    ("target_kind", "target_id"),
+    ("context_kind", "context_id"),
+    ("query_kind", "query_id"),
+    ("from_kind", "from_id"),
+    ("to_kind", "to_id"),
+)
 ANY_REFERENCE_FIELDS = frozenset({
-    "affected_ids", "basis_ids", "caused_by", "evidence_refs",
-    "input_refs", "desired_subject_ref", "from_id", "to_id",
+    "affected_ids", "basis_ids", "basis_refs", "caused_by", "evidence_refs",
+    "input_refs", "desired_subject_ref", "anchor_ref",
+    "correction_of", "duplicate_of", "source_alert_id", "superseded_by",
 })
 PER_RECORD_EXCLUSIONS = {
     # A forecast listing its watchers does not embed their restricted state.
@@ -183,6 +214,12 @@ def material_references(record: Mapping[str, Any]) -> tuple[MaterialReference, .
 
     def walk(value: Any) -> None:
         if isinstance(value, Mapping):
+            for kind_field, id_field in DYNAMIC_PAIR_FIELDS:
+                kind = value.get(kind_field)
+                record_id = value.get(id_field)
+                if isinstance(kind, str) and isinstance(record_id, str) and record_id:
+                    normalized = KIND_ALIASES.get(kind.lower(), kind.lower())
+                    found.add(MaterialReference(normalized, record_id))
             for key, item in value.items():
                 if key in {"marking", "record_type", PRIMARY_ID_FIELDS.get(record_type)}:
                     continue
@@ -198,7 +235,10 @@ def material_references(record: Mapping[str, Any]) -> tuple[MaterialReference, .
                             kind = pair.get("kind")
                             ref = pair.get("ref") or pair.get("id")
                             if isinstance(kind, str) and isinstance(ref, str) and ref:
-                                found.add(MaterialReference(KIND_ALIASES.get(kind, kind), ref))
+                                normalized = KIND_ALIASES.get(kind.lower(), kind.lower())
+                                found.add(MaterialReference(normalized, ref))
+                        elif isinstance(pair, str) and pair:
+                            found.add(MaterialReference("*", pair))
                     continue
                 kinds = FIELD_KINDS.get(key)
                 if kinds:
@@ -217,9 +257,34 @@ def material_references(record: Mapping[str, Any]) -> tuple[MaterialReference, .
     return tuple(sorted(found))
 
 
+def _report_contains(record: Mapping[str, Any], record_id: str) -> bool:
+    for section in record.get("sections", ()) or ():
+        if section.get("section_id") == record_id:
+            return True
+        if any(sentence.get("sentence_id") == record_id
+               for sentence in section.get("sentences", ()) or ()):
+            return True
+    return False
+
+
 def _latest(store: Any, record_type: str, id_field: str, record_id: str) -> dict | None:
-    matches = [record for record in store.records_of(record_type)
-               if record.get(id_field) == record_id]
+    version: int | None = None
+    base_id = record_id
+    if "@v" in record_id:
+        candidate, separator, suffix = record_id.rpartition("@v")
+        if separator and suffix.isdigit():
+            base_id = candidate
+            version = int(suffix)
+    matches = [
+        record for record in store.records_of(record_type)
+        if record.get(id_field) == base_id
+        and (version is None or record.get("version") == version)
+    ]
+    if not matches and record_type == "workbench_report":
+        matches = [
+            record for record in store.records_of(record_type)
+            if _report_contains(record, record_id)
+        ]
     if not matches:
         return None
     return max(matches, key=lambda record: record.get("version", 1))

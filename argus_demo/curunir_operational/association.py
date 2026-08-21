@@ -157,7 +157,9 @@ class AssociationEngine:
             object_type=left["object_type"], features=dict(features), outcome=outcome,
             rationale=rationale, engine_version=ENGINE_VERSION, recorded_time=recorded_time, marking=marking,
         )
-        self.store.append("ASSOCIATION_PROPOSED", proposal, recorded_time=recorded_time, actor=actor)
+        event = self.store.append(
+            "ASSOCIATION_PROPOSED", proposal,
+            recorded_time=recorded_time, actor=actor)
         if outcome == "AUTO_ASSOCIATE":
             self._record_resolution(proposal.proposal_id, "ACCEPTED", actor_id=actor, actor_kind="SERVICE",
                                     rationale="automatic: " + "; ".join(rationale),
@@ -165,7 +167,7 @@ class AssociationEngine:
         elif outcome == "PROPOSE_ASSOCIATION":
             self._relationship(proposal, "POSSIBLY_SAME_AS", "PROPOSED", recorded_time, actor, marking,
                                rationale="; ".join(rationale))
-        return proposal.to_record()
+        return event["record"]
 
     def _relationship(self, proposal: AssociationProposal | Mapping[str, Any], relation_type: str, status: str,
                       recorded_time: str, actor: str, marking: Marking, rationale: str = "") -> None:
@@ -195,7 +197,9 @@ class AssociationEngine:
             proposal_id=proposal_id, resolution=resolution, actor_id=actor_id, actor_kind=actor_kind,
             rationale=rationale, recorded_time=recorded_time, marking=marking,
         )
-        self.store.append("ASSOCIATION_RESOLVED", record, recorded_time=recorded_time, actor=actor_id)
+        event = self.store.append(
+            "ASSOCIATION_RESOLVED", record,
+            recorded_time=recorded_time, actor=actor_id)
         if resolution == "ACCEPTED":
             self._relationship(proposal, "SAME_AS", "ACTIVE", recorded_time, actor_id, marking, rationale)
         elif resolution in ("REJECTED", "SPLIT", "REVERSED"):
@@ -214,7 +218,7 @@ class AssociationEngine:
                         marking=marking, provenance=ProvenanceSummary(mode="OPERATIONAL"), rationale=rationale,
                     )
                     self.store.append("RELATIONSHIP_VERSION_APPENDED", retired, recorded_time=recorded_time, actor=actor_id)
-        return record.to_record()
+        return event["record"]
 
     def resolve(self, proposal_id: str, resolution: str, *, actor_id: str, actor_kind: str,
                 rationale: str, recorded_time: str, marking: Marking) -> dict[str, Any]:

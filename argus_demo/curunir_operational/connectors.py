@@ -89,9 +89,11 @@ class MissionDataConnector:
             quarantined=quarantined, quarantine_reasons=tuple(validation["errors"]) if quarantined else (),
             duplicate_of=duplicate_of, late=late, payload_ref=body_sha, marking=marking,
         )
-        store.append("INGESTION_RECORDED", ingestion, recorded_time=recorded_time, actor=actor)
+        event = store.append(
+            "INGESTION_RECORDED", ingestion,
+            recorded_time=recorded_time, actor=actor)
         outcome_status = "DUPLICATE" if duplicate_of else ("QUARANTINED" if quarantined else "ACCEPTED")
-        return ConnectorOutcome(outcome_status, ingestion.to_record(),
+        return ConnectorOutcome(outcome_status, event["record"],
                                 payload if outcome_status == "ACCEPTED" else None, validation)
 
 

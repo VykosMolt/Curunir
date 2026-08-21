@@ -319,8 +319,10 @@ def normalize_manifestation(store: SemanticStore, manifestation: dict,
         parser="curunir-semantic-normalizer", parser_version=PARSER_VERSION,
         warnings=tuple(warnings), recorded_time=now, marking=marking,
     )
-    store.append("SEMANTIC_DOCUMENT_RECORDED", record, recorded_time=now, actor=actor)
-    return record.to_record()
+    event = store.append(
+        "SEMANTIC_DOCUMENT_RECORDED", record,
+        recorded_time=now, actor=actor)
+    return event["record"]
 
 
 def _pdf_text(data: bytes) -> tuple[str, list[tuple[str, int, int]], list[str]]:

@@ -108,8 +108,10 @@ class WorkflowEngine:
             actor_id=context.actor_id, actor_kind=context.actor_kind, note=note,
             recorded_time=recorded_time, marking=marking,
         )
-        self.store.append("ALERT_TRANSITIONED", transition, recorded_time=recorded_time, actor=context.actor_id)
-        return transition.to_record()
+        event = self.store.append(
+            "ALERT_TRANSITIONED", transition,
+            recorded_time=recorded_time, actor=context.actor_id)
+        return event["record"]
 
     # ---- proposal materialization ------------------------------------------
 
@@ -192,8 +194,10 @@ class WorkflowEngine:
             required_role=content.get("required_role", "ANALYST"), provider_id=provider_id,
             recorded_time=recorded_time, marking=marking,
         )
-        self.store.append("RECOMMENDATION_RECORDED", recommendation, recorded_time=recorded_time, actor=actor)
-        return {**recommendation.to_record(), "created": True}
+        event = self.store.append(
+            "RECOMMENDATION_RECORDED", recommendation,
+            recorded_time=recorded_time, actor=actor)
+        return {**event["record"], "created": True}
 
     def analyst_action(self, *, context: AccessContext, kind: str, subject_kind: str, subject_id: str,
                        note: str, recorded_time: str, marking: Marking) -> dict[str, Any]:
@@ -205,8 +209,10 @@ class WorkflowEngine:
             kind=kind, subject_kind=subject_kind, subject_id=subject_id, note=note,
             recorded_time=recorded_time, marking=marking,
         )
-        self.store.append("ANALYST_ACTION_RECORDED", action, recorded_time=recorded_time, actor=context.actor_id)
-        return action.to_record()
+        event = self.store.append(
+            "ANALYST_ACTION_RECORDED", action,
+            recorded_time=recorded_time, actor=context.actor_id)
+        return event["record"]
 
     def enact_decision_effect(self, decision_id: str, *, object_id: str, attributes_patch: Mapping[str, Any],
                               rationale: str, recorded_time: str, actor: str,
@@ -238,8 +244,10 @@ class WorkflowEngine:
             marking=marking_from_record(current["marking"]),
             provenance=_provenance_from(current.get("provenance", {})),
         )
-        self.store.append("OBJECT_VERSION_APPENDED", updated, recorded_time=recorded_time, actor=actor)
-        return updated.to_record()
+        event = self.store.append(
+            "OBJECT_VERSION_APPENDED", updated,
+            recorded_time=recorded_time, actor=actor)
+        return event["record"]
 
     def decide(self, recommendation_id: str, *, context: AccessContext, state: str, rationale: str,
                recorded_time: str, marking: Marking, modification: str = "") -> dict[str, Any]:
@@ -267,5 +275,7 @@ class WorkflowEngine:
             evidence_snapshot_hash=recommendation["evidence_snapshot_hash"],
             recorded_time=recorded_time, marking=marking,
         )
-        self.store.append("DECISION_RECORDED", decision, recorded_time=recorded_time, actor=context.actor_id)
-        return decision.to_record()
+        event = self.store.append(
+            "DECISION_RECORDED", decision,
+            recorded_time=recorded_time, actor=context.actor_id)
+        return event["record"]

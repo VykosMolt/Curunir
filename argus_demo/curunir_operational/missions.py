@@ -93,11 +93,13 @@ class MissionWorkflow:
                    # a fold escalates priority / widens scope; it never
                    # re-classifies: the record keeps its own marking
                    "marking": marking_from_record(latest["marking"])})
-            self.store.append("REQUIREMENT_RECORDED", updated,
-                              recorded_time=recorded_time, actor=actor)
-            return updated.to_record()
-        self.store.append("REQUIREMENT_RECORDED", requirement, recorded_time=recorded_time, actor=actor)
-        return requirement.to_record()
+            event = self.store.append("REQUIREMENT_RECORDED", updated,
+                                      recorded_time=recorded_time, actor=actor)
+            return event["record"]
+        event = self.store.append(
+            "REQUIREMENT_RECORDED", requirement,
+            recorded_time=recorded_time, actor=actor)
+        return event["record"]
 
     def request_evidence(self, requirement_id: str, *, request_kind: str, detail: str,
                          affected_ids: tuple[str, ...], due_time: str | None,
@@ -109,13 +111,15 @@ class MissionWorkflow:
             affected_ids=tuple(affected_ids), status="OPEN", created_time=recorded_time,
             due_time=due_time, marking=marking,
         )
-        self.store.append("EVIDENCE_REQUEST_RECORDED", request, recorded_time=recorded_time, actor=actor)
+        event = self.store.append(
+            "EVIDENCE_REQUEST_RECORDED", request,
+            recorded_time=recorded_time, actor=actor)
         current, _ = self._status_of("requirement", requirement_id)
         if current == "OPEN":
             self.transition("requirement", requirement_id, "EVIDENCE_PENDING",
                             actor_id=actor, actor_kind="SERVICE", evidence_refs=(request.request_id,),
                             note="evidence requested", recorded_time=recorded_time, marking=marking)
-        return request.to_record()
+        return event["record"]
 
     def assign_task(self, *, assigned_role: str, assigned_actor: str, task_type: str,
                     affected_ids: tuple[str, ...], required_action: str, due_time: str | None,
@@ -128,8 +132,9 @@ class MissionWorkflow:
             created_time=recorded_time, due_time=due_time, depends_on=tuple(depends_on),
             evidence_refs=(), completion_result="", marking=marking,
         )
-        self.store.append("TASK_RECORDED", task, recorded_time=recorded_time, actor=actor)
-        return task.to_record()
+        event = self.store.append(
+            "TASK_RECORDED", task, recorded_time=recorded_time, actor=actor)
+        return event["record"]
 
     def transition(self, subject_kind: str, subject_id: str, to_status: str, *, actor_id: str,
                    actor_kind: str, evidence_refs: tuple[str, ...], note: str,
@@ -154,8 +159,10 @@ class MissionWorkflow:
             actor_id=actor_id, actor_kind=actor_kind, evidence_refs=tuple(evidence_refs), note=note,
             recorded_time=recorded_time, marking=marking,
         )
-        self.store.append("WORKFLOW_TRANSITIONED", transition, recorded_time=recorded_time, actor=actor_id)
-        return transition.to_record()
+        event = self.store.append(
+            "WORKFLOW_TRANSITIONED", transition,
+            recorded_time=recorded_time, actor=actor_id)
+        return event["record"]
 
     def audit_trail(self, subject_kind: str, subject_id: str) -> list[dict[str, Any]]:
         return [t for t in self.store.records_of("workflow_transition")

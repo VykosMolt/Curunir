@@ -95,8 +95,10 @@ def create_report(store: WorkbenchStore, *, actor: str, marking: Marking,
         report_id=report_id, version=1, title=title, question=question,
         author=actor, sections=_sections(report_id, sections), status="DRAFT",
         based_on_state_token=state_token, recorded_time=now, marking=marking)
-    store.append("WORKBENCH_REPORT_RECORDED", record, recorded_time=now, actor=actor)
-    return record.to_record()
+    event = store.append(
+        "WORKBENCH_REPORT_RECORDED", record,
+        recorded_time=now, actor=actor)
+    return event["record"]
 
 
 def _current(store: WorkbenchStore, report_id: str) -> dict:
@@ -134,11 +136,13 @@ def _next_version(store: WorkbenchStore, current: Mapping[str, Any], *,
         marking=marking_from_record(current["marking"]),
         change_note=change_note)
     try:
-        store.append("WORKBENCH_REPORT_RECORDED", record, recorded_time=now, actor=actor)
+        event = store.append(
+            "WORKBENCH_REPORT_RECORDED", record,
+            recorded_time=now, actor=actor)
     except ValueError as error:
         # the store's strict next-version enforcement caught a concurrent writer
         raise ReportConflict(str(error)) from error
-    return record.to_record()
+    return event["record"]
 
 
 def edit_report(store: WorkbenchStore, report_id: str, *, actor: str,
@@ -345,9 +349,10 @@ def _disposition(store: WorkbenchStore, report: Mapping[str, Any], *,
         note=note, validation_sha256=sha256(validation) if validation else "",
         state_token=state_token, dissent_annotation_ids=dissent_ids,
         recorded_time=now, marking=marking)
-    store.append("WORKBENCH_REPORT_DISPOSITION_RECORDED", record,
-                 recorded_time=now, actor=actor)
-    return record.to_record()
+    event = store.append(
+        "WORKBENCH_REPORT_DISPOSITION_RECORDED", record,
+        recorded_time=now, actor=actor)
+    return event["record"]
 
 
 def submit_report(store: WorkbenchStore, report_id: str, *, actor: str,

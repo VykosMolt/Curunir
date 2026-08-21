@@ -53,9 +53,9 @@ def record_transition(ctx: AnalyticContext, *, subject_kind: str, subject_id: st
         transition_type=transition_type, detail=detail[:500], caused_by=caused_by,
         evidence_refs=evidence_refs, from_status=from_status, to_status=to_status,
         recorded_time=now, marking=ctx.marking)
-    ctx.store.append("ANALYTIC_TRANSITION_RECORDED", record,
-                     recorded_time=now, actor=ctx.actor)
-    return record.to_record()
+    event = ctx.store.append("ANALYTIC_TRANSITION_RECORDED", record,
+                             recorded_time=now, actor=ctx.actor)
+    return event["record"]
 
 
 def ensure_transition(ctx: AnalyticContext, *, subject_kind: str, subject_id: str,
@@ -84,8 +84,8 @@ def append_version(ctx: AnalyticContext, record) -> dict[str, Any]:
     """Append one analytical object version through its registered event type."""
     event_type, _ = ANALYTIC_ID_FIELDS[record.RECORD_TYPE]
     now = record.recorded_time
-    ctx.store.append(event_type, record, recorded_time=now, actor=ctx.actor)
-    return record.to_record()
+    event = ctx.store.append(event_type, record, recorded_time=now, actor=ctx.actor)
+    return event["record"]
 
 
 # ---- reverse dependencies -------------------------------------------------
@@ -488,9 +488,9 @@ def record_candidate(ctx: AnalyticContext, *, target_kind: str,
         # its own "target_kind" cannot re-aim the candidate at another kind
         content={**content, "target_kind": target_kind},
         status="PROPOSED", recorded_time=now, marking=ctx.marking)
-    ctx.store.append("ANALYTICAL_PROPOSAL_RECORDED", proposal,
-                     recorded_time=now, actor=ctx.actor)
-    return proposal.to_record()
+    event = ctx.store.append("ANALYTICAL_PROPOSAL_RECORDED", proposal,
+                             recorded_time=now, actor=ctx.actor)
+    return event["record"]
 
 
 def resolve_candidate(ctx: AnalyticContext, proposal_id: str, *, accept: bool,
@@ -526,9 +526,9 @@ def resolve_candidate(ctx: AnalyticContext, proposal_id: str, *, accept: bool,
         proposal_type=latest["proposal_type"], content=dict(latest["content"]),
         status="ACCEPTED" if accept else "REJECTED",
         recorded_time=ctx.now_fn(), marking=proposal_marking)
-    ctx.store.append("ANALYTICAL_PROPOSAL_RECORDED", resolved,
-                     recorded_time=resolved.recorded_time, actor=actor_id)
-    return resolved.to_record()
+    event = ctx.store.append("ANALYTICAL_PROPOSAL_RECORDED", resolved,
+                             recorded_time=resolved.recorded_time, actor=actor_id)
+    return event["record"]
 
 
 def open_identity_caveats(store: AnalyticStore, entity_object_id: str) -> tuple[str, ...]:

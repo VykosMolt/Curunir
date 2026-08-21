@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import itertools
 import math
 
 import pytest
@@ -13,7 +14,11 @@ from curunir_operational.access import (
     marking_from_record,
 )
 from curunir_operational.canonical import canonical_line, parse_json_strict
-from curunir_operational.security import MaterialReference, material_references
+from curunir_operational.security import (
+    MaterialReference,
+    material_references,
+    resolve_reference_records,
+)
 
 pytestmark = pytest.mark.no_db
 
@@ -52,6 +57,36 @@ def test_inherited_marking_never_writes_down_and_unjoinable_is_deny_all():
                       organisation="ORG")
 
 
+def test_inherited_marking_no_write_down_property_across_every_axis():
+    markings = [
+        Marking("ORG", releasability=("PUBLIC",)),
+        Marking("ORG", compartments=("SPECIAL",), releasability=("PUBLIC",)),
+        Marking("ORG", releasability=("REL_A",)),
+        Marking("ORG", releasability=("REL_B",)),
+        Marking("ORG", releasability=()),
+        Marking("ORG", releasability=("PUBLIC",), min_role="SUPERVISOR"),
+        Marking("PARTNER", releasability=("REL_A",)),
+        Marking("PARTNER", releasability=()),
+    ]
+    contexts = [
+        AccessContext("observer", "u", "HUMAN", ("OBSERVER",),
+                      organisation="ORG"),
+        AccessContext("public", "u", "HUMAN", ("ANALYST",),
+                      releasability=("PUBLIC",), organisation="ORG"),
+        AccessContext("special", "u", "HUMAN", ("SUPERVISOR",),
+                      compartments=("SPECIAL",),
+                      releasability=("PUBLIC", "REL_A"), organisation="ORG"),
+        AccessContext("coalition", "u", "HUMAN", ("ANALYST",),
+                      releasability=("REL_A", "REL_B"), organisation="PARTNER"),
+    ]
+    for base, reference in itertools.product(markings, repeat=2):
+        derived = inherited_marking(base, [reference])
+        for context in contexts:
+            if can_view(derived, context):
+                assert can_view(base, context)
+                assert can_view(reference, context)
+
+
 def test_missing_marking_role_reconstructs_to_least_privilege():
     reconstructed = marking_from_record({"owning_authority": "ORG"})
     assert reconstructed.min_role == "SUPERVISOR"
@@ -73,3 +108,58 @@ def test_material_reference_registry_walks_nested_and_typed_fields():
     assert MaterialReference("analytic_assumption", "asm-1") in refs
     assert MaterialReference("relationship_version", "rel-1") in refs
     assert MaterialReference("forecast_indicator", "ind-association-only") not in refs
+
+
+def test_material_reference_registry_covers_dynamic_pairs_and_plain_basis_refs():
+    record = {
+        "record_type": "workbench_report",
+        "report_id": "report-1",
+        "sections": [{
+            "sentences": [{"basis_refs": ["claim-1", "forecast-1"]}],
+        }],
+        "nested_transition": {
+            "subject_kind": "hypothesis",
+            "subject_id": "hyp-1",
+        },
+        "edges": [{
+            "from_kind": "object",
+            "from_id": "object-1",
+            "to_kind": "claim",
+            "to_id": "claim-2",
+        }],
+    }
+    refs = set(material_references(record))
+    assert MaterialReference("*", "claim-1") in refs
+    assert MaterialReference("*", "forecast-1") in refs
+    assert MaterialReference("hypothesis", "hyp-1") in refs
+    assert MaterialReference("object_version", "object-1") in refs
+    assert MaterialReference("semantic_claim", "claim-2") in refs
+
+
+def test_reference_resolution_handles_pinned_versions_and_report_parts():
+    records = {
+        "object_version": [
+            {"record_type": "object_version", "object_id": "obj", "version": 1},
+            {"record_type": "object_version", "object_id": "obj", "version": 2},
+        ],
+        "workbench_report": [{
+            "record_type": "workbench_report",
+            "report_id": "report",
+            "version": 3,
+            "sections": [{
+                "section_id": "section",
+                "sentences": [{"sentence_id": "sentence"}],
+            }],
+        }],
+    }
+
+    class FakeStore:
+        def records_of(self, record_type):
+            return records.get(record_type, [])
+
+    resolved = resolve_reference_records(FakeStore(), [
+        MaterialReference("object_version", "obj@v1"),
+        MaterialReference("workbench_report", "sentence"),
+    ])
+    assert resolved[0]["version"] == 1
+    assert resolved[1]["report_id"] == "report"

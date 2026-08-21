@@ -54,8 +54,9 @@ def record_hypothesis(store: SemanticStore, *, statement: str, case_id: str,
         review_state="HUMAN_REVIEW_PENDING",
         history=("CREATED_WITHOUT_FORCED_WINNER",),
         recorded_time=now, marking=marking)
-    store.append("HYPOTHESIS_RECORDED", record, recorded_time=now, actor=actor)
-    return record.to_record()
+    event = store.append(
+        "HYPOTHESIS_RECORDED", record, recorded_time=now, actor=actor)
+    return event["record"]
 
 
 def _reappend(store: SemanticStore, hypothesis: Mapping[str, Any], updates: dict[str, Any],
@@ -73,8 +74,9 @@ def _reappend(store: SemanticStore, hypothesis: Mapping[str, Any], updates: dict
                 "unresolved_claim_ids", "discriminator_ids"):
         merged[key] = tuple(merged[key])
     record = HypothesisRecord(**merged)
-    store.append("HYPOTHESIS_RECORDED", record, recorded_time=now, actor=actor)
-    return record.to_record()
+    event = store.append(
+        "HYPOTHESIS_RECORDED", record, recorded_time=now, actor=actor)
+    return event["record"]
 
 
 def link_claim(store: SemanticStore, hypothesis_id: str, claim_id: str, stance: str, *,
@@ -312,8 +314,9 @@ def update_discriminator(store: SemanticStore, discriminator: Mapping[str, Any],
     merged["version"] = store.next_family_version(
         "discriminator", "discriminator_id", discriminator["discriminator_id"])
     record = DiscriminatingObservation(**merged)
-    store.append("DISCRIMINATOR_RECORDED", record, recorded_time=now, actor=actor)
-    return record.to_record()
+    event = store.append(
+        "DISCRIMINATOR_RECORDED", record, recorded_time=now, actor=actor)
+    return event["record"]
 
 
 def discriminator_satisfied_by(store: SemanticStore,

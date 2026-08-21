@@ -41,8 +41,10 @@ def create_annotation(store: WorkbenchStore, projection: MissionProjection, *,
         kind=kind, text=text, status="OPEN", resolution_note="",
         reply_to=reply_to, anchor_ref=anchor_ref,
         recorded_time=now, marking=marking, version=1)
-    store.append("WORKBENCH_ANNOTATION_RECORDED", record, recorded_time=now, actor=actor)
-    return record.to_record()
+    event = store.append(
+        "WORKBENCH_ANNOTATION_RECORDED", record,
+        recorded_time=now, actor=actor)
+    return event["record"]
 
 
 def resolve_annotation(store: WorkbenchStore, annotation_id: str, *, actor: str,
@@ -74,10 +76,12 @@ def resolve_annotation(store: WorkbenchStore, annotation_id: str, *, actor: str,
         marking=marking_from_record(current["marking"]),
         version=current["version"] + 1)
     try:
-        store.append("WORKBENCH_ANNOTATION_RECORDED", record, recorded_time=now, actor=actor)
+        event = store.append(
+            "WORKBENCH_ANNOTATION_RECORDED", record,
+            recorded_time=now, actor=actor)
     except ValueError as error:
         raise AnnotationConflict(str(error)) from error
-    return record.to_record()
+    return event["record"]
 
 
 # operational base-view families: target kind -> (view key, id field)
