@@ -25,8 +25,8 @@
   ],
   "operator_protocol": {
     "path": "CURUNIR_V6_8_PILOT_PROTOCOL.md",
-    "sha256": "bed3d0946ee545ea839f0b1089f18bff1170b62a6fa6fd863a8882c5db7de0d1",
-    "revision_note": "V68_TERMINAL_002 is a retained pre-human rehearsal bound to superseded executable 3bc2282; canonical human-pilot root advanced to V68_TERMINAL_003 without changing acceptance criteria.",
+    "sha256": "b1fe7e605cc9538d16f7c40e9f33d623dd5cca313a5d2a708f3641afd3ab62d6",
+    "revision_note": "V68_TERMINAL_001 through V68_TERMINAL_003 are retained pre-human roots. Canonical human-pilot root is V68_TERMINAL_004 after closing remaining M3 path and content-binding residuals. Acceptance criteria are unchanged.",
     "surface": "Existing Curunir workbench, CLI, and HTTP API only; no new UI.",
     "participants": ["one genuine primary human operator", "one distinct genuine human approver for every mission's four-eyes signed disposition"],
     "sequence": ["read frozen mission brief", "authenticate with assigned actor identity", "start instrumented session", "inspect mission state and exact evidence", "record hypotheses and uncertainty", "task and receive collection where required", "revise analysis after evidence update", "record corrections and failures", "produce final artifact", "perform signed disposition", "end session"],

@@ -15,6 +15,7 @@ from tools import curunir_v68 as v68
 from tools.curunir_v68 import (
     APPROVER_ACTOR,
     CONTRACT_PATH,
+    M3_OPERATIONAL_REVIEW_PATHS,
     MISSION_IDS,
     PILOT_LOG,
     PRIMARY_ACTOR,
@@ -23,11 +24,13 @@ from tools.curunir_v68 import (
     REPAIR_CONTRACT_PATH,
     V68Error,
     _append_pilot_event,
+    _licensed_wrapper_around,
     _measurement,
     _offline_replay_guard,
     _repository_identity,
     _session_analysis,
     _sha256_bytes,
+    _supported_sentence_binding,
     _tree_manifest,
     _validate_frozen_authority_files,
     _v67_report_findings,
@@ -193,10 +196,13 @@ def test_instrumented_app_records_bounded_actions_without_bearer(tmp_path: Path)
         json={"participant_role": "PRIMARY_OPERATOR", "note": "begin"},
     )
     assert response.status_code == 200
-    assert client.get(
+    brief = client.get(
         "/v68/pilot/brief",
         headers={"Authorization": f"Bearer {token}"},
-    ).status_code == 200
+    )
+    assert brief.status_code == 200
+    assert "SOURCE_CORRECTED" in brief.json()["operator_gate_notes"][
+        "M2_SOURCE_CORRECTED_REVIEWS"]
     assert verify_pilot_log(root / PILOT_LOG)["valid"] is True
     raw = (root / PILOT_LOG).read_text(encoding="utf-8")
     assert token not in raw
@@ -301,6 +307,65 @@ def test_false_supported_sentence_fails_content_binding(tmp_path: Path):
         item["code"] for item in result["findings"]}
 
 
+class _ClaimProjection:
+    def __init__(self, claim: dict):
+        self._claim = claim
+
+    def get(self, family: str, ref: str):
+        if family == "semantic_claim" and ref == self._claim["claim_id"]:
+            return self._claim
+        return None
+
+    def family(self, _family: str):
+        return []
+
+
+def test_cited_value_cannot_launder_unrelated_prose():
+    claim = {
+        "claim_id": "claim-fixture",
+        "statement": "fixture_status = NOTIONAL PUBLIC EVIDENCE",
+        "object_or_value": "NOTIONAL PUBLIC EVIDENCE",
+    }
+    projection = _ClaimProjection(claim)
+    wrapped = _supported_sentence_binding(projection, {
+        "text": "The current status is NOTIONAL PUBLIC EVIDENCE.",
+        "basis_refs": ["claim-fixture"],
+    })
+    laundered = _supported_sentence_binding(projection, {
+        "text": "The moon is made of green cheese. NOTIONAL PUBLIC EVIDENCE.",
+        "basis_refs": ["claim-fixture"],
+    })
+    negated = _supported_sentence_binding(projection, {
+        "text": "The notice does not report NOTIONAL PUBLIC EVIDENCE.",
+        "basis_refs": ["claim-fixture"],
+    })
+    assert wrapped["content_bound"] is True
+    assert laundered["content_bound"] is False
+    assert negated["content_bound"] is False
+    assert _licensed_wrapper_around(
+        "the current affected facility is bridge n-9", "bridge n-9") is True
+    assert _licensed_wrapper_around(
+        "the moon is made of green cheese bridge n-9", "bridge n-9") is False
+
+
+def test_required_m3_review_paths_exist_on_existing_workbench(tmp_path: Path):
+    root = tmp_path / "m3"
+    prepare_mission("M3_RELIEF_COLLABORATION", root)
+    client = TestClient(create_instrumented_app(root))
+    headers = {"Authorization": f"Bearer {_token(root, PRIMARY_ACTOR)}"}
+    assert client.post("/v68/pilot/start", headers=headers,
+                       json={"participant_role": "PRIMARY_OPERATOR"}).status_code == 200
+    brief = client.get("/v68/pilot/brief", headers=headers)
+    assert brief.status_code == 200
+    assert "GET /api/overview" in brief.json()["operator_gate_notes"][
+        "M3_OPERATIONAL_REVIEW_PATHS"]
+    for path in M3_OPERATIONAL_REVIEW_PATHS:
+        response = client.get(path, headers=headers)
+        assert response.status_code == 200, path
+    assert client.get("/api/family/object_version", headers=headers).status_code == 404
+    assert client.get("/api/family/recommendation", headers=headers).status_code == 404
+
+
 def test_every_present_custody_copy_must_match(tmp_path: Path):
     root = tmp_path / "m2"
     prepare_mission("M2_REGULATORY_CORRECTION", root)
@@ -363,6 +428,10 @@ def test_replay_external_call_guard_actively_denies_network():
     assert counters is not None
     assert counters["network_attempts_blocked"] == 1
     assert counters["network_calls_completed"] == 0
+    with pytest.raises(V68Error, match="network access is denied"):
+        with _offline_replay_guard() as counters:
+            subprocess.run(["true"], check=False)
+    assert counters["network_attempts_blocked"] == 1
 
 
 def _valid_v67_report(executable_sha: str) -> dict:

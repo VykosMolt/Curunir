@@ -8,8 +8,9 @@ it is not a new UI or product plane.
 
 Use one new campaign root prepared by the repaired executable. Roots prepared
 by the reviewed `5bb32e9` executable and the superseded pre-human rehearsal
-roots `V68_TERMINAL_001` and `V68_TERMINAL_002` are retained evidence and are
-not qualification inputs. Never reuse, edit, or delete a mission root after
+roots `V68_TERMINAL_001`, `V68_TERMINAL_002`, and `V68_TERMINAL_003` are
+retained evidence and are not qualification inputs. Never reuse, edit, or
+delete a mission root after
 preparation. `actors.json` contains bearer credentials and stays local; it is
 mode `0600` and is deliberately excluded from final packages.
 
@@ -35,7 +36,7 @@ From `argus_demo` in the V6.8 executable checkout:
 ```bash
 export PYTHONPATH="$PWD:/home/moloch/Saulot/argus_demo"
 export V68_PYTHON=/home/moloch/Saulot/argus_demo/.venv/bin/python
-export CAMPAIGN_ROOT=/home/moloch/Saulot/curunir_v68_runs/V68_TERMINAL_003
+export CAMPAIGN_ROOT=/home/moloch/Saulot/curunir_v68_runs/V68_TERMINAL_004
 $V68_PYTHON -m tools.curunir_v68 prepare-all --campaign-root "$CAMPAIGN_ROOT"
 ```
 
@@ -117,11 +118,12 @@ Primary operator:
    probability version with the evidence update and change reason; do not move
    it merely to satisfy the harness. Project the revised forecast onto the
    frozen objective using the objective id from the brief.
-7. Create a dossier. Every `SUPPORTED` factual sentence must contain the exact
-   cited claim statement or its exact asserted value and cite that visible
-   claim. This deliberately conservative content binding prevents an unrelated
-   true record from laundering false prose. Inspect the claim's exact evidence
-   descent. Inference must be `EXPLICITLY_INFERENTIAL` with a note; gaps must be
+7. Create a dossier. Every `SUPPORTED` factual sentence must *be* the cited
+   claim statement or asserted value, with only licensed connective wrapping
+   (for example "The current affected facility is Bridge N-9."). Additional
+   claims, negations, or unrelated prose in the same sentence fail even if the
+   true value also appears. Inspect the claim's exact evidence descent.
+   Inference must be `EXPLICITLY_INFERENTIAL` with a note; gaps must be
    `UNRESOLVED`.
    Submit it for review.
 8. Record the primary session end.
@@ -151,11 +153,15 @@ Primary operator:
      http://127.0.0.1:PORT/v68/pilot/correction
    ```
 
-5. Reassess the hypotheses. Produce and submit a report whose `SUPPORTED`
-   sentences use the exact claim statement or asserted value, explicitly binds
-   current N-9 to correction v2, labels N-4 historical, and distinguishes
-   observation, inference, and unknowns.
-6. End the primary session. The distinct approver reviews exact evidence,
+5. Open `/api/review`. Resolve every OPEN `SOURCE_CORRECTED` item with
+   `POST /api/commands/review/{item_id}/resolve` (`status=RESOLVED` and a note)
+   before citing current N-9 as `SUPPORTED`; the workbench otherwise treats
+   that claim as contested.
+6. Reassess the hypotheses. Produce and submit a report whose `SUPPORTED`
+   sentences are the cited statement or asserted value with only licensed
+   wrapping, bind current N-9 to correction v2, label N-4 historical, and
+   distinguish observation, inference, and unknowns.
+7. End the primary session. The distinct approver reviews exact evidence,
    approves it using **Approve (validated, human act)** with Ed25519 available,
    and records an `APPROVER` start/end pair.
 
@@ -163,9 +169,11 @@ Primary operator:
 
 Primary cleared operator:
 
-1. Inspect operational objects/events, task state, public route evidence, the
-   SPECIAL engineering evidence, correction history, and generated warning or
-   recommendation.
+1. Inspect operational objects, events, alerts, and recommendations through
+   the existing Overview and Activity views (`GET /api/overview` and
+   `GET /api/activity`). Those records are not `/api/family/{name}` families.
+   Also inspect task state, public route evidence, the SPECIAL engineering
+   evidence, and correction history.
 2. Add an attributable annotation and advance the assigned task through the
    existing workflow. Create the report at the SPECIAL floor before editing;
    a public draft correctly cannot be raised later by citing restricted basis:

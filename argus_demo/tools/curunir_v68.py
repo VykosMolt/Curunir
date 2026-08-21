@@ -53,6 +53,24 @@ APPROVER_ACTOR = "v68-human-approver"
 PUBLIC_ACTOR = "v68-public-observer"
 PREPARATION_ACTOR = "v68-preparation-service"
 
+# Existing workbench routes that expose operational objects, events, alerts,
+# and recommendations.  These names are not MissionProjection families.
+M3_OPERATIONAL_REVIEW_PATHS = ("/api/overview", "/api/activity")
+
+# Remainder tokens allowed around an exact cited statement or asserted value.
+# Any other leftover token means the sentence asserts extra, unbound content.
+_BINDING_WRAPPER_TOKENS = frozenset({
+    "a", "an", "and", "as", "at", "after", "affected", "before", "being",
+    "be", "been", "by", "correction", "corrected", "current", "derivative",
+    "earlier", "english", "equals", "equal", "evidence", "facility", "for",
+    "from", "historical", "in", "is", "its", "it", "name", "named", "notice",
+    "notional", "observation", "observed", "of", "on", "or", "previous",
+    "public", "record", "recorded", "remain", "remained", "remains", "report",
+    "reporting", "reports", "status", "superseded", "support", "supported",
+    "that", "the", "these", "this", "those", "to", "v1", "v2", "value",
+    "version", "was", "were", "with",
+})
+
 M1_MARKING_AUTHORITY = "apple-corporate-visibility"
 M2_MARKING_AUTHORITY = "M2_REGULATORY_CORRECTION"
 M3_MARKING_AUTHORITY = "M3_RELIEF_COLLABORATION"
@@ -1165,6 +1183,27 @@ def create_instrumented_app(root: Path):
             "hypotheses": projection.family("hypothesis"),
             "forecasts": projection.family("analytic_forecast"),
             "collection_routes": projection.family("collection_route"),
+            "operator_gate_notes": {
+                key: value for key, value in {
+                    "SUPPORTED_SENTENCE_BINDING": (
+                        "A SUPPORTED sentence must be the cited statement or "
+                        "asserted value with only licensed connective wrapping; "
+                        "additional prose fails faithfulness."
+                    ),
+                    "M2_SOURCE_CORRECTED_REVIEWS": (
+                        "Resolve OPEN SOURCE_CORRECTED review items via "
+                        "POST /api/commands/review/{item_id}/resolve before "
+                        "citing current N-9 as SUPPORTED. Status RESOLVED, "
+                        "note required."
+                    ) if preparation["mission_id"] == "M2_REGULATORY_CORRECTION" else "",
+                    "M3_OPERATIONAL_REVIEW_PATHS": (
+                        "Inspect operational objects, events, alerts, and "
+                        "recommendations through existing GET /api/overview "
+                        "and GET /api/activity; those names are not "
+                        "/api/family record types."
+                    ) if preparation["mission_id"] == "M3_RELIEF_COLLABORATION" else "",
+                }.items() if value
+            },
             "report_sentence_statuses": [
                 "SUPPORTED", "EXPLICITLY_INFERENTIAL", "UNRESOLVED"],
             "forecast_command_shape": {
@@ -1298,26 +1337,48 @@ def _report_sentence_counts(reports: Iterable[Mapping[str, Any]]) -> tuple[int, 
 
 
 def _normal_text(value: Any) -> str:
-    return " ".join(unicodedata.normalize("NFKC", str(value or ""))
-                    .casefold().split())
+    folded = unicodedata.normalize("NFKC", str(value or "")).casefold()
+    cleaned = re.sub(r"[^\w\s-]+", " ", folded)
+    return " ".join(cleaned.split())
+
+
+def _licensed_wrapper_around(text: str, value: str) -> bool:
+    """True when text is exactly value, or value plus licensed connectives."""
+    if len(value) < 3 or value not in text:
+        return False
+    start = 0
+    while True:
+        index = text.find(value, start)
+        if index < 0:
+            return False
+        remainder = f"{text[:index]} {text[index + len(value):]}"
+        tokens = remainder.split()
+        if all(token in _BINDING_WRAPPER_TOKENS for token in tokens):
+            return True
+        start = index + 1
 
 
 def _supported_sentence_binding(projection, sentence: Mapping[str, Any]) -> dict[str, Any]:
-    """Conservatively bind settled prose to cited observational content."""
+    """Bind settled prose to cited observational content without extra claims.
+
+    Citation shape is not enough.  The normalized sentence must be the cited
+    statement or asserted value, optionally wrapped only in licensed
+    connectives.  Additional content, including a true value appended to
+    unrelated prose, fails closed.
+    """
     text = _normal_text(sentence.get("text"))
     matches = []
     for ref in sentence.get("basis_refs", ()):
         claim = projection.get("semantic_claim", ref)
         if claim is not None:
             candidates = (claim.get("statement", ""), claim.get("object_or_value", ""))
-            if any(len(_normal_text(value)) >= 3 and _normal_text(value) in text
+            if any(_licensed_wrapper_around(text, _normal_text(value))
                    for value in candidates):
                 matches.append({"basis_ref": ref, "family": "semantic_claim"})
             continue
         observation = projection.get("semantic_observation", ref)
         if observation is not None:
-            value = _normal_text(observation.get("value", ""))
-            if len(value) >= 3 and value in text:
+            if _licensed_wrapper_around(text, _normal_text(observation.get("value", ""))):
                 matches.append({"basis_ref": ref, "family": "semantic_observation"})
             continue
         manifestation = projection.get("fabric_manifestation", ref)
@@ -1325,7 +1386,7 @@ def _supported_sentence_binding(projection, sentence: Mapping[str, Any]) -> dict
             values = [_normal_text(item.get("value", ""))
                       for item in projection.family("semantic_observation")
                       if item.get("manifestation_id") == ref]
-            if any(len(value) >= 3 and value in text for value in values):
+            if any(_licensed_wrapper_around(text, value) for value in values):
                 matches.append({"basis_ref": ref, "family": "fabric_manifestation"})
     return {"content_bound": bool(matches), "matches": matches}
 
@@ -1442,8 +1503,8 @@ def verify_evidence_faithfulness(root: Path) -> dict[str, Any]:
                         content_bound_supported += 1
                     else:
                         finding("SUPPORTED_TEXT_NOT_CONTENT_BOUND",
-                                "settled prose does not contain the exact statement or "
-                                "asserted value of any cited observational record",
+                                "settled prose is not the cited statement or asserted "
+                                "value with only licensed connective wrapping",
                                 report_id=report["report_id"],
                                 sentence_id=sentence["sentence_id"])
                 elif sentence.get("status") == "EXPLICITLY_INFERENTIAL" \
@@ -1645,7 +1706,13 @@ def _measurement(root: Path, faithfulness: Mapping[str, Any], replay: Mapping[st
 
 @contextlib.contextmanager
 def _offline_replay_guard():
-    """Deny the two external-call boundaries while replay reconstructs."""
+    """Deny replay-path egress.  This is not a kernel sandbox.
+
+    Enforced boundaries: socket connect/connect_ex/create_connection,
+    subprocess spawn helpers, and AnalyticalAssist.propose.  A caller that
+    already holds a connected transport, or that reaches the kernel by
+    other means, is outside this guard.
+    """
     from unittest import mock
     from curunir_analytic.providers import AnalyticalAssist
 
@@ -1665,6 +1732,11 @@ def _offline_replay_guard():
     with mock.patch.object(socket.socket, "connect", deny_network), \
             mock.patch.object(socket.socket, "connect_ex", deny_network), \
             mock.patch.object(socket, "create_connection", deny_network), \
+            mock.patch.object(subprocess, "Popen", deny_network), \
+            mock.patch.object(subprocess, "run", deny_network), \
+            mock.patch.object(subprocess, "call", deny_network), \
+            mock.patch.object(subprocess, "check_call", deny_network), \
+            mock.patch.object(subprocess, "check_output", deny_network), \
             mock.patch.object(AnalyticalAssist, "propose", deny_model):
         yield counters
 
@@ -1712,7 +1784,11 @@ def replay_mission(root: Path, destination: Path) -> dict[str, Any]:
             "network_connect_boundaries": [
                 "socket.socket.connect", "socket.socket.connect_ex",
                 "socket.create_connection"],
+            "subprocess_boundaries": [
+                "subprocess.Popen", "subprocess.run", "subprocess.call",
+                "subprocess.check_call", "subprocess.check_output"],
             "model_provider_boundary": "curunir_analytic.providers.AnalyticalAssist.propose",
+            "sandbox": False,
             **isolation,
         },
         "export_manifest": export_manifest,
@@ -1969,6 +2045,12 @@ def assess_mission(root: Path, faithfulness: Mapping[str, Any],
                    and item.get("path") == f"/api/family/{family}"
                    and item.get("http_status") == 200 for item in bounded_http)
 
+    def reviewed_path(path: str, actors: tuple[str, ...] = (PRIMARY_ACTOR,)) -> bool:
+        return any(item.get("actor_id") in actors
+                   and item.get("path") == path
+                   and item.get("method", "GET") == "GET"
+                   and item.get("http_status") == 200 for item in bounded_http)
+
     if mission_id == "M1_CORPORATE_REGISTRY_CAPSTONE":
         live = [item for item in store.records_of("fabric_manifestation")
                 if item.get("connector_id") != "v68-notional-fixture-v1"
@@ -2136,12 +2218,13 @@ def assess_mission(root: Path, faithfulness: Mapping[str, Any],
         require("PUBLIC_ACCESS_CHECK" in roles.get(PUBLIC_ACTOR, set()),
                 "PUBLIC_ACCESS_SESSION_INCOMPLETE",
                 "public-only access-check start/end pair is absent")
-        operational_review = all(reviewed_family(family) for family in (
-            "object_version", "activity_version", "alert", "recommendation"))
+        operational_review = all(reviewed_path(path)
+                                 for path in M3_OPERATIONAL_REVIEW_PATHS)
         require(len(preparation["preparation"].get("ingestions", ())) >= 10
                 and operational_review,
                 "HETEROGENEOUS_INGESTION_INCOMPLETE",
-                "ten frozen ingestions must be retained and reviewed")
+                "ten frozen ingestions must be retained and reviewed through "
+                "existing overview and activity routes")
         mutation_actors = {event["actor"] for event in human_events}
         require({PRIMARY_ACTOR, APPROVER_ACTOR}.issubset(mutation_actors),
                 "COLLABORATION_NOT_ESTABLISHED",
@@ -2162,7 +2245,7 @@ def assess_mission(root: Path, faithfulness: Mapping[str, Any],
         require(bool(annotations), "DISSENT_ABSENT",
                 "a retained dissent annotation is required",
                 capability="annotations and dissent")
-        warning_reviewed = reviewed_family("recommendation") \
+        warning_reviewed = reviewed_path("/api/overview") \
             or reviewed_family("strategic_warning")
         require((bool(store.records_of("recommendation"))
                  or bool(store.records_of("strategic_warning")))
