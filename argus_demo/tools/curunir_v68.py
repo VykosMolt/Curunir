@@ -111,6 +111,18 @@ def _mission_definition(mission_id: str) -> dict[str, Any]:
         raise V68Error(f"unknown frozen mission: {mission_id}") from exc
 
 
+def _validate_frozen_authority_files() -> None:
+    qualification = _read_json(CONTRACT_PATH)
+    protocol = qualification.get("operator_protocol", {})
+    repair = qualification.get("base_authority", {}).get("repair_contract", {})
+    if protocol.get("path") != PROTOCOL_PATH.name \
+            or protocol.get("sha256") != _sha256_file(PROTOCOL_PATH):
+        raise V68Error("frozen pilot protocol identity mismatch")
+    if repair.get("path") != REPAIR_CONTRACT_PATH.name \
+            or repair.get("sha256") != _sha256_file(REPAIR_CONTRACT_PATH):
+        raise V68Error("frozen repair-contract identity mismatch")
+
+
 def _require_new_root(root: Path) -> None:
     if root.exists():
         raise V68Error(f"mission root already exists; refusing overwrite: {root}")
@@ -183,6 +195,7 @@ def _write_actors(root: Path) -> Path:
 
 
 def _copy_mission_authority(root: Path, mission_id: str) -> None:
+    _validate_frozen_authority_files()
     _write_json(root / "mission_definition.json", _mission_definition(mission_id))
     ledger = _read_json(V7_LEDGER_PATH)
     ledger["mission_id"] = mission_id
@@ -1817,6 +1830,7 @@ def assess_mission(root: Path, faithfulness: Mapping[str, Any],
     from curunir_identity import GENUINE
     from curunir_workbench.store import WorkbenchStore
 
+    _validate_frozen_authority_files()
     mission_id = _read_json(root / "preparation.json")["mission_id"]
     preparation = _read_json(root / "preparation.json")
     store = WorkbenchStore(root / "store")

@@ -29,6 +29,7 @@ from tools.curunir_v68 import (
     _session_analysis,
     _sha256_bytes,
     _tree_manifest,
+    _validate_frozen_authority_files,
     _v67_report_findings,
     _write_json,
     assess_mission,
@@ -71,6 +72,7 @@ def test_repair_contract_freezes_protocol_and_corrected_starting_states():
         == "5bb32e92d6ebb6fcf399631abaa1e0f4d81cc133"
     assert "baseline live captures" in missions[0]["starting_state"]
     assert "no preparation-authored analytical conclusion" in missions[1]["starting_state"]
+    _validate_frozen_authority_files()
 
 
 def test_repository_identity_refuses_dirty_checkout(monkeypatch: pytest.MonkeyPatch):
@@ -88,6 +90,15 @@ def test_repository_identity_refuses_dirty_checkout(monkeypatch: pytest.MonkeyPa
     monkeypatch.setattr(v68.subprocess, "run", fake_run)
     with pytest.raises(V68Error, match="clean executable checkout"):
         _repository_identity(require_clean=True)
+
+
+def test_frozen_protocol_hash_rejects_substitution(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    replacement = tmp_path / PROTOCOL_PATH.name
+    replacement.write_text("substituted protocol\n")
+    monkeypatch.setattr(v68, "PROTOCOL_PATH", replacement)
+    with pytest.raises(V68Error, match="protocol identity mismatch"):
+        _validate_frozen_authority_files()
 
 
 @pytest.mark.parametrize("mission_id", MISSION_IDS[1:])
