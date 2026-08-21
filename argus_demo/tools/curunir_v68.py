@@ -450,6 +450,7 @@ def _prepare_m2(root: Path) -> dict[str, Any]:
         body=paths[2].read_bytes(), media_type="text/html",
         retrieval_time="2026-08-21T12:12:00+00:00", marking=marking,
         temporal_status="HISTORICAL",
+        archive_capture_time="2026-08-21T12:12:00+00:00",
         derived_from=(initial["manifestation_id"],))
     pipeline.process_manifestation(structured)
     pipeline.process_manifestation(initial)
