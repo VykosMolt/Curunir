@@ -144,6 +144,13 @@ def test_m2_fixture_carries_real_correction_and_hash_verified_replay(tmp_path: P
                  if item["query_id"] == execution["query_id"])
     assert prepared["manifestations"][1] in query["derived_from"]
     assert not store.records_of("analytic_narrative")
+    faithfulness = verify_evidence_faithfulness(root)
+    result = assess_mission(root, faithfulness, replay)
+    codes = {item["code"] for item in result["findings"]}
+    assert "FIXTURE_MANIFEST_MISMATCH" not in codes
+    assert "M2_DERIVATIVE_STATE_INVALID" not in codes
+    assert "FIXTURE_EVIDENCE_NOT_REVIEWED" in codes
+    assert "M2_REPORT_CORRECTION_SEMANTICS_INCOMPLETE" in codes
 
 
 def test_m3_public_projection_contains_no_restricted_identifier(tmp_path: Path):

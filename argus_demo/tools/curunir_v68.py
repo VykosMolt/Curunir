@@ -2059,8 +2059,10 @@ def assess_mission(root: Path, faithfulness: Mapping[str, Any],
         fixture_opened = all(_sha256_bytes(item["manifestation_id"].encode()) in opened_hashes
                              for item in store.records_of("fabric_manifestation")
                              if item.get("connector_id") == "v68-notional-fixture-v1")
-        require(fixture_ok and fixture_opened, "FIXTURE_MANIFEST_MISMATCH",
-                "all four frozen fixture bytes must retain their recorded hashes",
+        require(fixture_ok, "FIXTURE_MANIFEST_MISMATCH",
+                "all four frozen fixture bytes must retain their recorded hashes")
+        require(fixture_opened, "FIXTURE_EVIDENCE_NOT_REVIEWED",
+                "primary operator must review all four frozen fixture manifestations",
                 capability="structured and unstructured evidence")
         fixture_manifestations = [
             item for item in store.records_of("fabric_manifestation")
@@ -2102,14 +2104,19 @@ def assess_mission(root: Path, faithfulness: Mapping[str, Any],
             and preparation["preparation"]["manifestations"][1] in query.get("derived_from", ())
             for query in queries)
         m2_semantics = faithfulness.get("m2_report_semantics", {})
-        require(translation_state.get("state") == "SUPERSEDED"
-                and translation_state.get("superseded_by") == current_id
-                and explicit_derivation
-                and m2_semantics.get("current_n9_content_bound")
+        derivative_state_valid = (
+            translation_state.get("state") == "SUPERSEDED"
+            and translation_state.get("superseded_by") == current_id
+            and explicit_derivation
+        )
+        require(derivative_state_valid,
+                "M2_DERIVATIVE_STATE_INVALID",
+                "dependent v1 translation must remain historical and superseded by current N-9")
+        require(m2_semantics.get("current_n9_content_bound")
                 and m2_semantics.get("historical_n4_present")
                 and not m2_semantics.get("dependent_translation_misused"),
-                "M2_CORRECTION_SEMANTICS_INCOMPLETE",
-                "dependent v1 translation, current N-9, and historical N-4 must remain explicit",
+                "M2_REPORT_CORRECTION_SEMANTICS_INCOMPLETE",
+                "approved report must distinguish current N-9 from historical dependent N-4",
                 capability="semantic world state and temporal change")
         hypotheses = {event["record"]["hypothesis_id"] for event in human_events
                       if event["actor"] == PRIMARY_ACTOR
