@@ -45,9 +45,32 @@ For browser validation, install the runtime named by the tracked Playwright
 version before running the terminal suite:
 
 ```bash
+PLAYWRIGHT_BROWSERS_PATH=/path/to/playwright-cache \
 uv run --python 3.12 --with-requirements requirements.txt \
   playwright install chromium
 ```
 
 The precise manifest and its hashes are machine-readable in
 `CURUNIR_V6_7_RECONSTRUCTION.json`.
+
+## Terminal V6.7 validation
+
+After installing the pinned Chromium runtime, the complete deterministic gate
+is:
+
+```bash
+PLAYWRIGHT_BROWSERS_PATH=/path/to/playwright-cache \
+uv run --python 3.12 --with-requirements requirements.txt \
+  python tools/validate_v67.py \
+  --kernel /path/to/pinned/argus \
+  --report /tmp/curunir-v67-terminal.json
+```
+
+The validator requires a clean tracked tree, verifies every harness and kernel
+hash, runs the focused V6.7 and Curunír product-plane suites, reconstructs the
+committed checkout, then runs the complete repository suite. The full suite is
+not called green while accepted historical failures remain. Instead, the
+validator compares every nonpassing node ID against the exact V6.6 set in
+`CURUNIR_V6_7_BASELINE_NONPASSING.json`; a new node, increased skip count, or
+collection shrinkage fails the command. A successful current run therefore
+reports `PASS_WITH_ACCEPTED_BASELINE_RESIDUALS`, not an unqualified pass.

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -14,7 +15,7 @@ PACKAGE_ROOT = Path(__file__).resolve().parents[2]
 
 
 def test_clean_checkout_reconstruction_uses_committed_bytes_and_pinned_kernel(tmp_path):
-    kernel = PACKAGE_ROOT / "argus"
+    kernel = Path(os.environ.get("CURUNIR_ARGUS_KERNEL", PACKAGE_ROOT / "argus"))
     assert kernel.is_dir(), "the explicit external kernel input is unavailable"
     output = tmp_path / "reconstructed"
     process = subprocess.run(

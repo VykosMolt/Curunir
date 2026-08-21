@@ -23,5 +23,6 @@
     "playwright_chromium": "required only for browser-marked validation; install with playwright install chromium",
     "postgresql": "required only for DB-marked legacy tests; absent service is reported as skipped"
   },
-  "canonical_command": "uv run --python 3.12 --with-requirements requirements.txt python tools/reconstruct_v67.py --kernel /path/to/pinned/argus --output /tmp/curunir-v67-reconstructed"
+  "canonical_command": "uv run --python 3.12 --with-requirements requirements.txt python tools/reconstruct_v67.py --kernel /path/to/pinned/argus --output /tmp/curunir-v67-reconstructed",
+  "terminal_validation_command": "PLAYWRIGHT_BROWSERS_PATH=/path/to/playwright-cache uv run --python 3.12 --with-requirements requirements.txt python tools/validate_v67.py --kernel /path/to/pinned/argus --report /tmp/curunir-v67-terminal.json"
 }

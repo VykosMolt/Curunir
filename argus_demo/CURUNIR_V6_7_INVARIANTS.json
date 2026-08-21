@@ -229,7 +229,7 @@
       "trust_boundary": "developer workstation state to reproducible build/test environment",
       "canonical_enforcement_point": "tracked reconstruction manifest and terminal validation script that verifies the external kernel tree hash before running",
       "historical_motivators": ["M-6 under-specified kernel hash", "archived pytest.ini untracked", "archived no_db suite skipped by autouse database fixture", "stale 6509-pass handoff count"],
-      "regression_tests": ["tests/test_clean_reconstruction.py"],
+      "regression_tests": ["tests/v67/test_clean_reconstruction.py", "tools/validate_v67.py", "CURUNIR_V6_7_BASELINE_NONPASSING.json"],
       "failure_behavior": "Terminal validation stops with an explicit missing/mismatched dependency or external asset; it never falls back to the foreground worktree or an undeclared installed package.",
       "enforcement_scope": "prospective reconstruction with historical external-kernel identity"
     }

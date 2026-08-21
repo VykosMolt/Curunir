@@ -80,5 +80,15 @@
       "tests/test_neural_carrier_no_symbolic_decoder.py::test_capsule_package_has_no_forbidden_inverse_or_payload_decoder"
     ],
     "reproducibility_defect": "The tracked tests/conftest.py autouse database fixture skips no_db tests when Postgres is absent, and pytest.ini is not tracked. The archived handoff's 6509-pass number is not reproducible from its clean tracked checkout. The rewrite must make its non-DB suite independently runnable and must continue to report the two accepted-baseline capsule failures separately."
+  },
+  "repaired_harness_comparison": {
+    "method": "accepted V6.6 git archive and clean rewrite each executed with identical tracked no_db harness, pinned requirements, and hash-identical external kernel",
+    "accepted_base": {"tests": 5543, "passed": 5179, "skipped": 262, "failed": 84, "errors": 18},
+    "rewrite_at_fe1cb7625deed7a064286e02ade3ca653f26d59d": {"tests": 5665, "passed": 5314, "skipped": 262, "failed": 71, "errors": 18},
+    "rewrite_only_nonpassing": 0,
+    "accepted_base_only_nonpassing": 13,
+    "outcome_kind_changes": 0,
+    "exact_ledger": "CURUNIR_V6_7_BASELINE_NONPASSING.json",
+    "interpretation": "All remaining rewrite nonpasses reproduce on the accepted base under the same harness. Eighty-seven require historical generated artifacts, corpora, models, or ledger files absent from tracked state; two are unchanged capsule symbolic-inverse assertions."
   }
 }
