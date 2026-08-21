@@ -869,6 +869,41 @@ INDICATOR_EFFECT_MODES = ("REVIEW_ONLY", "APPLY_PROBABILITY")
 
 WARNING_TIERS = ("ROUTINE", "ATTENTION", "PRIORITY", "CRITICAL")
 WARNING_STATUSES = ("ACTIVE", "ESCALATED", "DOWNGRADED", "RESOLVED", "WITHDRAWN")
+# Status is a control input, not display text.  The settled set is declared
+# beside each authoritative vocabulary so additions fail closed until they are
+# deliberately classified.  Report approval consumes this table; callers must
+# not maintain private lists of terminal spellings.
+SETTLED_SUPPORT_STATUSES: dict[str, frozenset[str]] = {
+    "analytic_forecast": frozenset(FORECAST_STATUSES)
+    - frozenset(FORECAST_TERMINAL_STATUSES),
+    "strategic_warning": frozenset(("ACTIVE", "ESCALATED", "DOWNGRADED")),
+    "analytic_theme": frozenset(("EMERGING", "ACTIVE", "DECLINING")),
+    "analytic_narrative": frozenset(("ACTIVE", "DORMANT")),
+    "response_option": frozenset(("PROPOSED", "UNDER_REVIEW", "ACCEPTED")),
+    "forecast_indicator": frozenset(("ARMED", "FIRED", "COVERAGE_BLOCKED")),
+    "analytic_assumption": frozenset(("HELD",)),
+    "impact_path": frozenset(("PROPOSED", "ASSESSED", "CHANGED")),
+    "mission_objective": frozenset(("ACTIVE", "EXPOSED")),
+    "stakeholder_assessment": frozenset(("ACTIVE",)),
+    "influence_assertion": frozenset(("ACTIVE",)),
+    "historical_analogue": frozenset(("PROPOSED", "REVIEWED")),
+    "discriminator": frozenset(("SATISFIED",)),
+}
+OFFICIAL_STATUS_VOCABULARIES: dict[str, tuple[str, ...]] = {
+    "analytic_forecast": FORECAST_STATUSES,
+    "strategic_warning": WARNING_STATUSES,
+    "analytic_theme": THEME_STATUSES,
+    "analytic_narrative": NARRATIVE_STATUSES,
+    "response_option": RESPONSE_STATUSES,
+    "forecast_indicator": INDICATOR_STATUSES,
+    "analytic_assumption": ASSUMPTION_STATUSES,
+    "impact_path": IMPACT_STATUSES,
+    "mission_objective": OBJECTIVE_STATUSES,
+    "stakeholder_assessment": STAKEHOLDER_STATUSES,
+    "influence_assertion": INFLUENCE_STATUSES,
+    "historical_analogue": ANALOGUE_STATUSES,
+    "discriminator": ("OPEN", "REQUESTED", "SATISFIED", "UNSATISFIABLE"),
+}
 PROBABILITY_BANDS = ("REMOTE", "POSSIBLE", "LIKELY", "VERY_LIKELY")
 TIME_PRESSURES = ("DISTANT", "NEAR", "CLOSE", "IMMINENT", "PASSED")
 EVIDENCE_CONFIDENCES = ("NONE", "WEAK", "MODERATE", "STRONG")

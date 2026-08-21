@@ -32,6 +32,7 @@ from curunir_operational.access import marking_from_record
 from .contracts import (HUMAN_ONLY_DISPOSITIONS, ReportDisposition, ReportRecord,
                         ReportSection, ReportSentence)
 from .errors import NotFound
+from .authority import authoritative_approval_state
 from .projections import MissionProjection, REDACTED
 from .store import WorkbenchStore
 
@@ -118,6 +119,12 @@ def _next_version(store: WorkbenchStore, current: Mapping[str, Any], *,
         raise ReportConflict(
             f"report {current['report_id']} is at version {current['version']}, "
             f"you edited version {expected_version}")
+    content_changed = any(value is not None for value in (
+        sections, title, question, state_token,
+    ))
+    if content_changed and not content_author:
+        raise ValueError(
+            "content_author is required when report content or basis changes")
     kept_sections = sections if sections is not None else _sections(
         current["report_id"],
         [{**s, "sentences": list(s["sentences"])} for s in current["sections"]])
@@ -398,24 +405,52 @@ def approve_report(store: WorkbenchStore, projection: MissionProjection,
     current = _current(store, report_id)
     if current["status"] != "IN_REVIEW":
         raise ValueError(f"cannot approve a report in status {current['status']}")
-    submitters = {d["actor_id"] for d in store.report_dispositions(report_id)
-                  if d["disposition"] == "SUBMITTED"}
-    content_authors = {v["author"] for v in store.report_versions(report_id)}
-    if actor in content_authors | submitters:
+    authority = authoritative_approval_state(
+        store,
+        current,
+        context=projection.context,
+        actor=actor,
+        acknowledged_dissent=acknowledge_dissent,
+    )
+    if authority["separation_of_duties_violation"]:
         raise PermissionError(
             "separation of duties: an analyst who authored or submitted this "
             "report cannot also approve it")
     validation = validate_report(projection, current)
     if not validation["ok"]:
         raise ReportValidationError(validation["blocking"])
-    dissent = open_dissent(projection, report_id)
-    dissent_ids = tuple(a["annotation_id"] for a in dissent)
-    if dissent and set(dissent_ids) - set(acknowledge_dissent):
+    if authority["unresolved_basis"]:
+        raise ValueError(
+            "authoritative report basis is unresolved; approval refused")
+    if authority["blocking_basis_concerns"]:
+        anchor = next((sentence for section in current["sections"]
+                       for sentence in section.get("sentences", ())), {
+                           "sentence_id": current["report_id"],
+                           "text": current["title"],
+                       })
+        raise ReportValidationError([{
+            "code": concern["code"],
+            "sentence_id": anchor["sentence_id"],
+            "text": anchor["text"][:120],
+            "detail": concern["reason"],
+            "blocking": True,
+        } for concern in authority["blocking_basis_concerns"]])
+    if authority["hidden_basis_concerns"]:
+        raise ValueError(
+            "the report basis has a current state or open review the approver "
+            "is not cleared to view; approval requires a cleared reviewer")
+    if authority["hidden_dissent_ids"]:
+        raise ValueError(
+            "open dissent exists that the approver is not cleared to view; it "
+            "must be resolved by a cleared reviewer")
+    dissent_ids = tuple(authority["visible_dissent_ids"])
+    if authority["unacknowledged_dissent_ids"]:
         raise ValueError(
             "open dissent exists on this report; approve with "
-            f"acknowledge_dissent={sorted(dissent_ids)} to carry it visibly, "
+            f"acknowledge_dissent={authority['unacknowledged_dissent_ids']} "
+            "to carry it visibly, "
             "or resolve it first")
-    disposition = "APPROVED_WITH_DISSENT" if dissent else "APPROVED"
+    disposition = "APPROVED_WITH_DISSENT" if dissent_ids else "APPROVED"
     record = _next_version(store, current, expected_version=expected_version,
                            actor=actor, now=now, status=disposition,
                            change_note=note or "approved")

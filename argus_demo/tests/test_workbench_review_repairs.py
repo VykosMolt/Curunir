@@ -57,9 +57,13 @@ def test_review_disposition_never_declassifies(mission):
     assert "ri-secret" not in blob and seeded["secret_object_id"] not in blob
 
 
-def test_hidden_ids_scrubbed_from_refs_and_free_text(mission):
-    """Finding 2: any occurrence of a hidden id — typed ref or detail text —
-    is REDACTED for a context that cannot see the referenced record."""
+def test_public_review_of_hidden_subject_is_floored_and_invisible(mission):
+    """V6.7 never-write-down supersedes view-time redaction.
+
+    A review item materially derived from a restricted subject inherits that
+    subject's marking at admission, so no alternate query path can expose a
+    partially redacted PUBLIC shell.
+    """
     ctx, seeded, cc = mission
     secret = seeded["secret_object_id"]
     item = ReviewItem(item_id="ri-public", kind="IDENTITY_AMBIGUITY",
@@ -70,12 +74,10 @@ def test_hidden_ids_scrubbed_from_refs_and_free_text(mission):
     ctx.store.append("REVIEW_ITEM_RECORDED", item, recorded_time=item.recorded_time,
                      actor="analyst-a")
     record_b = MissionProjection(ctx.store, CTX_B).get("review_item", "ri-public")
-    assert record_b is not None
-    assert secret not in json.dumps(record_b)
-    assert record_b["subject_id"] == "REDACTED"
-    assert "REDACTED" in record_b["detail"]
+    assert record_b is None
     record_a = MissionProjection(ctx.store, CTX_A).get("review_item", "ri-public")
     assert record_a["subject_id"] == secret
+    assert record_a["marking"]["compartments"] == ["SPECIAL"]
 
 
 def test_submit_disposition_records_real_actor_kind(mission):

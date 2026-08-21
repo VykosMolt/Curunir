@@ -145,9 +145,8 @@ def test_operational_hidden_ids_are_scrubbed(mission):
     assert "act-secret-meeting" not in json.dumps(record_b)
 
 
-def test_command_responses_are_scrubbed_over_http(mission, tmp_path):
-    """Round-2 C4: a write path never returns state its author could not
-    read — the HTTP response is redacted like any projection."""
+def test_hidden_review_cannot_be_mutated_over_http(mission, tmp_path):
+    """V6.7 gates the authoritative object, not a redacted view shell."""
     from fastapi.testclient import TestClient
     from curunir_workbench.auth import write_registry
     from curunir_workbench.server import create_app
@@ -172,8 +171,10 @@ def test_command_responses_are_scrubbed_over_http(mission, tmp_path):
                            headers={"Authorization": "Bearer token-b"},
                            json={"expected_version": 1, "status": "DISMISSED",
                                  "note": "noted"})
-    assert response.status_code == 200
+    assert response.status_code == 404
     assert seeded["secret_object_id"] not in response.text
+    retained = ctx.store.latest_by_id("review_item", "item_id")["ri-http"]
+    assert retained["version"] == 1 and retained["status"] == "OPEN"
 
 
 def test_dict_keys_are_scrubbed(mission):

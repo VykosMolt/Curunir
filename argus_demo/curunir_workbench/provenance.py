@@ -255,11 +255,15 @@ def evidence_view(projection: MissionProjection, manifestation_id: str) -> dict[
         as evidence. Custody-path fallback is confined to the mission root."""
         import hashlib
         from pathlib import Path
+        from curunir_operational.store import StoreError
         mission_root = Path(projection.store.root).resolve().parent
         candidates = []
         try:
             candidates.append(projection.store.get_payload(sha))
-        except (KeyError, FileNotFoundError, OSError):
+        except (KeyError, FileNotFoundError, OSError, StoreError):
+            # A corrupt store slot is never served.  This view may still use a
+            # separate custody copy, but only after independently hashing it
+            # against the recorded content address below.
             pass
         # canonical content-addressed custody location under the mission
         # root; the recorded path is a last resort, and only when it resolves
