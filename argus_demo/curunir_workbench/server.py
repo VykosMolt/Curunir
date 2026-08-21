@@ -16,6 +16,7 @@ NOTE: no `from __future__ import annotations` here — the request models are
 defined inside create_app, and stringified annotations would make FastAPI
 unable to resolve them (silently demoting body models to query params).
 """
+import math
 import os
 from pathlib import Path
 from typing import Any
@@ -43,6 +44,31 @@ from .views import (coverage_matrix, entity_dossier, entity_list, event_dossier,
 STATIC_DIR = Path(__file__).parent / "static"
 
 
+def render_safe(value) -> str:
+    """Make any error detail UTF-8 renderable without echoing raw bytes."""
+    return str(value).encode("utf-8", "replace").decode("utf-8")
+
+
+def _deep_render_safe(value):
+    """Total conversion of validation errors to strict JSON response data."""
+    if value is None or isinstance(value, (bool, int)):
+        return value
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    if isinstance(value, str):
+        return render_safe(value)
+    if isinstance(value, (bytes, bytearray)):
+        return bytes(value).decode("utf-8", "replace")
+    if isinstance(value, dict):
+        return {
+            _deep_render_safe(key): _deep_render_safe(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, (list, tuple, set, frozenset)):
+        return [_deep_render_safe(item) for item in value]
+    return render_safe(value)
+
+
 def create_app(mission_root: str | Path, actors_path: str | Path,
                now_fn=None) -> FastAPI:
     root = Path(mission_root)
@@ -53,6 +79,16 @@ def create_app(mission_root: str | Path, actors_path: str | Path,
     app.state.root = root
     app.state.store = store
     app.state.registry = registry
+
+    from fastapi.exceptions import RequestValidationError
+
+    @app.exception_handler(RequestValidationError)
+    async def validation_error(_request: Request, error: RequestValidationError):
+        try:
+            detail = _deep_render_safe(error.errors())
+        except Exception:
+            detail = "invalid request body"
+        return JSONResponse(status_code=422, content={"detail": detail})
 
     # ---- auth ---------------------------------------------------------------
 
@@ -94,18 +130,21 @@ def create_app(mission_root: str | Path, actors_path: str | Path,
         authority refusals are 403, not 400."""
         from curunir_operational.missions import MissionWorkflowError
         from curunir_operational.workflow import WorkflowError
+        def detail(error):
+            return render_safe(error)
+
         try:
             result = fn(*args, **kwargs)
         except Conflict as error:
-            raise HTTPException(status_code=409, detail=str(error))
+            raise HTTPException(status_code=409, detail=detail(error))
         except NotFound as error:
-            raise HTTPException(status_code=404, detail=str(error))
+            raise HTTPException(status_code=404, detail=detail(error))
         except PermissionError as error:
-            raise HTTPException(status_code=403, detail=str(error))
+            raise HTTPException(status_code=403, detail=detail(error))
         except (MissionWorkflowError, WorkflowError) as error:
-            raise HTTPException(status_code=403, detail=str(error))
+            raise HTTPException(status_code=403, detail=detail(error))
         except ValueError as error:
-            raise HTTPException(status_code=400, detail=str(error))
+            raise HTTPException(status_code=400, detail=detail(error))
         if isinstance(result, (dict, list)):
             return MissionProjection(fresh_store(), context(request)).redact(
                 result if isinstance(result, dict) else {"items": result})
@@ -122,7 +161,8 @@ def create_app(mission_root: str | Path, actors_path: str | Path,
     def session(request: Request):
         ctx = context(request)
         return {"actor_id": ctx.actor_id, "actor_kind": ctx.actor_kind,
-                "roles": list(ctx.roles), "organisation": ctx.organisation}
+                "roles": list(ctx.roles), "organisation": ctx.organisation,
+                "mission_id": store.meta.get("store_id", "curunir-workbench")}
 
     # ---- mission projections ------------------------------------------------
 
@@ -526,6 +566,169 @@ def create_app(mission_root: str | Path, actors_path: str | Path,
     def cmd_report_reject(request: Request, report_id: str, body: ReportRejectBody):
         return run(request, commands.reject_report, command_context(request), report_id,
                    **body.model_dump())
+
+    # ---- cryptographic identity -------------------------------------------
+
+    from datetime import datetime, timezone
+    from curunir_identity import KeyRegistry, SessionManager, SignatureRejected
+    from curunir_identity.crypto import normalize_public_key
+    from curunir_identity.sessions import AuthError as IdentityAuthError
+    from curunir_operational.access import marking_from_record
+    from .signed_ops import SignedOperations
+
+    identity_now = now_fn if now_fn is not None else \
+        (lambda: datetime.now(timezone.utc).isoformat())
+    app.state.sessions = SessionManager(now_fn=identity_now)
+
+    def mission_id() -> str:
+        return store.meta.get("store_id", "curunir-workbench")
+
+    class EnrollBody(BaseModel):
+        public_key_hex: str
+
+    @app.post("/api/auth/enroll")
+    def cmd_enroll(request: Request, body: EnrollBody):
+        principal = context(request)
+        try:
+            public_key = normalize_public_key(body.public_key_hex)
+            record = KeyRegistry(
+                fresh_store(), marking=_default_marking(), now_fn=identity_now,
+            ).enroll(
+                actor_id=principal.actor_id,
+                actor_kind=principal.actor_kind,
+                public_key_hex=public_key,
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=409, detail=render_safe(error))
+        return {
+            "key_id": record["key_id"],
+            "actor_id": record["actor_id"],
+            "actor_kind": record["actor_kind"],
+            "status": record["status"],
+        }
+
+    @app.get("/api/auth/time")
+    def cmd_server_time(request: Request):
+        context(request)
+        return {"now": identity_now()}
+
+    class ChallengeBody(BaseModel):
+        actor_id: str
+
+    @app.post("/api/auth/challenge")
+    def cmd_challenge(request: Request, body: ChallengeBody):
+        principal = context(request)
+        if body.actor_id != principal.actor_id:
+            raise HTTPException(
+                status_code=403,
+                detail="a bearer may issue challenges only for its own actor",
+            )
+        try:
+            return app.state.sessions.issue_challenge(
+                principal.actor_id, owner=principal.actor_id)
+        except IdentityAuthError as error:
+            raise HTTPException(status_code=401, detail=render_safe(error))
+
+    class AuthenticateBody(BaseModel):
+        actor_id: str
+        nonce: str
+        signature: str
+
+    @app.post("/api/auth/authenticate")
+    def cmd_authenticate(body: AuthenticateBody):
+        try:
+            session = app.state.sessions.authenticate(
+                KeyRegistry(fresh_store()),
+                actor_id=body.actor_id,
+                nonce=body.nonce,
+                signature_hex=body.signature,
+            )
+        except IdentityAuthError as error:
+            raise HTTPException(status_code=401, detail=render_safe(error))
+        return {
+            "session_id": session.session_id,
+            "actor_id": session.actor_id,
+            "actor_kind": session.actor_kind,
+            "expires_time": session.expires_time,
+        }
+
+    class SignedApproveBody(BaseModel):
+        session_id: str
+        payload: dict[str, Any]
+        signature: str
+        expected_version: int
+
+    @app.post("/api/commands/reports/{report_id}/approve-signed")
+    def cmd_report_approve_signed(report_id: str, body: SignedApproveBody):
+        from .reports import ReportValidationError
+
+        signed_command = body.payload.get("command")
+        if not isinstance(signed_command, dict):
+            raise HTTPException(
+                status_code=400, detail="signed command must be an object")
+        dissent = signed_command.get("acknowledge_dissent", []) or []
+        if not isinstance(dissent, list) \
+                or not all(isinstance(item, str) for item in dissent):
+            raise HTTPException(
+                status_code=400,
+                detail="acknowledge_dissent must be a list of ids",
+            )
+        signed_store = fresh_store()
+        current = signed_store.current_reports().get(report_id)
+        if current is None:
+            raise HTTPException(status_code=404, detail="unknown report")
+        operations = SignedOperations(
+            store=signed_store,
+            root=root,
+            registry=KeyRegistry(signed_store),
+            sessions=app.state.sessions,
+            authz=registry,
+            now_fn=identity_now,
+            mission_id=mission_id(),
+        )
+        try:
+            result = operations.apply_signed(
+                session_id=body.session_id,
+                payload=body.payload,
+                signature_hex=body.signature,
+                action_type="approve_report",
+                target_kind="workbench_report",
+                target_id=report_id,
+                current_version_token=(
+                    f"workbench_report:{report_id}@v{current['version']}"
+                ),
+                target_marking=marking_from_record(current["marking"]),
+                apply=lambda command_context: commands.approve_report(
+                    command_context,
+                    report_id,
+                    expected_version=body.expected_version,
+                    note=str(signed_command.get("note", "")),
+                    acknowledge_dissent=tuple(dissent),
+                ),
+            )
+        except SignatureRejected as error:
+            raise HTTPException(
+                status_code=401,
+                detail=render_safe(f"{error.status}: {error}"),
+            )
+        except ReportValidationError as error:
+            return JSONResponse(
+                status_code=422,
+                content={
+                    "detail": "validation rejected approval",
+                    "findings": _deep_render_safe(error.findings),
+                },
+            )
+        except Conflict as error:
+            raise HTTPException(status_code=409, detail=render_safe(error))
+        except PermissionError as error:
+            raise HTTPException(status_code=403, detail=render_safe(error))
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=render_safe(error))
+        actor_context = registry.context_for_actor(
+            result["signed_action"]["actor_id"])
+        return MissionProjection(fresh_store(), actor_context).redact(
+            result["result"])
 
     # ---- UI -----------------------------------------------------------------
 

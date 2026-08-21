@@ -9,6 +9,7 @@ are append-only history: an approved report version is never rewritten.
 from __future__ import annotations
 
 from curunir_analytic.store import AnalyticStore
+from curunir_identity.contracts import IDENTITY_EVENT_TYPES
 
 WORKBENCH_EVENT_TYPES = {
     "WORKBENCH_ANNOTATION_RECORDED": "workbench_annotation",
@@ -19,7 +20,11 @@ WORKBENCH_EVENT_TYPES = {
 
 
 class WorkbenchStore(AnalyticStore):
-    EVENT_TYPES = {**AnalyticStore.EVENT_TYPES, **WORKBENCH_EVENT_TYPES}
+    EVENT_TYPES = {
+        **AnalyticStore.EVENT_TYPES,
+        **WORKBENCH_EVENT_TYPES,
+        **IDENTITY_EVENT_TYPES,
+    }
     # EXTENDS the analytic plane's map — replacing it would silently strip
     # stale-writer protection from the families the shipped stack runs on.
     VERSIONED_RECORD_TYPES = {
@@ -27,6 +32,7 @@ class WorkbenchStore(AnalyticStore):
         "workbench_annotation": "annotation_id",
         "workbench_report": "report_id",
         "workbench_saved_view": "view_id",
+        "actor_key": "key_id",
     }
 
     # ---- replayed views over workbench records ---------------------------

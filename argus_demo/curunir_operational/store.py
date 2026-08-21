@@ -514,7 +514,15 @@ class MissionDataStore:
         *,
         recorded_time: str,
         actor: str,
+        condition: Callable[["MissionDataStore"], None] | None = None,
     ) -> dict[str, Any]:
+        """Append one event under the store mutation lock.
+
+        ``condition`` is evaluated after catch-up while that same lock is held.
+        It is the canonical primitive for invariants whose truth depends on
+        current retained state (for example an actor's active-key cap), avoiding
+        a check-then-append race across store instances.
+        """
         if event_type not in self.EVENT_TYPES:
             raise StoreError(f"unknown event type: {event_type}")
         try:
@@ -534,6 +542,8 @@ class MissionDataStore:
                 f"got {raw.get('record_type')!r}")
         with self._append_lock():
             self._catch_up()
+            if condition is not None:
+                condition(self)
             data = admit_marking(self, raw)
             self._validate_progression(data)
             if self._last_recorded is not None \

@@ -26,6 +26,7 @@ from curunir_fabric.watch import register_watch, retire_watch
 from curunir_operational.access import (AccessContext, Marking, can_view,
                                         marking_from_record, most_restrictive)
 from curunir_operational.missions import MissionWorkflow
+from curunir_operational.canonical import validate_interchange
 from curunir_operational.workflow import WorkflowEngine
 from curunir_semantic.collection import assign_human_route, execute_route
 from curunir_semantic.contracts import ReviewItem
@@ -757,6 +758,7 @@ def save_view(ctx: CommandContext, *, title: str, view_kind: str,
     import json as _json
     from .contracts import SavedViewRecord
     ctx.require_visible_marking()
+    validate_interchange(definition)
     projection = ctx.projection()
     _validate_inbound(projection,
                       texts=(title, _json.dumps(definition, default=str)))
@@ -811,9 +813,42 @@ def _validate_sections(projection: MissionProjection,
     _validate_inbound(projection, refs=_section_refs(sections), texts=tuple(texts))
 
 
+def _validate_section_shapes(sections: Any) -> None:
+    """Validate the free-form report carrier before domain construction."""
+    if not isinstance(sections, list):
+        raise ValueError("sections must be a list")
+    for section in sections:
+        if not isinstance(section, Mapping):
+            raise ValueError("each section must be an object")
+        for field in ("kind", "title", "section_id"):
+            if not isinstance(section.get(field, ""), str):
+                raise ValueError(f"section {field} must be a string")
+        if not isinstance(section.get("sentences", []), list):
+            raise ValueError("section sentences must be a list")
+        option_ids = section.get("option_ids", [])
+        if not isinstance(option_ids, list) \
+                or not all(isinstance(item, str) for item in option_ids):
+            raise ValueError("section option_ids must be a list of ids")
+        for sentence in section.get("sentences", []):
+            if not isinstance(sentence, Mapping):
+                raise ValueError("each sentence must be an object")
+            for field in (
+                "text", "status", "inference_note", "unresolved_reason",
+                "temporal_scope", "sentence_id",
+            ):
+                if not isinstance(sentence.get(field, ""), str):
+                    raise ValueError(f"sentence {field} must be a string")
+            for field in ("basis_refs", "assumption_ids"):
+                refs = sentence.get(field, [])
+                if not isinstance(refs, list) \
+                        or not all(isinstance(item, str) for item in refs):
+                    raise ValueError(f"sentence {field} must be a list of ids")
+
+
 def create_report(ctx: CommandContext, *, title: str, question: str,
                   sections: list[Mapping[str, Any]],
                   compartments: tuple[str, ...] = ()) -> dict:
+    _validate_section_shapes(sections)
     projection = ctx.projection()
     _validate_inbound(projection, texts=(title, question))
     _validate_sections(projection, sections)
@@ -830,6 +865,7 @@ def create_report(ctx: CommandContext, *, title: str, question: str,
 def edit_report(ctx: CommandContext, report_id: str, *, expected_version: int,
                 sections: list[Mapping[str, Any]], title: str | None = None,
                 question: str | None = None, change_note: str = "") -> dict:
+    _validate_section_shapes(sections)
     projection = ctx.projection()
     current = projection.get("workbench_report", report_id)
     if current is None:
