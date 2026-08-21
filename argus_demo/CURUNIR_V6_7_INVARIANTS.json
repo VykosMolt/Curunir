@@ -143,10 +143,10 @@
       "protected_property": "Acquisition permits only HTTP(S) destinations whose resolved addresses are all public and rechecks redirect/final URLs before accepting bytes. Alternate numeric, IPv6, userinfo, case, trailing-dot, mapped, transition, multicast, metadata, and reserved-address forms do not bypass policy.",
       "objects_resources": ["connector transport", "URLs", "DNS answers", "redirect chain", "retrieved bytes"],
       "trust_boundary": "attacker-influenced source URL to network and ingestion",
-      "canonical_enforcement_point": "curunir_fabric.net_guard guarded default transport installed by connector base",
+      "canonical_enforcement_point": "curunir_fabric.transport.SafePublicTransport installed directly by connector base; each hop resolves once and the socket connects only to that validated address set",
       "historical_motivators": ["SSRF review B soundness corpus"],
-      "regression_tests": ["tests/test_fabric_ssrf_guard.py", "tests/test_fabric_executor_coverage.py"],
-      "failure_behavior": "Refuse the request or returned bytes. Redirect-request-before-postcheck and DNS check/connect windows remain explicit bounded limitations unless the external transport contract changes.",
+      "regression_tests": ["tests/v67/test_egress_and_resources.py", "tests/test_fabric_executor_coverage.py"],
+      "failure_behavior": "Refuse before opening a socket to an unsafe initial or redirect target. DNS answers containing any non-public address are refused, and validated addresses are pinned through connection to close re-resolution rebinding.",
       "enforcement_scope": "prospective"
     },
     {
@@ -155,10 +155,10 @@
       "protected_property": "A provider call is governed before egress by the effective marking of its material inputs; provider output remains an untrusted candidate requiring human acceptance and exact materialization binding.",
       "objects_resources": ["provider policy", "input references", "provider cargo", "inference record", "analytical candidate"],
       "trust_boundary": "mission evidence to external model/provider and provider result back to authoritative state",
-      "canonical_enforcement_point": "curunir_analytic.providers.AnalyticalAssist.propose and substrate candidate-acceptance binding",
+      "canonical_enforcement_point": "curunir_analytic.providers.AnalyticalAssist.propose resolves declared references plus record ids carried in provider cargo against authoritative state; substrate candidate acceptance binds materialization",
       "historical_motivators": ["provider egress requirement", "F-P1", "MAJOR-2", "N-1 totality", "B-6 declared refs versus cargo"],
-      "regression_tests": ["tests/test_provider_egress_gate.py", "tests/test_analytic_substrate.py"],
-      "failure_behavior": "Refuse before provider call when governance is insufficient; safely record failure for hostile output. Live provider wiring remains blocked until transmitted cargo is cryptographically or structurally bound to classified references.",
+      "regression_tests": ["tests/v67/test_egress_and_resources.py", "tests/test_analytic_substrate.py"],
+      "failure_behavior": "Refuse before provider call when governance is insufficient or any declared reference is unresolved; retain an INVALID inference record for hostile output without admitting it as a candidate.",
       "enforcement_scope": "prospective; provider seam is currently unwired"
     },
     {
@@ -169,7 +169,7 @@
       "trust_boundary": "resource cap or source failure to semantic/forecast truth claim",
       "canonical_enforcement_point": "execution outcome classification plus semantic truncation classification consumed by change interpretation and forecast absence coverage",
       "historical_motivators": ["resource truncation forecast requirement", "F4 truncation removal", "round-2 normalizer caps", "round-4 region-map false positive", "source-side error 200"],
-      "regression_tests": ["tests/test_fabric_resource_governance.py", "tests/test_semantic_resource_governance.py", "tests/test_analytic_forecasts.py"],
+      "regression_tests": ["tests/v67/test_egress_and_resources.py", "tests/v67/test_semantic_resource_limits.py", "tests/test_analytic_forecasts.py"],
       "failure_behavior": "Record FAILED or UNRESOLVED_CHANGE with explicit warnings; never EMPTY, REMOVED, RETRACTED, or absence-supported FALSE unless the complete source semantics establish it.",
       "enforcement_scope": "prospective"
     },
@@ -179,9 +179,9 @@
       "protected_property": "Hostile input cannot cause unbounded fetch, parse, retry, fan-out, subprocess output, pending-auth state, or provider serialization. Source/content/network faults are contained as source failures; local custody, memory, and store-integrity faults propagate.",
       "objects_resources": ["connector bodies", "RSS/XML", "pdftotext", "processing retries", "pivot proposals", "auth maps", "provider outputs"],
       "trust_boundary": "hostile content or remote failure to local availability and truthful blame",
-      "canonical_enforcement_point": "connector/executor provenance boundary, semantic retry budget, bounded subprocess wrapper, pivot cap, session caps, total provider scrub",
+      "canonical_enforcement_point": "connector/executor provenance boundary, shared XML admission guard, streaming bounded PDF subprocess wrapper, semantic retry budget, pivot cap, session caps, and strict provider-response admission",
       "historical_motivators": ["F3/F6 RSS DTD", "F5 auth bounds", "F8 rounds 2/4/5/7", "F8-E1/E2/E3", "semantic poison retry", "fan-out cap", "pdftotext output bound", "N-1 provider totality"],
-      "regression_tests": ["tests/test_fabric_resource_governance.py", "tests/test_semantic_resource_governance.py", "tests/test_identity_server.py", "tests/test_provider_egress_gate.py"],
+      "regression_tests": ["tests/v67/test_egress_and_resources.py", "tests/v67/test_semantic_resource_limits.py", "tests/test_identity_server.py"],
       "failure_behavior": "Bounded, typed, provenance-correct failure. Local integrity faults stop the operation; a bad remote source cannot abort unrelated plan/watch work.",
       "enforcement_scope": "prospective"
     },

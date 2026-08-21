@@ -16,9 +16,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Callable, Mapping
 
-from argus.public_web_transport_v4 import retrieve_public_bytes_v4
-
 from ..contracts import OPERATIONS
+from ..transport import retrieve_public_bytes
 
 # transport: (url, headers, timeout, max bytes) -> transport dict (body/status/…)
 Transport = Callable[..., Mapping[str, Any]]
@@ -29,6 +28,18 @@ ERROR_CLASSES = ("TRANSPORT", "HTTP", "PARSE", "TRUNCATED")
 DEFAULT_USER_AGENT = "CurunirFabric/0.1 (public-interest research collection; contact operator)"
 DEFAULT_TIMEOUT_SECONDS = 30.0
 DEFAULT_MAXIMUM_BYTES = 40_000_000
+
+
+def scrub_surrogates(value: object) -> str | None:
+    """Coerce a source scalar to valid Unicode at the acquisition boundary."""
+    if value is None:
+        return None
+    return str(value).encode("utf-8", "replace").decode("utf-8")
+
+
+def _scrub_pairs(pairs: tuple[tuple[str, str], ...]) -> tuple[tuple[str, str], ...]:
+    return tuple((scrub_surrogates(key), scrub_surrogates(value))
+                 for key, value in pairs)
 
 
 def utc_now() -> str:
@@ -50,6 +61,9 @@ class ConnectorRequest:
             raise ValueError(f"invalid operation: {self.operation!r}")
         if not 1 <= self.limit <= 100:
             raise ValueError("request limit out of bounds")
+        for name in ("value", "language", "cursor"):
+            object.__setattr__(self, name, scrub_surrogates(getattr(self, name)))
+        object.__setattr__(self, "extra", _scrub_pairs(self.extra))
 
     def extra_map(self) -> dict[str, str]:
         return dict(self.extra)
@@ -65,6 +79,12 @@ class NativeResult:
     source_time: str | None = None
     identifiers: tuple[tuple[str, str], ...] = ()  # (scheme, value)
     attributes: tuple[tuple[str, str], ...] = ()
+
+    def __post_init__(self):
+        for name in ("native_id", "title", "url", "snippet", "source_time"):
+            object.__setattr__(self, name, scrub_surrogates(getattr(self, name)))
+        object.__setattr__(self, "identifiers", _scrub_pairs(self.identifiers))
+        object.__setattr__(self, "attributes", _scrub_pairs(self.attributes))
 
 
 @dataclass(frozen=True)
@@ -93,6 +113,11 @@ class ConnectorResponse:
             raise ValueError("OK responses carry at least one result")
         if self.error_class is not None and self.error_class not in ERROR_CLASSES:
             raise ValueError(f"invalid error class: {self.error_class!r}")
+        for name in ("request_url", "final_url", "media_type", "next_cursor",
+                     "error_detail", "retrieved_time", "etag", "last_modified"):
+            object.__setattr__(self, name, scrub_surrogates(getattr(self, name)))
+        object.__setattr__(self, "redirects",
+                           tuple(scrub_surrogates(item) for item in self.redirects))
 
     def body_sha256(self) -> str:
         return hashlib.sha256(self.raw_body).hexdigest()
@@ -116,7 +141,7 @@ class SourceConnector:
                 now: str | None = None) -> ConnectorResponse:
         if request.operation not in self.operations:
             return self._unsupported(request)
-        transport = transport or retrieve_public_bytes_v4
+        transport = transport or retrieve_public_bytes
         return self._execute(request, transport, now or utc_now())
 
     def _execute(self, request: ConnectorRequest, transport: Transport, now: str) -> ConnectorResponse:

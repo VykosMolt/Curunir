@@ -108,6 +108,24 @@ def _affected(store: SemanticStore, observations: Iterable[Mapping[str, Any] | N
     return tuple(sorted(object_ids)), tuple(sorted(claim_ids))
 
 
+_CONTENT_TRUNCATION_WARNING_PREFIXES = (
+    "FIELDS_TRUNCATED", "FIELD_VALUES_TRUNCATED",
+    "PDF_TEXT_DERIVATIVE_TRUNCATED")
+
+
+def _current_read_truncated(store: SemanticStore,
+                            manifestation: Mapping[str, Any],
+                            manifestation_id: str) -> bool:
+    """Whether semantic content, rather than only its anchor map, was capped."""
+    if manifestation.get("truncated"):
+        return True
+    document = next((record for record in store.records_of("semantic_document")
+                     if record.get("manifestation_id") == manifestation_id), None)
+    return bool(document and any(
+        str(warning).startswith(_CONTENT_TRUNCATION_WARNING_PREFIXES)
+        for warning in document.get("warnings", ())))
+
+
 def interpret_change(ctx: IntegrationContext, prior_manifestation_id: str,
                      current_manifestation_id: str, *, watch_id: str = "",
                      fabric_change_id: str = "", current_text: str = "",
@@ -136,6 +154,16 @@ def interpret_change(ctx: IntegrationContext, prior_manifestation_id: str,
     else:
         differences = classify_pairwise(prior_observations, current_observations,
                                         current_text)
+        if _current_read_truncated(store, current_manifestation,
+                                   current_manifestation_id):
+            # A partial current read cannot establish that prior content was
+            # removed or changed. Additions remain usable because truncation
+            # can hide source content but cannot manufacture it.
+            for difference in differences:
+                if (difference["change_class"] in _STATE_FOR_CLASS
+                        and difference.get("prior") is not None):
+                    difference["change_class"] = "UNRESOLVED_CHANGE"
+                    difference["truncated_current"] = True
 
     existing_changes = {r["change_id"]: r for r in store.records_of("semantic_change")}
     existing_change_ids = set(existing_changes)
@@ -196,6 +224,13 @@ def _detail(difference: Mapping[str, Any]) -> str:
         return (f"{difference['truncated_count']} further differences were not "
                 f"individually interpreted (record cap); first keys: "
                 f"{difference['truncated_keys']}")
+    if difference["change_class"] == "UNRESOLVED_CHANGE" \
+            and difference.get("truncated_current"):
+        observation = current_obs or prior_obs or {}
+        return (f"{observation.get('subject_ref', '')} "
+                f"{observation.get('attribute', '')}: current content was "
+                "truncated, so apparent removal/change is not deletion or "
+                "staleness evidence")
     if prior_obs and current_obs:
         return (f"{current_obs['subject_ref']} {current_obs['attribute']}: "
                 f"{prior_obs['value'][:120]!r} → {current_obs['value'][:120]!r}")

@@ -16,7 +16,12 @@ from __future__ import annotations
 import hashlib
 import html as html_module
 import json
+import os
 import re
+import select
+import subprocess
+import tempfile
+import time
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
@@ -25,6 +30,8 @@ from argus.prospective.research.offline_official_ingestion import (
     classify_html, detect_format, text_derivative, xml_derivative,
 )
 from argus.source_intelligence.models import digest_id
+from curunir_operational.canonical import parse_external_json
+from curunir_operational.xml_safety import reject_dtd
 
 from . import PARSER_VERSION
 from .contracts import NormalizedDocumentRecord
@@ -37,6 +44,7 @@ from .store import SemanticStore
 MAX_FIELDS = 50_000
 MAX_FIELD_VALUE = 2000
 MAX_REGIONS = 400
+MAX_PDF_TEXT_BYTES = 25_000_000
 
 _BLOCK_TAGS = {"p", "h1", "h2", "h3", "h4", "h5", "h6", "li", "td", "th", "caption",
                "blockquote", "pre", "figcaption", "dt", "dd", "title", "summary"}
@@ -62,16 +70,21 @@ def load_manifestation_bytes(custody_root: str | Path, manifestation: dict) -> b
 # ---- JSON structured records --------------------------------------------
 
 
-def json_fields(payload: Any, *, prefix: str = "$") -> list[tuple[str, str]]:
+def _json_fields(payload: Any, *, prefix: str = "$"
+                 ) -> tuple[list[tuple[str, str]], bool, bool]:
     """Flatten a JSON payload into (field_path, scalar value) rows.
 
     Paths are stable JSONPath-style addresses; structure is preserved as
     addressable fields, never collapsed into prose.
     """
     rows: list[tuple[str, str]] = []
+    field_cap_reached = False
+    value_cap_reached = False
 
     def walk(node: Any, path: str) -> None:
+        nonlocal field_cap_reached, value_cap_reached
         if len(rows) >= MAX_FIELDS:
+            field_cap_reached = True
             return
         if isinstance(node, dict):
             for key in sorted(node):
@@ -81,10 +94,16 @@ def json_fields(payload: Any, *, prefix: str = "$") -> list[tuple[str, str]]:
                 walk(item, f"{path}[{index}]")
         else:
             value = "" if node is None else (node if isinstance(node, str) else json.dumps(node))
+            if len(value) > MAX_FIELD_VALUE:
+                value_cap_reached = True
             rows.append((path, value[:MAX_FIELD_VALUE]))
 
     walk(payload, prefix)
-    return rows
+    return rows, field_cap_reached, value_cap_reached
+
+
+def json_fields(payload: Any, *, prefix: str = "$") -> list[tuple[str, str]]:
+    return _json_fields(payload, prefix=prefix)[0]
 
 
 # ---- HTML block normalization -------------------------------------------
@@ -211,11 +230,7 @@ def _detect(manifestation: dict, data: bytes) -> str:
     media = (manifestation.get("media_type") or "").casefold()
     stripped = data.lstrip()[:64]
     if "json" in media or stripped.startswith((b"{", b"[")):
-        try:
-            json.loads(data.decode("utf-8"))
-            return "JSON"
-        except (ValueError, UnicodeDecodeError):
-            pass
+        return "JSON"
     if "rss" in media or "atom" in media:
         return "FEED"
     fmt, _, _ = detect_format(data)
@@ -253,11 +268,18 @@ def normalize_manifestation(store: SemanticStore, manifestation: dict,
     language = language_hint
 
     if fmt == "JSON":
-        payload = json.loads(data.decode("utf-8"))
-        rows = json_fields(payload)
+        try:
+            payload, repaired = parse_external_json(data)
+        except ValueError as error:
+            raise NormalizationError(str(error)) from error
+        rows, fields_truncated, values_truncated = _json_fields(payload)
         field_count = len(rows)
-        if field_count >= MAX_FIELDS:
+        if fields_truncated:
             warnings.append(f"FIELDS_TRUNCATED_AT_{MAX_FIELDS}")
+        if values_truncated:
+            warnings.append(f"FIELD_VALUES_TRUNCATED_AT_{MAX_FIELD_VALUE}")
+        if repaired:
+            warnings.append("SCRUBBED_UNENCODABLE_CHARACTERS")
         fields_body = json.dumps(rows, ensure_ascii=False, sort_keys=False).encode("utf-8")
         fields_sha = store.put_payload(fields_body)
         text = json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=1)
@@ -265,6 +287,7 @@ def normalize_manifestation(store: SemanticStore, manifestation: dict,
         structural.append(("field_paths", "JSONPATH_DOLLAR"))
     elif fmt in ("FEED", "XML"):
         try:
+            reject_dtd(data)
             normalized, maps, legacy_warnings = xml_derivative(data)
         except Exception as exc:
             raise NormalizationError("NORMALIZATION_FAILED_MALFORMED_XML") from exc
@@ -275,8 +298,11 @@ def normalize_manifestation(store: SemanticStore, manifestation: dict,
         if len(maps) > MAX_REGIONS:
             warnings.append(f"REGIONS_TRUNCATED_AT_{MAX_REGIONS}")
         # element paths double as a field table for structured extraction
-        rows = [(path, text[start:end][:MAX_FIELD_VALUE]) for path, start, end in maps]
+        rows = [(path, text[start:end][:MAX_FIELD_VALUE])
+                for path, start, end in maps[:MAX_FIELDS]]
         field_count = len(rows)
+        if len(maps) > MAX_FIELDS:
+            warnings.append(f"FIELDS_TRUNCATED_AT_{MAX_FIELDS}")
         fields_body = json.dumps(rows, ensure_ascii=False).encode("utf-8")
         fields_sha = store.put_payload(fields_body)
         content_class = "FEED" if fmt == "FEED" else "API_RESPONSE"
@@ -294,7 +320,9 @@ def normalize_manifestation(store: SemanticStore, manifestation: dict,
         structural.append(("encoding", encoding))
     elif fmt == "PDF":
         text, page_regions, pdf_warnings = _pdf_text(data)
-        regions = page_regions
+        regions = page_regions[:MAX_REGIONS]
+        if len(page_regions) > MAX_REGIONS:
+            pdf_warnings.append(f"REGIONS_TRUNCATED_AT_{MAX_REGIONS}")
         warnings.extend(pdf_warnings)
         structural.append(("pdf_tool", "pdftotext-layout"))
     else:
@@ -326,16 +354,62 @@ def normalize_manifestation(store: SemanticStore, manifestation: dict,
 
 
 def _pdf_text(data: bytes) -> tuple[str, list[tuple[str, int, int]], list[str]]:
-    import subprocess
+    """Run pdftotext with wall-clock and captured-output bounds."""
+    path = ""
+    process: subprocess.Popen | None = None
+    output = bytearray()
+    truncated = False
     try:
-        result = subprocess.run(["pdftotext", "-layout", "-", "-"], input=data,
-                                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                timeout=30, check=False)
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        raise NormalizationError("PDF_TEXT_DERIVATIVE_TOOL_UNAVAILABLE") from exc
-    if result.returncode != 0 or not result.stdout.strip():
+        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as source:
+            source.write(data)
+            path = source.name
+        process = subprocess.Popen(
+            ["pdftotext", "-layout", path, "-"], stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL)
+        assert process.stdout is not None
+        deadline = time.monotonic() + 30
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise subprocess.TimeoutExpired(process.args, 30)
+            ready, _, _ = select.select([process.stdout], [], [], remaining)
+            if not ready:
+                raise subprocess.TimeoutExpired(process.args, 30)
+            chunk = os.read(process.stdout.fileno(), 65_536)
+            if not chunk:
+                break
+            remaining_bytes = MAX_PDF_TEXT_BYTES + 1 - len(output)
+            output.extend(chunk[:remaining_bytes])
+            if len(output) > MAX_PDF_TEXT_BYTES:
+                truncated = True
+                process.terminate()
+                break
+        try:
+            returncode = process.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            returncode = process.wait(timeout=2)
+    except FileNotFoundError as error:
+        raise NormalizationError("PDF_TEXT_DERIVATIVE_TOOL_UNAVAILABLE") from error
+    except (OSError, subprocess.TimeoutExpired) as error:
+        if process is not None:
+            process.kill()
+            process.wait()
+        raise NormalizationError("PDF_TEXT_DERIVATIVE_RESOURCE_LIMIT") from error
+    finally:
+        if path:
+            try:
+                os.unlink(path)
+            except FileNotFoundError:
+                pass
+    if (returncode != 0 and not truncated) or not output.strip():
         raise NormalizationError("PDF_TEXT_DERIVATIVE_PARSE_FAILURE")
-    text = result.stdout.decode("utf-8", "replace")
+    warnings = ["ORIGINAL_PDF_BYTES_PRESERVED",
+                "DERIVATIVE_OFFSETS_NOT_ORIGINAL_PDF_BYTE_OFFSETS"]
+    if truncated:
+        del output[MAX_PDF_TEXT_BYTES:]
+        warnings.append("PDF_TEXT_DERIVATIVE_TRUNCATED_TO_BOUND")
+    text = bytes(output).decode("utf-8", "replace")
     pages = text.split("\f")
     if pages and not pages[-1].strip():
         pages.pop()
@@ -344,8 +418,7 @@ def _pdf_text(data: bytes) -> tuple[str, list[tuple[str, int, int]], list[str]]:
     for number, page in enumerate(pages, 1):
         regions.append((f"page:{number}", offset, offset + len(page)))
         offset += len(page) + 1
-    return "\f".join(pages), regions, ["ORIGINAL_PDF_BYTES_PRESERVED",
-                                       "DERIVATIVE_OFFSETS_NOT_ORIGINAL_PDF_BYTE_OFFSETS"]
+    return "\f".join(pages), regions, warnings
 
 
 def load_fields(store: SemanticStore, document_record: dict) -> list[tuple[str, str]]:

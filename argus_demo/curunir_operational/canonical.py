@@ -104,6 +104,55 @@ def parse_json_strict(data: bytes | str, *, label: str = "JSON") -> Any:
         raise ValueError(f"invalid {label}: {exc}") from exc
 
 
+def parse_external_json(data: bytes | str, *, label: str = "external JSON"
+                        ) -> tuple[Any, bool]:
+    """Parse foreign JSON without losing duplicate-key or Unicode defects.
+
+    A lone surrogate in a source string is repaired to U+FFFD and disclosed by
+    the returned flag. Structural ambiguity, non-finite numbers, unsupported
+    depth, invalid UTF-8, and key collisions remain loud refusals.
+    """
+    repaired = False
+
+    def clean(value: Any, depth: int = 0) -> Any:
+        nonlocal repaired
+        if depth > MAX_CANONICAL_DEPTH:
+            raise ValueError("external JSON exceeds the maximum nesting depth")
+        if isinstance(value, str):
+            normalized = value.encode("utf-8", "replace").decode("utf-8")
+            repaired |= normalized != value
+            return normalized
+        if value is None or isinstance(value, (bool, int, float)):
+            validate_interchange(value)
+            return value
+        if isinstance(value, Mapping):
+            result: dict[str, Any] = {}
+            for key, item in value.items():
+                normalized_key = clean(key, depth + 1)
+                if normalized_key in result:
+                    raise ValueError("external JSON keys collide after Unicode repair")
+                result[normalized_key] = clean(item, depth + 1)
+            return result
+        if isinstance(value, list):
+            return [clean(item, depth + 1) for item in value]
+        raise ValueError(f"unsupported external JSON type: {type(value).__name__}")
+
+    try:
+        text = data.decode("utf-8", errors="strict") if isinstance(data, bytes) else data
+        parsed = json.loads(
+            text,
+            object_pairs_hook=_no_duplicate_keys,
+            parse_constant=lambda token: (_ for _ in ()).throw(
+                ValueError(f"non-finite JSON token: {token}")),
+        )
+        value = clean(parsed)
+        validate_interchange(value)
+        return value, repaired
+    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError, ValueError,
+            TypeError) as exc:
+        raise ValueError(f"invalid {label}: {exc}") from exc
+
+
 def canonical_line(value: Any) -> str:
     validate_interchange(value)
     return canonical_bytes(value).decode()

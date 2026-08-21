@@ -24,6 +24,8 @@ from .normalize import NormalizationError, load_text, normalize_manifestation, n
 from .store import SemanticStore
 from .worldmodel import IntegrationContext, integrate_document, propose_cross_scheme_associations
 
+MAX_PROCESSING_ATTEMPTS = 5
+
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -47,6 +49,17 @@ class SemanticPipeline:
     def _failure_item_id(self, manifestation_id: str) -> str:
         return digest_id("review-processing", manifestation_id)
 
+    def _processing_attempts(self) -> dict[str, int]:
+        """Reconstruct consecutive failures from append-only review history."""
+        attempts: dict[str, int] = {}
+        for item in self.store.records_of("review_item"):
+            if item["kind"] != "PROCESSING_FAILED":
+                continue
+            subject = item["subject_id"]
+            attempts[subject] = (0 if item["status"] == "RESOLVED"
+                                 else attempts.get(subject, 0) + 1)
+        return attempts
+
     def _record_processing_failure(self, manifestation_id: str, stage: str,
                                    error: Exception, marking=None) -> None:
         """A pipeline failure is durable state, never a silently dropped
@@ -55,10 +68,15 @@ class SemanticPipeline:
         manifestation's marking, never a lower pipeline default."""
         from .contracts import ReviewItem
         item_id = self._failure_item_id(manifestation_id)
-        detail = f"{stage} failed: {type(error).__name__}: {str(error)[:300]}"
-        latest = self.store.latest_by_id("review_item", "item_id").get(item_id)
-        if latest is not None and latest["status"] == "OPEN" and latest["detail"] == detail:
-            return  # an identical failure is already queued; retries do not stack items
+        attempts = self._processing_attempts().get(manifestation_id, 0)
+        if attempts >= MAX_PROCESSING_ATTEMPTS:
+            return
+        attempt = attempts + 1
+        error_text = str(error)[:300].encode("utf-8", "replace").decode("utf-8")
+        detail = (f"{stage} failed (attempt {attempt}/{MAX_PROCESSING_ATTEMPTS}): "
+                  f"{type(error).__name__}: {error_text}")
+        if attempt == MAX_PROCESSING_ATTEMPTS:
+            detail += " — auto-retry exhausted; manual intervention required"
         item = ReviewItem(
             item_id=item_id, kind="PROCESSING_FAILED",
             subject_kind="fabric_manifestation", subject_id=manifestation_id,
@@ -113,6 +131,8 @@ class SemanticPipeline:
             document = normalize_manifestation(
                 self.store, manifestation, self.custody_root,
                 now=now, actor=self.actor, marking=item_marking)
+        except MemoryError:
+            raise
         except NormalizationError as error:
             self._record_processing_failure(manifestation_id, "normalization", error, item_marking)
             return {"manifestation_id": manifestation_id,
@@ -127,6 +147,8 @@ class SemanticPipeline:
                                                 actor=self.actor, marking=item_marking)
             ctx = self.context(item_marking)
             integration = integrate_document(ctx, document)
+        except MemoryError:
+            raise
         except Exception as error:
             self._record_processing_failure(manifestation_id, "understanding", error, item_marking)
             return {"manifestation_id": manifestation_id,
@@ -146,8 +168,12 @@ class SemanticPipeline:
         open_failures = {r["subject_id"]
                          for r in self.store.latest_by_id("review_item", "item_id").values()
                          if r["kind"] == "PROCESSING_FAILED" and r["status"] == "OPEN"}
+        exhausted = {subject for subject, count in self._processing_attempts().items()
+                     if count >= MAX_PROCESSING_ATTEMPTS}
         for manifestation in self.store.records_of("fabric_manifestation"):
             manifestation_id = manifestation["manifestation_id"]
+            if manifestation_id in exhausted:
+                continue
             if normalized_document_id(manifestation_id) in known \
                     and manifestation_id not in open_failures:
                 continue

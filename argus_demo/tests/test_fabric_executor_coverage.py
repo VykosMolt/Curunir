@@ -27,7 +27,9 @@ MARK = Marking(owning_authority="test-fabric", releasability=("PUBLIC",))
 WIKIDATA_BODY = json.dumps({"search": [
     {"id": "Q4416184", "label": "Severstal", "description": "Russian steel company",
      "concepturi": "http://www.wikidata.org/entity/Q4416184"}]}).encode()
-EMPTY_SEARCH_BODY = json.dumps({"search": []}).encode()
+# A genuine empty EDGAR success response retains its required hits container.
+# A container-less 200 is a source error, not evidence of absence.
+EMPTY_SEARCH_BODY = json.dumps({"hits": {"hits": [], "total": {"value": 0}}}).encode()
 GLEIF_BODY = json.dumps({
     "meta": {"pagination": {"currentPage": 1, "lastPage": 1}},
     "data": [{"id": "2534000WLRB86TSQ3245", "attributes": {
@@ -125,6 +127,44 @@ def test_empty_search_responses_are_preserved_as_evidence(ctx):
     assert manifestation.content_sha256 == digest
     stored = Path(ctx.custody.root) / "sha256" / digest[:2] / digest[2:4] / digest
     assert stored.exists() and stored.read_bytes() == EMPTY_SEARCH_BODY
+
+
+def test_connector_fault_is_source_failed_but_memory_error_propagates(ctx):
+    query = QuerySpec(query_id="q-fault", family="EXACT_NAME", value="Severstal",
+                      language="", script="", operation="SEARCH", source_id="gleif",
+                      time_bounds=(None, None), origin="RULE", origin_detail="test",
+                      rationale="r", derived_from=())
+
+    def source_fault(**kwargs):
+        raise ConnectionResetError("peer reset")
+
+    ctx.transports["gleif-lei-v1"] = source_fault
+    result = execute_single(ctx, query=query, source_id="gleif")
+    assert result.execution.outcome == "SOURCE_FAILED"
+
+    def local_exhaustion(**kwargs):
+        raise MemoryError("out of memory")
+
+    ctx.transports["gleif-lei-v1"] = local_exhaustion
+    with pytest.raises(MemoryError):
+        execute_single(ctx, query=query, source_id="gleif")
+
+
+def test_local_custody_fault_propagates_without_blame(ctx):
+    from curunir_fabric.executor import LocalStorageFault
+
+    def full_disk(*args, **kwargs):
+        raise OSError(28, "No space left on device")
+
+    ctx.custody.preserve = full_disk
+    query = QuerySpec(query_id="q-disk", family="EXACT_NAME", value="Severstal",
+                      language="", script="", operation="SEARCH", source_id="wikidata",
+                      time_bounds=(None, None), origin="RULE", origin_detail="test",
+                      rationale="r", derived_from=())
+    with pytest.raises(LocalStorageFault):
+        execute_single(ctx, query=query, source_id="wikidata")
+    assert not [record for record in ctx.store.records_of("fabric_source_status")
+                if record["source_id"] == "wikidata" and record["kind"] == "FAILURE"]
 
 
 def test_manifestation_links_prior_version_of_same_target(ctx):

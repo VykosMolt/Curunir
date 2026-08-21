@@ -184,6 +184,7 @@ class ExecutionRecord(Record):
     manifestation_ids: tuple[str, ...]
     started_time: str; completed_time: str | None
     absence_semantics: str; marking: Marking
+    truncated: bool = False
 
     def __post_init__(self):
         _member(self.outcome, EXECUTION_OUTCOMES, "execution outcome")

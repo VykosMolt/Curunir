@@ -17,10 +17,12 @@ from typing import Callable, Mapping
 from argus.source_intelligence.custody import SourceCustodyStore
 from argus.source_intelligence.models import RetrievalAttempt, digest_id
 from argus.source_intelligence.policy import POLICY_VERSION, acquisition_eligible, classify_access
+from curunir_operational.store import StoreError
 
 from . import ABSENCE_SEMANTICS, PACKAGE_VERSION
 from .connectors import BUILTIN_CONNECTORS
-from .connectors.base import ConnectorRequest, ConnectorResponse, NativeResult, SourceConnector, utc_now
+from .connectors.base import (ConnectorRequest, ConnectorResponse, NativeResult,
+                              SourceConnector, scrub_surrogates, utc_now)
 from .contracts import DiscoveryPlan, ExecutionRecord, ManifestationRecord, QuerySpec
 from .planner import eligible_sources
 from .registry import RegistryView, record_source_status
@@ -39,6 +41,10 @@ _STATUS_TO_OUTCOME = {
     "ACCESS_RESTRICTED": "ACCESS_RESTRICTED",
     "NOT_SUPPORTED": "NOT_ATTEMPTED",
 }
+
+
+class LocalStorageFault(OSError):
+    """A custody/local-disk failure, never attributable to the source."""
 
 
 def content_class_for(media_type: str, body: bytes) -> str:
@@ -113,10 +119,13 @@ def _manifestation(ctx: ExecutionContext, *, source_id: str, connector: SourceCo
         policy_version=POLICY_VERSION, created_at=response.retrieved_time,
     )
     filename = (native_id or response.request_url).replace("/", "_")[:120] or "response"
-    content, source_object, _events, _new = ctx.custody.preserve(
-        retrieval, body, filename=filename, source_descriptor_id=source_id,
-        document_type=content_class, now=response.retrieved_time,
-    )
+    try:
+        content, source_object, _events, _new = ctx.custody.preserve(
+            retrieval, body, filename=filename, source_descriptor_id=source_id,
+            document_type=content_class, now=response.retrieved_time,
+        )
+    except (OSError, ValueError) as error:
+        raise LocalStorageFault(f"custody preservation failed: {error}") from error
     prior_id = None
     observation_key = f"{source_id}|{native_id or response.request_url}"
     for record in reversed(ctx.store.records_of("fabric_manifestation")):
@@ -159,6 +168,7 @@ def execute_single(ctx: ExecutionContext, *, query: QuerySpec, source_id: str,
                policy_decision: str = "", error_class: str | None = None,
                error_detail: str = "") -> ExecutionResult:
         completed = ctx.now_fn()
+        error_detail = scrub_surrogates(error_detail)
         execution = ExecutionRecord(
             execution_id=digest_id("execution", plan_id, query.query_id, source_id, started),
             plan_id=plan_id, query_id=query.query_id, source_id=source_id,
@@ -172,11 +182,15 @@ def execute_single(ctx: ExecutionContext, *, query: QuerySpec, source_id: str,
             manifestation_ids=tuple(item.manifestation_id for item in manifestations),
             started_time=started, completed_time=completed,
             absence_semantics=ABSENCE_SEMANTICS, marking=ctx.marking,
+            truncated=bool(response.truncated) if response else False,
         )
-        ctx.store.append("FABRIC_EXECUTION_RECORDED", execution, recorded_time=completed, actor=ctx.actor)
+        # Referents land first. An interruption can leave an unreferenced
+        # manifestation, but never an execution containing a dangling id.
         for manifestation in manifestations:
             ctx.store.append("FABRIC_MANIFESTATION_RECORDED", manifestation,
                              recorded_time=completed, actor=ctx.actor)
+        ctx.store.append("FABRIC_EXECUTION_RECORDED", execution,
+                         recorded_time=completed, actor=ctx.actor)
         if descriptor is not None and outcome in ("EXECUTED_WITH_RESULTS", "EXECUTED_EMPTY"):
             record_source_status(ctx.store, source_id=source_id, connector_id=connector_id,
                                  kind="SUCCESS", operation=query.operation,
@@ -206,28 +220,33 @@ def execute_single(ctx: ExecutionContext, *, query: QuerySpec, source_id: str,
     request = ConnectorRequest(operation=query.operation, value=query.value,
                                language=query.language, time_bounds=query.time_bounds)
     transport = ctx.transports.get(connector.connector_id)
-    response = connector.execute(request, transport=transport, now=ctx.now_fn())
-    outcome = _STATUS_TO_OUTCOME[response.status]
-
-    manifestations: tuple[ManifestationRecord, ...] = ()
-    if response.status in ("OK", "EMPTY") and response.raw_body:
-        historical = query.operation.startswith("HISTORICAL_")
-        single = response.results[0] if len(response.results) == 1 else None
-        capture_time = single.source_time if historical and single else None
-        # a multi-result response (e.g. a CDX enumeration) is identified by
-        # the target it enumerates, not left anonymous: dependence grouping
-        # and prior-version linking key on this identity
-        native_id = single.native_id if single else (
-            query.value if query.operation in ("HISTORICAL_ENUMERATE", "ENUMERATE", "POLL")
-            else "")
-        manifestations = (_manifestation(
-            ctx, source_id=source_id, connector=connector,
-            execution_id=digest_id("execution", plan_id, query.query_id, source_id, started),
-            response=response, native_id=native_id,
-            temporal_status="HISTORICAL" if historical and capture_time else "LIVE",
-            source_time=single.source_time if single else None,
-            archive_capture_time=capture_time,
-        ),)
+    try:
+        response = connector.execute(request, transport=transport, now=ctx.now_fn())
+        outcome = _STATUS_TO_OUTCOME[response.status]
+        manifestations: tuple[ManifestationRecord, ...] = ()
+        if response.status in ("OK", "EMPTY") and response.raw_body:
+            historical = query.operation.startswith("HISTORICAL_")
+            single = response.results[0] if len(response.results) == 1 else None
+            capture_time = single.source_time if historical and single else None
+            # a multi-result response is identified by the target it enumerates.
+            native_id = single.native_id if single else (
+                query.value if query.operation in
+                ("HISTORICAL_ENUMERATE", "ENUMERATE", "POLL") else "")
+            manifestations = (_manifestation(
+                ctx, source_id=source_id, connector=connector,
+                execution_id=digest_id(
+                    "execution", plan_id, query.query_id, source_id, started),
+                response=response, native_id=native_id,
+                temporal_status="HISTORICAL" if historical and capture_time else "LIVE",
+                source_time=single.source_time if single else None,
+                archive_capture_time=capture_time,
+            ),)
+    except (MemoryError, StoreError, LocalStorageFault):
+        raise
+    except Exception as error:
+        return finish("SOURCE_FAILED", error_class="CONNECTOR_ERROR",
+                      error_detail=f"{type(error).__name__}: {error}"[:500],
+                      policy_decision=decision.decision)
 
     return finish(outcome, response=response, results=response.results,
                   manifestations=manifestations,

@@ -5,6 +5,8 @@ import email.utils
 import xml.etree.ElementTree as ElementTree
 from datetime import timezone
 
+from curunir_operational.xml_safety import reject_dtd
+
 from .base import ConnectorRequest, ConnectorResponse, NativeResult, SourceConnector, Transport
 
 ATOM_NS = "{http://www.w3.org/2005/Atom}"
@@ -36,6 +38,7 @@ def _text(node: ElementTree.Element | None) -> str:
 
 
 def parse_feed_items(body: bytes) -> list[NativeResult]:
+    reject_dtd(body)
     root = ElementTree.fromstring(body)
     items: list[NativeResult] = []
     if root.tag == "rss":

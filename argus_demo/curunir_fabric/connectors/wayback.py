@@ -59,10 +59,16 @@ class WaybackConnector(SourceConnector):
             return self._failed(request, url, raw, now=now,
                                 error_class="TRANSPORT" if raw.get("status") is None else "HTTP",
                                 error_detail=self.transport_error_detail(raw))
+        if not raw.get("body"):
+            return self._failed(request, url, raw, now=now, error_class="HTTP",
+                                error_detail="empty CDX response body")
         try:
-            rows = json.loads(raw["body"].decode("utf-8")) if raw.get("body") else []
+            rows = json.loads(raw["body"].decode("utf-8"))
         except (ValueError, UnicodeDecodeError) as exc:
             return self._failed(request, url, raw, now=now, error_class="PARSE", error_detail=str(exc))
+        if not isinstance(rows, list):
+            return self._failed(request, url, raw, now=now, error_class="PARSE",
+                                error_detail="CDX response is not a JSON array")
         next_cursor = None
         if rows and rows[-1] and len(rows[-1]) == 1:  # trailing resume key row (after a blank row)
             next_cursor = rows[-1][0]
@@ -70,11 +76,17 @@ class WaybackConnector(SourceConnector):
         rows = [row for row in rows if row]
         results = []
         for row in rows[1:]:  # first row is the header
+            if not isinstance(row, list) or len(row) < 5:
+                continue
             timestamp, original, digest, mimetype, statuscode = row[:5]
+            try:
+                source_time = capture_time_iso(timestamp)
+            except (TypeError, ValueError):
+                continue
             results.append(NativeResult(
                 native_id=f"{timestamp}/{original}",
                 url=f"{CAPTURE_ENDPOINT}/{timestamp}id_/{original}",
-                source_time=capture_time_iso(timestamp),
+                source_time=source_time,
                 identifiers=(("wayback_digest", digest),),
                 attributes=(("mimetype", mimetype), ("statuscode", statuscode),
                             ("original_url", original), ("timestamp", timestamp)),

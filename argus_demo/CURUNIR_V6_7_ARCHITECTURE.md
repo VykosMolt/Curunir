@@ -42,9 +42,17 @@ campaign are outside scope.
 7. `curunir_identity` owns Ed25519 keys, sessions, signed-action verification,
    and historical replay. Verification is pure; authorization executes next;
    the signed-action audit record is committed only after success.
-8. Acquisition, provider, subprocess, and HTTP render edges each normalize or
-   refuse hostile values once at entry. Resource exhaustion is a failure or
-   unresolved observation, never evidence of absence.
+8. `curunir_fabric/transport.py` is the only product public-web transport. It
+   validates every initial/redirect destination before request, resolves each
+   hop once, and connects only to the validated public address set. Connector
+   overrides remain an offline-test seam, not a second production transport.
+9. `curunir_analytic/providers.py` resolves both declared input references and
+   record identifiers carried in provider cargo against raw state before the
+   call. Hostile output is retained as an invalid inference, never converted
+   into plausible analytical content.
+10. Acquisition, provider, XML, subprocess, and HTTP render edges normalize or
+    refuse hostile values once at entry. Resource exhaustion is a failure or
+    unresolved observation, never evidence of absence.
 
 ## Invariants and forbidden shortcuts
 

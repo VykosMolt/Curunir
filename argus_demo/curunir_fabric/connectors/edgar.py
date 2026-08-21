@@ -47,7 +47,13 @@ class EdgarFullTextConnector(SourceConnector):
             payload = json.loads(raw["body"].decode("utf-8"))
         except (ValueError, UnicodeDecodeError) as exc:
             return self._failed(request, url, raw, now=now, error_class="PARSE", error_detail=str(exc))
-        hits = ((payload.get("hits") or {}).get("hits")) or []
+        if not isinstance(payload, dict) or not isinstance(payload.get("hits"), dict):
+            detail = (f"source-declared error: {str(payload.get('error'))[:200]}"
+                      if isinstance(payload, dict) and payload.get("error")
+                      else "EDGAR response missing hits container")
+            return self._failed(request, url, raw, now=now,
+                                error_class="HTTP", error_detail=detail)
+        hits = (payload["hits"].get("hits")) or []
         results = []
         for hit in hits[: request.limit]:
             source = hit.get("_source") or {}

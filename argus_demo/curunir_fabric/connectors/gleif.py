@@ -68,6 +68,12 @@ class GleifConnector(SourceConnector):
             payload = json.loads(raw["body"].decode("utf-8"))
         except (ValueError, UnicodeDecodeError) as exc:
             return self._failed(request, url, raw, now=now, error_class="PARSE", error_detail=str(exc))
+        if not isinstance(payload, dict) or "data" not in payload:
+            detail = (f"source-declared errors: {str(payload.get('errors'))[:200]}"
+                      if isinstance(payload, dict) and payload.get("errors")
+                      else "response is not a JSON:API document (missing data)")
+            return self._failed(request, url, raw, now=now,
+                                error_class="HTTP", error_detail=detail)
         data = payload.get("data")
         items = data if isinstance(data, list) else ([data] if data else [])
         results = tuple(_record_result(item) for item in items)
