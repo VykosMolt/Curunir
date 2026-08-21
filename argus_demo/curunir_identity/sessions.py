@@ -138,7 +138,14 @@ class SessionManager:
             )
             if key is None:
                 raise AuthError("no active key verifies the challenge")
-            self._prune_sessions(now, actor_id)
+            try:
+                self._prune_sessions(now, actor_id)
+            except AuthError:
+                # Authentication succeeded, but capacity admission did not.
+                # Preserve the verified one-time challenge so a retry after
+                # capacity becomes available does not require a new nonce.
+                self._pending[nonce] = pending
+                raise
             session = Session(
                 session_id=secrets.token_hex(24),
                 actor_id=actor_id,

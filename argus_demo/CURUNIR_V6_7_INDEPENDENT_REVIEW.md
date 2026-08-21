@@ -26,6 +26,20 @@ recorded so a failure/error kind change is refused.  Signed report approval
 derives its expected version from the signed target token, not the unsigned
 HTTP compatibility field.
 
-The reviewer made no repository edits.  Closure of these findings requires a
-fresh independent review of the repair commit; this document does not claim
-that second review has occurred.
+The reviewer made no repository edits.
+
+## Second review and retained findings
+
+Grok 4.6 xhigh independently reviewed repair commit
+`9dea19fbd9bf7e4e816a6d0ad1d915ccac4fafbe` read-only and again returned
+`REJECT` / `DO_NOT_MERGE`.  It confirmed the claimed closures from the first
+review, then found one sibling write-down and one retry-semantics defect:
+
+| ID | Severity | Finding | Repair and causal lock |
+|---|---|---|---|
+| `V67-REV2-C1` | Critical | Arming a SPECIAL indicator copied its description into a PUBLIC forecast version; later updates left the leaking version visible in history. | Forecast folding now records only the indicator ID. The indicator-prose lock plants separate secrets in description and rationale and inspects every PUBLIC-visible forecast version. |
+| `V67-REV2-m1` | Minor | Session-capacity refusal consumed an otherwise valid, verified challenge. | Authentication restores the pending challenge only when capacity admission refuses; the retry lock proves the same signed nonce succeeds after capacity is released. |
+
+The second reviewer made no repository edits.  Closure of these findings
+requires fresh independent review of the new repair commit; this document
+does not claim that third review has occurred.

@@ -1,4 +1,4 @@
-"""Causal locks for the first independent V6.7 adversarial review."""
+"""Causal locks for independent V6.7 adversarial reviews."""
 from __future__ import annotations
 
 import hashlib
@@ -17,7 +17,7 @@ from curunir_analytic.forecasts import create_forecast
 from curunir_analytic.indicators import arm_indicator, check_indicators
 from curunir_analytic.substrate import AnalyticContext
 from curunir_analytic.themes import create_theme
-from curunir_identity import KeyRegistry, SessionManager, generate_keypair
+from curunir_identity import KeyRegistry, SessionManager, generate_keypair, sign
 from curunir_identity.sessions import AuthError, Session
 from curunir_fabric.contracts import ManifestationRecord
 from curunir_operational.access import Marking, can_view
@@ -40,6 +40,7 @@ pytestmark = pytest.mark.no_db
 ACME = "LEI:ACMELEI000000000001"
 HORIZON = "2026-08-17T18:00:00+00:00"
 SECRET_RATIONALE = "COVERT-RATIONALE-BLUEJAY-SEALED"
+SECRET_INDICATOR_DESCRIPTION = "COVERT-WATCH-BLUEJAY-DESCRIPTION"
 SECRET_THEME = "COVERT-OP-BLUEJAY-SEALED"
 
 
@@ -61,7 +62,7 @@ def _seed(pipeline, ctx):
 
 
 def test_restricted_indicator_prose_never_enters_public_forecast(tmp_path):
-    """R25A-1: cite a restricted indicator; never quote its rationale."""
+    """R25A-1: cite a restricted indicator; never quote its prose."""
     pipeline, public_ctx = make_analytic(tmp_path)
     claims = _seed(pipeline, public_ctx)
     forecast = create_forecast(
@@ -86,7 +87,7 @@ def test_restricted_indicator_prose_never_enters_public_forecast(tmp_path):
     )
     indicator = arm_indicator(
         restricted_ctx,
-        description="restricted delisting watch",
+        description=SECRET_INDICATOR_DESCRIPTION,
         forecast_ids=(forecast["forecast_id"],),
         kind="PRESENCE",
         direction="SUPPORTS",
@@ -117,9 +118,20 @@ def test_restricted_indicator_prose_never_enters_public_forecast(tmp_path):
     assert moved["probability"] == 0.62
     assert can_view(moved["marking"], CTX_B)
     assert SECRET_RATIONALE not in json.dumps(moved)
+    assert SECRET_INDICATOR_DESCRIPTION not in json.dumps(moved)
+
+    versions = public_ctx.store.analytic_versions(
+        "analytic_forecast", forecast["forecast_id"])
+    assert all(
+        SECRET_RATIONALE not in json.dumps(version)
+        and SECRET_INDICATOR_DESCRIPTION not in json.dumps(version)
+        for version in versions
+        if can_view(version["marking"], CTX_B)
+    )
 
     transitions = public_ctx.store.transitions_for(forecast["forecast_id"])
     assert SECRET_RATIONALE not in json.dumps(transitions)
+    assert SECRET_INDICATOR_DESCRIPTION not in json.dumps(transitions)
     material = [
         transition for transition in transitions
         if transition["transition_type"] in {
@@ -302,3 +314,37 @@ def test_new_principal_cannot_evict_another_session(monkeypatch):
     with pytest.raises(AuthError, match="cannot evict"):
         manager._prune_sessions(T0, "newcomer")
     assert set(manager._sessions) == {"victim", "peer"}
+
+
+def test_session_capacity_refusal_preserves_verified_challenge(
+        monkeypatch, tmp_path):
+    from curunir_identity import sessions as sessions_module
+
+    monkeypatch.setattr(sessions_module, "MAX_SESSIONS", 1)
+    manager = SessionManager(now_fn=lambda: T0)
+    store = WorkbenchStore.create(tmp_path / "store", "identity-test", T0)
+    registry = KeyRegistry(store, marking=MARK, now_fn=lambda: T0)
+    private, public = generate_keypair()
+    registry.enroll(
+        actor_id="newcomer", actor_kind="HUMAN", public_key_hex=public)
+    challenge = manager.issue_challenge("newcomer")
+    nonce = challenge["nonce"]
+    signature = sign(
+        private, manager.challenge_payload("newcomer", nonce))
+    manager._sessions["victim"] = Session(
+        "victim", "victim", "HUMAN", "key-victim", T0,
+        "2026-08-17T13:00:00+00:00")
+
+    with pytest.raises(AuthError, match="cannot evict"):
+        manager.authenticate(
+            registry, actor_id="newcomer", nonce=nonce,
+            signature_hex=signature)
+    assert nonce in manager._pending
+    assert set(manager._sessions) == {"victim"}
+
+    manager.revoke_session("victim")
+    session = manager.authenticate(
+        registry, actor_id="newcomer", nonce=nonce,
+        signature_hex=signature)
+    assert session.actor_id == "newcomer"
+    assert nonce not in manager._pending

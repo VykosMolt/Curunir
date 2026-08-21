@@ -157,7 +157,7 @@ def _fold_into_forecasts(ctx: AnalyticContext, indicator: Mapping[str, Any]) -> 
                            {"indicator_ids": tuple(forecast["indicator_ids"])
                             + (indicator["indicator_id"],)},
                            change_reason=f"indicator armed: "
-                                         f"{indicator['description'][:120]}",
+                                         f"{indicator['indicator_id']}",
                            history_note=f"INDICATOR:{indicator['indicator_id'][:18]}")
 
 
