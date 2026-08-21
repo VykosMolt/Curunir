@@ -1,0 +1,45 @@
+{
+  "format": "curunir-v6.8-mission-set-v1",
+  "frozen_on": "2026-08-21",
+  "missions": [
+    {
+      "mission_id": "M1_CORPORATE_REGISTRY_CAPSTONE",
+      "kind": "CONTINUOUS_CAPSTONE",
+      "question": "What does preserved public evidence establish about the subject company's registry standing and public-information continuity, what remains uncertain, and what follow-up is warranted?",
+      "starting_state": "Empty mission root; registered public-source catalog; no acquired evidence or analyst conclusion.",
+      "permitted_sources": ["live public GLEIF", "live public Wikidata", "live public SEC EDGAR", "public Wayback captures", "public web pages reached through the V6 egress gate"],
+      "information_requirements": ["current registry identity and status", "historical public-web context", "public-filing evidence", "independent or explicitly dependent corroboration", "discriminating evidence for the operator's competing hypotheses"],
+      "expected_unknowns": ["public-source coverage gaps", "source-family dependence", "future registry state", "facts not present in captured evidence"],
+      "required_mechanisms": ["mission and objective", "source registry and policy gate", "live acquisition and custody", "structured and unstructured normalization", "entities events relations and temporal state", "themes narratives stakeholders and impact", "competing hypotheses", "authored forecast and named-rule warning", "active collection", "post-collection update", "analyst review", "evidence-bound dossier", "signed two-person disposition", "export import replay"],
+      "completion": ["at least one successful lawful live acquisition is preserved", "operator inspects exact evidence descent", "operator records competing-hypothesis state before and after new evidence", "operator authors or revises a forecast after the update", "a collection action produces a genuine new evidence arrival or a durable external-source failure", "final dossier contains no unsupported settled claim", "submitter and approver are distinct genuine human actors", "semantic replay reproduces the auditable decision state"],
+      "adjudication": "Claims are adjudicated only against exact captured bytes and typed source records. This mission does not establish general corporate truth beyond the captures.",
+      "required_artifacts": ["mission package", "operator event log", "measurement record", "evidence-faithfulness report", "signed final dossier", "replay package and report"]
+    },
+    {
+      "mission_id": "M2_REGULATORY_CORRECTION",
+      "kind": "HETEROGENEOUS_VALIDATION",
+      "question": "After a public regulatory notice is corrected or superseded, which propositions remain supported at each valid and knowledge time, and which earlier conclusion must be revised?",
+      "starting_state": "A deterministic, explicitly notional public regulatory bundle containing a structured notice, an unstructured bulletin, and a later correction/supersession; conclusions are absent.",
+      "permitted_sources": ["versioned notional public JSON notice", "notional public text bulletin", "notional translated derivative labeled as dependent", "notional public correction notice"],
+      "information_requirements": ["source and manifestation identities", "temporal ordering", "correction and supersession effect", "dependence between original and derivative publication", "remaining contradiction or unknown"],
+      "expected_unknowns": ["facts outside the fixture", "whether an uncaptured source exists", "any inference not stated by a notice"],
+      "required_mechanisms": ["immutable custody", "structured and unstructured evidence", "multiple source identities", "dependent multilingual derivative", "claims and temporal state", "correction contradiction and supersession", "competing hypotheses", "operator correction", "evidence-bound output", "replay"],
+      "completion": ["all fixture bytes match the frozen manifest", "operator identifies the superseded proposition", "final output distinguishes observation inference and unresolved state", "no corrected or dependent source is counted as independent current corroboration", "replay retains both historical and current versions"],
+      "adjudication": "The frozen fixture manifest and exact bytes define scenario ground truth; no claim extends to a real person, company, or regulator.",
+      "required_artifacts": ["fixture manifest", "mission package", "operator event log", "measurement record", "faithfulness report", "replay report"]
+    },
+    {
+      "mission_id": "M3_RELIEF_COLLABORATION",
+      "kind": "HETEROGENEOUS_VALIDATION",
+      "question": "Can two authorized analysts reach and record an auditable relief-routing disposition when public logistics observations and compartmented engineering evidence differ?",
+      "starting_state": "A deterministic, explicitly notional relief mission with public JSON/CSV observations, basic WGS84 object locations, and one compartmented engineering assessment; no final disposition.",
+      "permitted_sources": ["notional public JSON feed", "notional public CSV logistics report", "notional public GeoJSON object locations", "notional compartmented engineering text assessment"],
+      "information_requirements": ["route and infrastructure status", "evidence recency", "access-aware view differences", "task and review ownership", "support for any warning or recommendation"],
+      "expected_unknowns": ["uncaptured field conditions", "future movement", "sensor or imagery state", "cross-feed facts not represented in V6"],
+      "required_mechanisms": ["heterogeneous operational ingestion", "temporal object and event update", "alert requirement task and collection handoff", "annotations and dissent", "access control and no write-down", "warning or recommendation", "signed disposition", "export import replay"],
+      "completion": ["public-only actor cannot enumerate compartmented evidence or its identifiers", "cleared operator records review of the restricted basis", "collaborative task state and correction history are preserved", "final disposition cites visible evidence and exposes unresolved uncertainty", "replay yields identical authorized projections for both access contexts"],
+      "adjudication": "The frozen notional fixture defines scenario truth. Basic V6 geometry may be exercised only as existing object context; tracking, sensor fusion, imagery, and common-operating-picture claims are prohibited.",
+      "required_artifacts": ["fixture manifest", "mission package", "two access-context replay fingerprints", "operator event log", "measurement record", "faithfulness report"]
+    }
+  ]
+}

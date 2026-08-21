@@ -1,0 +1,68 @@
+{
+  "format": "curunir-v6.8-repository-truth-v1",
+  "captured_at": "2026-08-21T15:40:00+02:00",
+  "repository_root": "/home/moloch/Saulot",
+  "source_checkout": {
+    "branch": "feature/curunir-v67-hardening",
+    "head": "33330efe6ae3504150b012c88bfd1934f0871136",
+    "status": "DIRTY_UNRELATED_USER_WORK_PRESERVED"
+  },
+  "v6_8_worktree": {
+    "path": "/home/moloch/Saulot/.worktrees/curunir-v68",
+    "branch": "feature/curunir-v68-terminal-validation",
+    "initial_head": "5f0eb4d65986262f36d1d4356c65c3232928b60a",
+    "initial_status": "CLEAN"
+  },
+  "main": {
+    "head": "5f0eb4d65986262f36d1d4356c65c3232928b60a",
+    "v6_7_merge_state": "ACCEPTED_V6_7_IS_MAIN_HEAD"
+  },
+  "accepted_v6_7": {
+    "acceptance_commit": "5f0eb4d65986262f36d1d4356c65c3232928b60a",
+    "acceptance_subject": "docs(curunir): record independent V6.7 acceptance",
+    "executable_commit": "dcbba239d222173da66abe0e974b25400864490b",
+    "executable_is_sole_parent": true,
+    "independent_disposition": "ACCEPT/MERGE",
+    "terminal_status": "PASS_WITH_ACCEPTED_BASELINE_RESIDUALS",
+    "authority": [
+      "CURUNIR_V6_7_INDEPENDENT_REVIEW.md",
+      "CURUNIR_V6_7_BASELINE_NONPASSING.json",
+      "CURUNIR_V6_7_RECONSTRUCTION.json",
+      "CURUNIR_RECONSTRUCTION.md"
+    ]
+  },
+  "external_kernel": {
+    "path_used_for_preflight": "/home/moloch/Saulot/argus_demo/argus",
+    "python_file_count": 140,
+    "tree_sha256": "4c173df7412952b8318b7838a06ee991638fd9144eee2be36232c64aecfb7906",
+    "matches_v6_7_pin": true
+  },
+  "live_pre_v6_8_validation": {
+    "command": "PLAYWRIGHT_BROWSERS_PATH=/tmp/curunir-v68-playwright python tools/validate_v67.py --kernel /home/moloch/Saulot/argus_demo/argus --report /tmp/curunir-v68-preflight-v67-terminal.json",
+    "report_sha256": "cb6cd448e336d02bf80048217fc598f04bf3218d7266c518607dede3665f554d",
+    "status": "PASS_WITH_ACCEPTED_BASELINE_RESIDUALS",
+    "focused_v67": {"tests": 130, "passed": 130, "skipped": 0},
+    "product_planes": {"tests": 630, "passed": 624, "skipped": 6, "failed": 0, "errors": 0},
+    "clean_reconstruction": "RECONSTRUCTION_OK",
+    "full_repository": {
+      "tests": 5676,
+      "passed": 5314,
+      "skipped": 261,
+      "failed": 83,
+      "errors": 18,
+      "rewrite_only_nonpassing": 0,
+      "outcome_kind_changes": 0,
+      "accepted_baseline_nonpassing_fixed": 1
+    }
+  },
+  "v6_capability_authority": [
+    "curunir_operational/README.md",
+    "curunir_fabric/README.md",
+    "curunir_semantic/README.md",
+    "curunir_analytic/README.md",
+    "curunir_workbench/README.md",
+    "CURUNIR_V6_7_ARCHITECTURE.md",
+    "CURUNIR_V6_7_INVARIANTS.json"
+  ],
+  "interpretation": "V6.8 begins from accepted V6.7 on main in an isolated clean worktree. The dirty foreground and all Netwatch worktrees are outside scope and untouched."
+}

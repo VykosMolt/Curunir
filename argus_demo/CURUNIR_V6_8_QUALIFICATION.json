@@ -1,0 +1,76 @@
+{
+  "format": "curunir-v6.8-qualification-contract-v1",
+  "contract_state": "FROZEN_BEFORE_PILOT",
+  "frozen_on": "2026-08-21",
+  "objective": "Establish whether accepted Curunir V6 operates coherently across realistic heterogeneous intelligence missions with genuine human operation, preserved lineage, measurable outputs, and semantic replay.",
+  "base_authority": {
+    "accepted_v6_7_commit": "5f0eb4d65986262f36d1d4356c65c3232928b60a",
+    "accepted_executable_parent": "dcbba239d222173da66abe0e974b25400864490b",
+    "accepted_terminal_status": "PASS_WITH_ACCEPTED_BASELINE_RESIDUALS",
+    "repository_truth": "CURUNIR_V6_8_REPOSITORY_TRUTH.json",
+    "mission_set": "CURUNIR_V6_8_MISSIONS.json"
+  },
+  "scope": ["three heterogeneous missions", "one continuous capstone", "real human pilot", "measurement", "evidence faithfulness", "custody replay", "terminal V6 qualification"],
+  "invariants": [
+    "One inherited hash-chained mission store remains authoritative; V6.8 creates no parallel provenance system.",
+    "All V6.7 marking, identity, signed-action, egress, recovery, replay, resource, and baseline gates remain in force.",
+    "Every settled final conclusion has resolvable evidence descent to hash-verified custody; inference and forecast remain typed judgment.",
+    "A human-only transition is accepted only when the retained store records a genuine human actor action; fixture or harness actors cannot satisfy human participation.",
+    "A failed mission cannot be waived into a pass."
+  ],
+  "operator_protocol": {
+    "surface": "Existing Curunir workbench, CLI, and HTTP API only; no new UI.",
+    "participants": ["one genuine primary human operator", "one distinct genuine human approver for the capstone four-eyes signed disposition"],
+    "sequence": ["read frozen mission brief", "authenticate with assigned actor identity", "start instrumented session", "inspect mission state and exact evidence", "record hypotheses and uncertainty", "task and receive collection where required", "revise analysis after evidence update", "record corrections and failures", "produce final artifact", "perform signed disposition", "end session"],
+    "instrumentation": ["task start and end", "actor and action kind", "system event sequence before and after", "evidence opened", "source provenance used", "hypothesis and forecast revisions", "collection and alert actions", "decisions and signed dispositions", "errors and refusals", "operator corrections and rework"],
+    "privacy": "Record actor ids and mission actions only. Do not record secrets, bearer tokens, private keys, unrelated browsing, keystrokes, or personal data."
+  },
+  "source_policy": {
+    "allowed": ["lawful public live sources already registered in V6", "preserved public captures", "clearly labeled notional fixtures with frozen bytes"],
+    "forbidden": ["credential bypass", "private or unlawfully obtained data", "search snippets as evidence", "uncustodied manual paste presented as source evidence", "test mocks claimed as production acquisition"]
+  },
+  "measurement_record": {
+    "one_per_mission": true,
+    "required_fields": ["mission_status", "operator_elapsed_seconds", "system_processing_seconds", "evidence_items_inspected", "sources_used", "collection_actions", "alerts_or_warnings_reviewed", "hypothesis_revisions", "forecast_revisions", "operator_corrections", "system_refusals_or_errors", "lineage_complete_conclusions", "lineage_required_conclusions", "replay_status", "final_artifact_status", "confidence_before_after_when_authored"],
+    "separation": ["measured_value", "interpretation", "criterion"],
+    "threshold_law": "No performance threshold is invented. Binary integrity conditions may require exact success; descriptive timing and count measurements are reported without pass thresholds."
+  },
+  "evidence_requirements": [
+    "Every cited id resolves to the intended record and current or explicitly historical version.",
+    "Every material claim descends to exact anchors and hash-verified manifestation custody.",
+    "Temporal ordering uses recorded and valid time correctly.",
+    "Corrections, retractions, supersession, source dependence, restrictions, and confidence survive into outputs.",
+    "Restricted basis cannot appear in a lower-marking derived artifact.",
+    "Unsupported settled claims are forbidden; explicitly unresolved statements remain eligible when labeled."
+  ],
+  "replay_requirements": [
+    "Replay starts from the exported package in a fresh destination with network and model-provider calls disabled.",
+    "Store chain, payload hashes, signed actions, and access-aware projections verify.",
+    "Evidence arrival, state transitions, hypotheses, forecasts, collections, alerts, analyst decisions, and signed disposition reconstruct semantically.",
+    "Semantic identity is canonical JSON over the defined audit state; irrelevant wall-clock duration, port, path, and UI rendering are excluded."
+  ],
+  "mission_success": ["mission-specific completion criteria all hold", "genuine operator session is retained", "final artifact is complete", "faithfulness verification passes", "replay passes", "no manual waiver"],
+  "terminal_verdict": {
+    "PASS": "All V6.8 conditions hold and the full repository has no residual nonpass.",
+    "PASS_WITH_ACCEPTED_BASELINE_RESIDUALS": "All V6.8 conditions hold, no new regression exists, and only the exact accepted V6.7 baseline residual subset remains.",
+    "NOT_ACHIEVED": "Any required mission, human participation, evidence fidelity, signed disposition, replay, coverage, clean reconstruction, or regression gate is absent or failing."
+  },
+  "accepted_baseline_residuals": {
+    "authority": "CURUNIR_V6_7_BASELINE_NONPASSING.json",
+    "allowed_only_as_subset": true,
+    "new_node_or_outcome_kind_change": "REGRESSION"
+  },
+  "failure_classes": {
+    "A": "V6 correctness or required-capability defect; repair minimally and rerun affected gates.",
+    "B": "V6.8 fixture, harness, instrumentation, measurement, or verifier defect; repair and rerun affected gates.",
+    "C": "Usability or UI issue; record unless it makes the mission impossible.",
+    "D": "V7 Maven-class capability; record in the V7 ledger and do not implement.",
+    "E": "Environment or external-source failure; retain as failure data and retry only within frozen policy.",
+    "F": "Accepted baseline residual unrelated to mission validity; retain exact identity and severity."
+  },
+  "required_coverage": ["mission and objectives", "source registry and policy", "acquisition and custody", "structured and unstructured evidence", "semantic world state and temporal change", "hypotheses and active collection", "analytical context and forecasting", "alerts warnings and decisions", "collaboration and access control", "evidence drilldown", "signed disposition", "export import and replay"],
+  "explicitly_out_of_scope": ["UI redesign or new frontend", "new architecture tranche", "imagery or video analysis", "persistent tracking", "multi-sensor fusion", "AIS or ADS-B operational fusion", "geospatial track association", "common operational picture", "live asset tracks", "operational map overlays", "Maven or Palantir parity", "V6.1 campaign changes", "Netwatch work"],
+  "forbidden_shortcuts": ["mocking a claimed production path", "hard-coded pass result", "synthetic human event", "unsigned manual result injection", "uncustodied evidence", "post-hoc contract weakening", "mission waiver", "baseline-test weakening"],
+  "terminal_evidence": ["canonical package per mission", "capability coverage matrix", "V7 follow-up ledger", "focused V6.8 tests", "focused V6.7 tests", "product-plane tests", "full accepted-residual comparison", "clean reconstruction", "deterministic terminal report"],
+  "escalation": ["Stop for the genuine human pilot boundary.", "Stop before any change that would weaken a V6.7 invariant.", "Defer any missing Maven-class function to V7.", "Return NOT_ACHIEVED when required evidence cannot be established."]
+}
