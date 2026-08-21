@@ -7,8 +7,9 @@ it is not a new UI or product plane.
 ## Custody and participants
 
 Use one new campaign root prepared by the repaired executable. Roots prepared
-by the reviewed `5bb32e9` executable are retained failure evidence and are not
-qualification inputs. Never reuse, edit, or delete a mission root after
+by the reviewed `5bb32e9` executable and the superseded pre-human rehearsal
+roots `V68_TERMINAL_001` and `V68_TERMINAL_002` are retained evidence and are
+not qualification inputs. Never reuse, edit, or delete a mission root after
 preparation. `actors.json` contains bearer credentials and stays local; it is
 mode `0600` and is deliberately excluded from final packages.
 
@@ -34,7 +35,7 @@ From `argus_demo` in the V6.8 executable checkout:
 ```bash
 export PYTHONPATH="$PWD:/home/moloch/Saulot/argus_demo"
 export V68_PYTHON=/home/moloch/Saulot/argus_demo/.venv/bin/python
-export CAMPAIGN_ROOT=/home/moloch/Saulot/curunir_v68_runs/V68_TERMINAL_002
+export CAMPAIGN_ROOT=/home/moloch/Saulot/curunir_v68_runs/V68_TERMINAL_003
 $V68_PYTHON -m tools.curunir_v68 prepare-all --campaign-root "$CAMPAIGN_ROOT"
 ```
 

@@ -63,7 +63,7 @@ def test_repair_contract_freezes_protocol_and_corrected_starting_states():
     repair = json.loads(REPAIR_CONTRACT_PATH.read_text())
     missions = json.loads(v68.MISSIONS_PATH.read_text())["missions"]
     assert qualification["contract_state"] \
-        == "REFROZEN_BEFORE_REPAIR_IMPLEMENTATION_AND_BEFORE_PILOT"
+        == "ACCEPTANCE_FROZEN_BEFORE_REPAIR; CAMPAIGN_ROOT_ADVANCED_BEFORE_HUMAN_PILOT"
     assert qualification["operator_protocol"]["sha256"] \
         == v68._sha256_file(PROTOCOL_PATH)
     assert qualification["base_authority"]["repair_contract"]["sha256"] \

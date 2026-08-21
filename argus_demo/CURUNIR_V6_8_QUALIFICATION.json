@@ -1,6 +1,6 @@
 {
   "format": "curunir-v6.8-qualification-contract-v2",
-  "contract_state": "REFROZEN_BEFORE_REPAIR_IMPLEMENTATION_AND_BEFORE_PILOT",
+  "contract_state": "ACCEPTANCE_FROZEN_BEFORE_REPAIR; CAMPAIGN_ROOT_ADVANCED_BEFORE_HUMAN_PILOT",
   "frozen_on": "2026-08-21",
   "supersedes_contract_sha256": "0a96f38e0962ffa73f63854905ac643fa8eee786b8a3c0d9dd4b10fcf9bc0149",
   "objective": "Establish whether accepted Curunir V6 operates coherently across realistic heterogeneous intelligence missions with genuine human operation, preserved lineage, measurable outputs, and semantic replay.",
@@ -25,7 +25,8 @@
   ],
   "operator_protocol": {
     "path": "CURUNIR_V6_8_PILOT_PROTOCOL.md",
-    "sha256": "a8bea535ea98fbc18c850a865ababfdefe9f1138e3ad5407bc69bae54d0faf2b",
+    "sha256": "bed3d0946ee545ea839f0b1089f18bff1170b62a6fa6fd863a8882c5db7de0d1",
+    "revision_note": "V68_TERMINAL_002 is a retained pre-human rehearsal bound to superseded executable 3bc2282; canonical human-pilot root advanced to V68_TERMINAL_003 without changing acceptance criteria.",
     "surface": "Existing Curunir workbench, CLI, and HTTP API only; no new UI.",
     "participants": ["one genuine primary human operator", "one distinct genuine human approver for every mission's four-eyes signed disposition"],
     "sequence": ["read frozen mission brief", "authenticate with assigned actor identity", "start instrumented session", "inspect mission state and exact evidence", "record hypotheses and uncertainty", "task and receive collection where required", "revise analysis after evidence update", "record corrections and failures", "produce final artifact", "perform signed disposition", "end session"],
