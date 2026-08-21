@@ -1,0 +1,21 @@
+{
+  "format": "curunir-v6.8-v7-follow-up-ledger-v1",
+  "programme": "V7 Maven-class capability",
+  "state": "NO_PILOT_FINDINGS_RECORDED_YET",
+  "entry_schema": [
+    "observed_need",
+    "triggering_mission_or_workflow",
+    "why_outside_v6",
+    "candidate_capability_class"
+  ],
+  "entries": [],
+  "predeclared_v7_boundary_classes": [
+    "imagery and video understanding",
+    "persistent object tracking",
+    "multi-sensor and operational-feed fusion",
+    "geospatial track association and geofencing",
+    "common operational picture and live asset tracks",
+    "Maven-style mission visualization or demo parity"
+  ],
+  "note": "Boundary classes are scope labels, not observed pilot needs. Add an entry only when a genuine pilot finding establishes it."
+}

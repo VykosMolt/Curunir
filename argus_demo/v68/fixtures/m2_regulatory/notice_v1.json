@@ -1,0 +1,9 @@
+{
+  "fixture_status": "NOTIONAL_PUBLIC_EVIDENCE",
+  "notice_id": "VR-2026-41",
+  "version": 1,
+  "notice_status": "ACTIVE",
+  "affected_facility": "Bridge N-4",
+  "effective_time": "2026-08-20T08:00:00+00:00",
+  "instruction": "Use checkpoint North pending inspection"
+}
