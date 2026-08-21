@@ -127,7 +127,9 @@ def test_m2_fixture_carries_real_correction_and_hash_verified_replay(tmp_path: P
     translated_id = prepared["manifestations"][2]
     execution = next(item for item in store.records_of("fabric_execution")
                      if translated_id in item["manifestation_ids"])
-    query = next(item for item in store.records_of("fabric_query")
+    queries = [item for plan in store.records_of("fabric_discovery_plan")
+               for item in plan["queries"]]
+    query = next(item for item in queries
                  if item["query_id"] == execution["query_id"])
     assert prepared["manifestations"][1] in query["derived_from"]
     assert not store.records_of("analytic_narrative")

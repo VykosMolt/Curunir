@@ -1775,7 +1775,8 @@ def _session_analysis(events: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
         if bounded:
             bounded_http.append(event)
         elif event.get("actor_id") in set(ROLE_ACTORS.values()) \
-                and event.get("category") not in ("TASK_END",):
+                and event.get("category") not in ("TASK_END",) \
+                and event.get("http_status", 500) < 400:
             unbounded_human_http.append(event)
     if unbounded_human_http:
         findings.append({"code": "HUMAN_HTTP_OUTSIDE_SESSION",
@@ -2076,7 +2077,8 @@ def assess_mission(root: Path, faithfulness: Mapping[str, Any],
         current_id = preparation["preparation"].get("current_facility_claim_id")
         claim_states = {item["claim_id"]: item for item in store.records_of("semantic_claim_state")}
         translation_state = claim_states.get(translated_id, {})
-        queries = store.records_of("fabric_query")
+        queries = [query for plan in store.records_of("fabric_discovery_plan")
+                   for query in plan.get("queries", ())]
         translated_manifestation = preparation["preparation"].get("manifestations", ["", "", ""])[2]
         translated_executions = [item for item in store.records_of("fabric_execution")
                                  if translated_manifestation in item.get("manifestation_ids", ())]
