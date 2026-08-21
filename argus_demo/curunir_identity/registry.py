@@ -127,10 +127,6 @@ class KeyRegistry:
                 condition=condition,
             )
         except _NoAppend as done:
-            if compromised and not str(done.record.get("reason", "")).startswith(
-                    _COMPROMISE_TAG):
-                return self._transition(
-                    key_id, status, reason, now, compromised=True)
             return done.record
         return event["record"]
 

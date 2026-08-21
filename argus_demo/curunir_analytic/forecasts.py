@@ -269,6 +269,14 @@ def update_probability(ctx: AnalyticContext, forecast_id: str, *,
                 f"indicator {indicator_id[:24]}'s firing was already executed "
                 f"on forecast {forecast_id[:24]}: a pre-authorization is one "
                 "act, not a standing power over the forecast")
+        # The numeric target is the human's pre-authorized public effect.  The
+        # standing indicator can contain more-restricted rationale and the
+        # firing evidence can contain more-restricted values.  Cite those
+        # objects on derived transitions, but never copy their prose into the
+        # lower forecast version.
+        reason = (f"pre-authorized by {effect['authorized_by']} via indicator "
+                  f"{indicator_id} firing")
+        evidence_refs = tuple(dict.fromkeys((indicator_id, *evidence_refs)))
         if abs(forecast["probability"] - probability) <= 1e-9:
             # the number already stands at the target: consume the firing
             # (marker below) without a redundant version

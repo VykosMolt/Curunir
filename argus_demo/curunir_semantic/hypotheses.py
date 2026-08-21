@@ -230,6 +230,7 @@ def refresh_hypotheses_for_claims(ctx: IntegrationContext,
 def propose_discriminator(store: SemanticStore, *, question: str,
                           hypothesis_ids: tuple[str, ...] = (),
                           claim_ids: tuple[str, ...] = (),
+                          source_refs: tuple[tuple[str, str], ...] = (),
                           desired_observation_type: str, desired_subject_ref: str,
                           desired_attribute: str,
                           source_family_hints: tuple[str, ...] = (),
@@ -254,6 +255,9 @@ def propose_discriminator(store: SemanticStore, *, question: str,
             tuple(existing["claim_ids"]) + tuple(claim_ids)))
         merged_hints = tuple(dict.fromkeys(
             tuple(existing["source_family_hints"]) + tuple(source_family_hints)))
+        merged_sources = tuple(dict.fromkeys(
+            tuple(tuple(ref) for ref in existing.get("source_refs", ()))
+            + tuple(tuple(ref) for ref in source_refs)))
         raised_independence = independence_required \
             and not existing["independence_required"]
         updates: dict = {}
@@ -263,6 +267,9 @@ def propose_discriminator(store: SemanticStore, *, question: str,
             updates["claim_ids"] = merged_claims
         if merged_hints != tuple(existing["source_family_hints"]):
             updates["source_family_hints"] = merged_hints
+        if merged_sources != tuple(tuple(ref)
+                                   for ref in existing.get("source_refs", ())):
+            updates["source_refs"] = merged_sources
         if raised_independence:
             updates["independence_required"] = True
             # the pose snapshot is taken NOW, when independence is first
@@ -285,7 +292,8 @@ def propose_discriminator(store: SemanticStore, *, question: str,
             source_family_hints=source_family_hints,
             independence_required=independence_required,
             basis_groups_at_pose=basis_snapshot,
-            requirement_id="", status="OPEN", recorded_time=now, marking=marking)
+            requirement_id="", status="OPEN", recorded_time=now,
+            marking=marking, source_refs=source_refs)
         store.append("DISCRIMINATOR_RECORDED", new_record, recorded_time=now, actor=actor)
         record = new_record.to_record()
     # the link loop runs on BOTH paths: a crash between the discriminator
@@ -305,8 +313,10 @@ def update_discriminator(store: SemanticStore, discriminator: Mapping[str, Any],
                          updates: dict[str, Any], *, now: str, actor: str,
                          marking: Marking) -> dict[str, Any]:
     merged = {**{k: v for k, v in discriminator.items() if k != "record_type"}, **updates}
-    for key in ("hypothesis_ids", "claim_ids", "source_family_hints", "basis_groups_at_pose"):
+    for key in ("hypothesis_ids", "claim_ids", "source_family_hints",
+                "basis_groups_at_pose", "source_refs"):
         merged[key] = tuple(merged.get(key, ()))
+    merged["source_refs"] = tuple(tuple(ref) for ref in merged["source_refs"])
     merged["recorded_time"] = now
     # a re-append NEVER re-classifies: the discriminator keeps its own marking
     merged["marking"] = marking_from_record(discriminator["marking"]) \

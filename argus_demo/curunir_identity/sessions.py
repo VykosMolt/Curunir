@@ -68,9 +68,12 @@ class SessionManager:
                 nonce for nonce, pending in self._pending.items()
                 if pending["owner"] == owner
             ]
-            candidates = owned or list(self._pending)
+            if not owned:
+                raise AuthError(
+                    "challenge capacity is full; a principal cannot evict "
+                    "another principal's pending challenge")
             victim = min(
-                candidates,
+                owned,
                 key=lambda nonce: self._pending[nonce]["issued_time"],
             )
             self._pending.pop(victim, None)
@@ -108,9 +111,12 @@ class SessionManager:
                 session_id for session_id, session in self._sessions.items()
                 if session.actor_id == actor_id
             ]
-            candidates = owned or list(self._sessions)
+            if not owned:
+                raise AuthError(
+                    "session capacity is full; a principal cannot evict "
+                    "another principal's session")
             victim = min(
-                candidates,
+                owned,
                 key=lambda session_id: self._sessions[session_id].issued_time,
             )
             self._sessions.pop(victim, None)

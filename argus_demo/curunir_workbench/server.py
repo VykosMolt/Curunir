@@ -701,7 +701,10 @@ def create_app(mission_root: str | Path, actors_path: str | Path,
                 apply=lambda command_context: commands.approve_report(
                     command_context,
                     report_id,
-                    expected_version=body.expected_version,
+                    # apply_signed already proved that the signed target token
+                    # equals this exact raw current version.  The unsigned
+                    # compatibility field in the HTTP body is not authority.
+                    expected_version=current["version"],
                     note=str(signed_command.get("note", "")),
                     acknowledge_dissent=tuple(dissent),
                 ),

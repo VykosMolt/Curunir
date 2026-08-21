@@ -121,7 +121,9 @@ def test_http_challenge_authenticate_and_signed_approval(tmp_path):
                          command={"disposition": "APPROVED", "note": "sound"})
     resp = client.post(f"/api/commands/reports/{report_id}/approve-signed", json={
         "session_id": session_id, "payload": signed["payload"],
-        "signature": signed["signature"], "expected_version": version})
+        # This compatibility field is deliberately wrong and unsigned.  The
+        # server derives authority only from the signed target_version_token.
+        "signature": signed["signature"], "expected_version": version + 99})
     assert resp.status_code == 200, resp.text
     assert resp.json()["status"] == "APPROVED"
 

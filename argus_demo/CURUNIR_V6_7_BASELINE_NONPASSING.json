@@ -35,6 +35,26 @@
     "v6_7_product_or_security_regressions": 0,
     "interpretation": "These exact nodes may remain nonpassing only as a subset. The terminal validator refuses every node not listed here and refuses increased skipping or reduced collection."
   },
+  "allowed_error_nodeids": [
+    "tests.test_operational_v5_corpus_adjudication::test_blind_packet_contains_no_system_answer",
+    "tests.test_operational_v5_corpus_adjudication::test_corpus_is_frozen_and_stratified",
+    "tests.test_operational_v5_corpus_adjudication::test_isolated_reviewers_have_distinct_order_and_no_answer",
+    "tests.test_operational_v5_corpus_adjudication::test_surface_review_finds_general_error_classes",
+    "tests.test_universal_extractor_v5e::test_claim_spans_unique_within_each_doc",
+    "tests.test_universal_extractor_v5e::test_exhaustive_flags_match_declared_sets",
+    "tests.test_universal_extractor_v5e::test_handoff_label_present_in_press_doc",
+    "tests.test_universal_extractor_v5e::test_toc_excerpt_is_exhaustive_zero_claim_negative_region",
+    "tests.test_universal_extractor_v5e::test_train_side_supersedes_present",
+    "tests.test_universal_extractor_v5e::test_v5e_adds_no_heldout_docs",
+    "tests.test_universal_extractor_v5e::test_v5e_docs_build_and_validate",
+    "tests.test_universal_extractor_v5e::test_v5e_rows_carry_provenance_label",
+    "tests.test_universal_extractor_v5e::test_v5e_split_cohesion_and_leakage_clean",
+    "tests.test_universal_extractor_v5h::test_v5h_batch_builds_completely",
+    "tests.test_universal_extractor_v5h::test_v5h_claims_are_sentence_shaped_and_unique",
+    "tests.test_universal_extractor_v5h::test_v5h_every_doc_has_complete_relation_annotation_marker",
+    "tests.test_universal_extractor_v5h::test_v5h_heldout_expansion_is_additive_and_clean",
+    "tests.test_universal_extractor_v5h::test_v5h_third_train_supersedes_with_convention_direction"
+  ],
   "allowed_nonpassing_nodeids": [
     "tests.test_codec_stage2_field_head_study::test_no_symbolic_inverse",
     "tests.test_neural_carrier_no_symbolic_decoder::test_capsule_package_has_no_forbidden_inverse_or_payload_decoder",

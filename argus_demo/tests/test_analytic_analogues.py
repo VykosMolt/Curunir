@@ -8,11 +8,14 @@ import pytest
 from curunir_analytic.analogues import (explain_analogue, record_episode,
                                         retrieve_analogues)
 from curunir_analytic.contracts import HistoricalEpisode
+from curunir_analytic.substrate import AnalyticContext
 from curunir_analytic.themes import create_theme
+from curunir_operational.access import can_view
 from curunir_semantic.worldmodel import world_object_id
 
 from analytic_support import GLEIF_ACME, MARK, T0, make_analytic
 from semantic_support import plant_manifestation
+from workbench_support import CTX_B, RESTRICTED_MARK
 
 pytestmark = pytest.mark.no_db
 
@@ -111,3 +114,55 @@ def test_explanation_keeps_outcome_as_history_not_forecast(tmp_path):
     assert "not a forecast" in explanation["outcome_caveat"]
     assert explanation["matched"] and explanation["transfer_risks"]
     assert explanation["episode_evidence"]
+
+
+def test_retrieve_analogues_cites_episode_not_its_title(tmp_path):
+    """R25A-3: cite and floor on a restricted episode; never quote it."""
+    secret = "OPERATION MOONLIGHT 2014 covert delisting"
+    pipeline, ctx = make_analytic(tmp_path)
+    claims = _seed(pipeline, ctx)
+    other_status = claims[("LEI:OTHERLEI00000000002", "entity_status")]
+    other_event = next(
+        activity["activity_id"]
+        for activity in ctx.store.records_of("activity")
+        if ACME_OBJECT not in activity["subject_ids"]
+    )
+    restricted_ctx = AnalyticContext(
+        store=ctx.store, actor="analyst-a", marking=RESTRICTED_MARK,
+        now_fn=ctx.now_fn)
+    episode = record_episode(
+        restricted_ctx,
+        title=secret,
+        summary="restricted comparison",
+        actor_object_ids=(world_object_id("LEI:OTHERLEI00000000002"),),
+        event_ids=(other_event,),
+        institutional_setting="GLEIF regime",
+        mechanism="registry lifecycle",
+        outcome="remained issued",
+        outcome_claim_ids=(other_status,),
+        claim_ids=(other_status,),
+    )
+    theme = create_theme(
+        ctx,
+        title="Acme registry standing",
+        supporting_claim_ids=(
+            claims[("LEI:ACMELEI000000000001", "entity_status")],),
+        event_ids=(next(
+            activity["activity_id"]
+            for activity in ctx.store.records_of("activity")
+            if ACME_OBJECT in activity["subject_ids"]),),
+        provenance_kind="RULE",
+    )
+    analogue = retrieve_analogues(
+        ctx, query_kind="analytic_theme", query_id=theme["theme_id"])[0]
+    assert not can_view(analogue["marking"], CTX_B)
+    transitions = [
+        transition for transition in ctx.store.transitions_for(
+            analogue["analogue_id"])
+        if transition["transition_type"] == "RETRIEVED"
+    ]
+    assert transitions
+    assert secret not in transitions[0]["detail"]
+    assert episode["episode_id"] in transitions[0]["detail"]
+    assert episode["episode_id"] in transitions[0]["evidence_refs"]
+    assert not can_view(transitions[0]["marking"], CTX_B)

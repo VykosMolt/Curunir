@@ -17,6 +17,7 @@ from curunir_operational.canonical import canonical_line, parse_json_strict
 from curunir_operational.security import (
     MaterialReference,
     material_references,
+    reference_field_is_classified,
     resolve_reference_records,
 )
 
@@ -134,6 +135,59 @@ def test_material_reference_registry_covers_dynamic_pairs_and_plain_basis_refs()
     assert MaterialReference("hypothesis", "hyp-1") in refs
     assert MaterialReference("object_version", "object-1") in refs
     assert MaterialReference("semantic_claim", "claim-2") in refs
+
+
+def test_material_reference_registry_covers_analytic_evidence_and_sources():
+    refs = set(material_references({
+        "record_type": "forecast_indicator",
+        "indicator_id": "indicator-1",
+        "fired_evidence_refs": ["observation-1"],
+    }))
+    assert MaterialReference("*", "observation-1") in refs
+
+    refs = set(material_references({
+        "record_type": "analytic_forecast",
+        "forecast_id": "forecast-1",
+        "resolution_evidence_refs": ["claim-1"],
+    }))
+    assert MaterialReference("*", "claim-1") in refs
+
+    refs = set(material_references({
+        "record_type": "discriminator",
+        "discriminator_id": "disc-1",
+        "source_refs": [["analytic_theme", "theme-1"]],
+    }))
+    assert MaterialReference("analytic_theme", "theme-1") in refs
+
+
+def test_every_contract_reference_shaped_field_has_an_explicit_policy():
+    """A new reference carrier cannot silently bypass the marking floor."""
+    import dataclasses
+    import importlib
+    import inspect
+
+    modules = [
+        importlib.import_module(name)
+        for name in (
+            "curunir_analytic.contracts",
+            "curunir_fabric.contracts",
+            "curunir_identity.contracts",
+            "curunir_operational.contracts",
+            "curunir_semantic.contracts",
+            "curunir_workbench.contracts",
+        )
+    ]
+    gaps = []
+    for module in modules:
+        for _, contract in inspect.getmembers(module, inspect.isclass):
+            record_type = getattr(contract, "RECORD_TYPE", "")
+            if contract.__module__ != module.__name__ \
+                    or not record_type or not dataclasses.is_dataclass(contract):
+                continue
+            for field in dataclasses.fields(contract):
+                if not reference_field_is_classified(record_type, field.name):
+                    gaps.append(f"{module.__name__}.{contract.__name__}.{field.name}")
+    assert gaps == [], "unclassified identifier/reference fields: " + ", ".join(gaps)
 
 
 def test_reference_resolution_handles_pinned_versions_and_report_parts():

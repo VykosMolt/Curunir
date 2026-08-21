@@ -25,8 +25,12 @@ except ModuleNotFoundError:  # import as tools.validate_v67 in tests/diagnostics
 
 BASELINE_PATH = PACKAGE_ROOT / "CURUNIR_V6_7_BASELINE_NONPASSING.json"
 RECONSTRUCTION_PATH = PACKAGE_ROOT / "CURUNIR_V6_7_RECONSTRUCTION.json"
-MINIMUM_FULL_TESTS = 5665
+MINIMUM_FULL_TESTS = 5675
 MAXIMUM_FULL_SKIPS_WITHOUT_POSTGRES = 262
+MINIMUM_FOCUSED_TESTS = 129
+MAXIMUM_FOCUSED_SKIPS = 0
+MINIMUM_PRODUCT_TESTS = 630
+MAXIMUM_PRODUCT_SKIPS = 6
 
 PRODUCT_PATTERNS = (
     "tests/test_analytic*.py",
@@ -84,6 +88,7 @@ def _run_pytest(label: str, arguments: list[str], environment: dict[str, str]) -
             raise ValidationError(f"{label} failed with exit code {completed.returncode}")
         result = _junit_result(junit)
         result.pop("nonpassing_nodeids")
+        result.pop("nonpassing_outcomes")
         result["status"] = "PASSED"
         print(json.dumps({
             "stage": label,
@@ -121,6 +126,9 @@ def _junit_result(path: Path) -> dict[str, object]:
         "failed": int(suite.attrib["failures"]),
         "errors": int(suite.attrib["errors"]),
         "nonpassing_nodeids": ordered,
+        "nonpassing_outcomes": {
+            node: nonpassing[node] for node in ordered
+        },
         "nonpassing_node_set_sha256": hashlib.sha256(
             ("\n".join(ordered) + "\n").encode()
         ).hexdigest(),
@@ -153,6 +161,10 @@ def _preflight(kernel: Path) -> tuple[dict, dict, str]:
     ).hexdigest()
     if allowed_hash != baseline["accepted_base_result"]["nonpassing_node_set_sha256"]:
         raise ValidationError("accepted-baseline node set does not match its pinned hash")
+    allowed_errors = baseline.get("allowed_error_nodeids", [])
+    if len(allowed_errors) != baseline["accepted_base_result"]["errors"] \
+            or not set(allowed_errors).issubset(set(allowed)):
+        raise ValidationError("accepted-baseline error-node classification is invalid")
     for path, expected in (
         (PACKAGE_ROOT / "tests" / "conftest.py", baseline["harness"]["tests_conftest_sha256"]),
         (PACKAGE_ROOT / "pytest.ini", baseline["harness"]["pytest_ini_sha256"]),
@@ -167,6 +179,18 @@ def _preflight(kernel: Path) -> tuple[dict, dict, str]:
     return baseline, reconstruction, commit
 
 
+def _outcome_kind_changes(
+    baseline: dict[str, object],
+    current_outcomes: dict[str, str],
+) -> list[str]:
+    """Return current allowed nodes whose failure/error kind changed."""
+    expected_errors = set(baseline["allowed_error_nodeids"])
+    return sorted(
+        node for node, outcome in current_outcomes.items()
+        if outcome != ("error" if node in expected_errors else "failure")
+    )
+
+
 def validate(kernel: Path) -> dict[str, object]:
     baseline, _, commit = _preflight(kernel)
     environment = dict(os.environ)
@@ -175,6 +199,11 @@ def validate(kernel: Path) -> dict[str, object]:
     environment["CURUNIR_ARGUS_KERNEL"] = str(kernel)
 
     focused_result = _run_pytest("focused_v67", ["tests/v67"], environment)
+    if focused_result["tests"] < MINIMUM_FOCUSED_TESTS \
+            or focused_result["skipped"] > MAXIMUM_FOCUSED_SKIPS:
+        raise ValidationError(
+            "focused V6.7 collection/skip gate failed: "
+            f"tests={focused_result['tests']} skips={focused_result['skipped']}")
 
     product_files = sorted({
         path
@@ -186,6 +215,11 @@ def validate(kernel: Path) -> dict[str, object]:
         f"--deselect={node}" for node in PRODUCT_BASELINE_DESELECT
     )
     product_result = _run_pytest("curunir_product_planes", product_arguments, environment)
+    if product_result["tests"] < MINIMUM_PRODUCT_TESTS \
+            or product_result["skipped"] > MAXIMUM_PRODUCT_SKIPS:
+        raise ValidationError(
+            "product-plane collection/skip gate failed: "
+            f"tests={product_result['tests']} skips={product_result['skipped']}")
 
     with tempfile.TemporaryDirectory(prefix="curunir-v67-terminal-") as scratch:
         scratch_path = Path(scratch)
@@ -226,6 +260,13 @@ def validate(kernel: Path) -> dict[str, object]:
             raise ValidationError(
                 "full suite has rewrite-only nonpassing nodes:\n" + "\n".join(new_nonpassing)
             )
+        outcome_kind_changes = _outcome_kind_changes(
+            baseline, full_result["nonpassing_outcomes"])
+        if outcome_kind_changes:
+            raise ValidationError(
+                "accepted-baseline nodes changed failure/error kind:\n"
+                + "\n".join(outcome_kind_changes)
+            )
         if full_result["tests"] < MINIMUM_FULL_TESTS:
             raise ValidationError(
                 f"full suite collection shrank to {full_result['tests']} tests"
@@ -236,6 +277,7 @@ def validate(kernel: Path) -> dict[str, object]:
             )
         full_result["nonpassing_nodeids"] = sorted(current)
         full_result["rewrite_only_nonpassing"] = []
+        full_result["outcome_kind_changes"] = []
         full_result["accepted_baseline_nonpassing_fixed"] = len(allowed - current)
         full_result["status"] = (
             "PASSED" if not current else "PASS_WITH_ACCEPTED_BASELINE_RESIDUALS"

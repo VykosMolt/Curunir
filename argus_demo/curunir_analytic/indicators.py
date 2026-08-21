@@ -405,14 +405,19 @@ def check_indicators(ctx: AnalyticContext) -> list[dict[str, Any]]:
 def _fire(ctx: AnalyticContext, indicator: Mapping[str, Any], *,
           evidence: tuple[str, ...], why: str) -> dict[str, Any]:
     store = ctx.store
+    # Evidence values can be more restricted than the standing indicator.
+    # Persist the typed references, never a quoted observation value.  Store
+    # admission raises the fired version to the evidence high-water mark.
     fired = _reappend(ctx, indicator,
                       {"status": "FIRED", "fired_time": ctx.now_fn(),
                        "fired_evidence_refs": evidence},
-                      change_reason=why[:280], history_note="FIRED")
+                      change_reason="indicator fired from recorded evidence",
+                      history_note="FIRED")
     record_transition(ctx, subject_kind="forecast_indicator",
                       subject_id=indicator["indicator_id"],
                       transition_type="FIRED",
-                      detail=f"{indicator['direction']}: {why[:200]}",
+                      detail=f"{indicator['direction']}: indicator fired from "
+                             "recorded evidence",
                       caused_by=digest_id("fire", indicator["indicator_id"]),
                       evidence_refs=evidence[:5],
                       from_status=indicator["status"], to_status="FIRED")
@@ -448,7 +453,8 @@ def _apply_effects(ctx: AnalyticContext, indicator: Mapping[str, Any]) -> int:
     before = store.head()["event_count"]
     effect = indicator["effect"]
     evidence = tuple(indicator["fired_evidence_refs"])
-    why = indicator.get("change_reason", "")
+    material_refs = tuple(dict.fromkeys(
+        (indicator["indicator_id"], *evidence)))
     from .contracts import FORECAST_TERMINAL_STATUSES
     for forecast_id in indicator["forecast_ids"]:
         forecast = store.current_forecasts().get(forecast_id)
@@ -470,8 +476,8 @@ def _apply_effects(ctx: AnalyticContext, indicator: Mapping[str, Any]) -> int:
                 update_probability(
                     ctx, forecast_id,
                     probability=effect["target_probability"],
-                    reason=f"pre-authorized by {effect['authorized_by']} on "
-                           f"indicator firing: {effect['rationale'][:140]}",
+                    reason=f"pre-authorized indicator "
+                           f"{indicator['indicator_id']} fired",
                     evidence_refs=evidence,
                     actor_id=effect["authorized_by"], actor_kind="SERVICE",
                     indicator_id=indicator["indicator_id"])
@@ -491,10 +497,9 @@ def _apply_effects(ctx: AnalyticContext, indicator: Mapping[str, Any]) -> int:
                 item = ReviewItem(
                     item_id=item_id, kind="STALE_BASIS",
                     subject_kind="analytic_forecast", subject_id=forecast_id,
-                    detail=f"indicator {indicator['description'][:120]!r} fired "
-                           f"({indicator['direction']}); the probability needs "
-                           f"human review",
-                    evidence_refs=evidence[:5],
+                    detail=f"indicator {indicator['indicator_id']} fired; the "
+                           "probability needs human review",
+                    evidence_refs=material_refs[:5],
                     status="OPEN", resolution_note="",
                     recorded_time=ctx.now_fn(), marking=ctx.marking)
                 store.append("REVIEW_ITEM_RECORDED", item,
@@ -502,8 +507,8 @@ def _apply_effects(ctx: AnalyticContext, indicator: Mapping[str, Any]) -> int:
         record_transition(ctx, subject_kind="analytic_forecast",
                           subject_id=forecast_id,
                           transition_type="INDICATOR_FIRED",
-                          detail=f"indicator {indicator['description'][:100]!r} "
-                                 f"fired ({indicator['direction']}): {why[:120]}",
+                          detail=f"indicator {indicator['indicator_id']} fired "
+                                 f"({indicator['direction']})",
                           caused_by=marker,
-                          evidence_refs=evidence[:5])
+                          evidence_refs=material_refs[:5])
     return store.head()["event_count"] - before

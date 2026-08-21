@@ -59,7 +59,13 @@ def requirement_for_discriminator(store: SemanticStore, discriminator: Mapping[s
         discriminator["discriminator_id"], discriminator)
     requirement = workflow.open_requirement(
         mission_context=mission_context, question=current["question"],
-        affected_ids=tuple(current["hypothesis_ids"]) + tuple(current["claim_ids"]),
+        # The requirement is derived from the discriminator itself.  Citing it
+        # makes store admission inherit the complete discriminator/source
+        # high-water mark instead of relying on the caller's current marking.
+        affected_ids=(current["discriminator_id"],)
+        + tuple(current["hypothesis_ids"])
+        + tuple(current["claim_ids"])
+        + tuple(ref[1] for ref in current.get("source_refs", ())),
         priority="HIGH" if current["independence_required"] else "MEDIUM",
         rationale="discriminating observation for unresolved world-model uncertainty",
         required_evidence_type="PUBLIC_SOURCE_EVIDENCE", owning_role="ANALYST",

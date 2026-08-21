@@ -16,8 +16,12 @@ from .access import Marking, inherited_marking, marking_from_record
 # remain authority/provenance labels; inference and proposal records are
 # included because downstream records can embed their retained outputs.
 PRIMARY_ID_FIELDS: dict[str, str] = {
+    "external_ref": "external_id",
+    "evidence_ref": "assertion_id",
+    "provenance_summary": "evidence_basis_id",
     "source": "source_id",
     "ingestion": "ingestion_id",
+    "transformation": "transformation_id",
     "object_version": "object_id",
     "relationship_version": "relationship_id",
     "activity": "activity_id",
@@ -26,14 +30,27 @@ PRIMARY_ID_FIELDS: dict[str, str] = {
     "inference": "inference_id",
     "analytical_proposal": "proposal_id",
     "alert": "alert_id",
+    "alert_transition": "transition_id",
     "recommendation": "recommendation_id",
     "analyst_action": "action_id",
     "decision": "decision_id",
+    "model_package": "model_id",
+    "accreditation": "accreditation_id",
     "information_requirement": "requirement_id",
     "evidence_request": "request_id",
     "analyst_task": "task_id",
+    "workflow_transition": "transition_id",
     "fabric_execution": "execution_id",
+    "fabric_source_profile": "profile_id",
+    "fabric_source_status": "status_id",
+    "fabric_information_need": "need_id",
+    "fabric_query": "query_id",
+    "fabric_discovery_plan": "plan_id",
     "fabric_manifestation": "manifestation_id",
+    "fabric_pivot": "pivot_id",
+    "fabric_coverage": "coverage_id",
+    "fabric_watch": "watch_id",
+    "fabric_watch_run": "run_id",
     "fabric_change": "change_id",
     "semantic_document": "document_id",
     "semantic_observation": "observation_id",
@@ -53,6 +70,7 @@ PRIMARY_ID_FIELDS: dict[str, str] = {
     "mission_objective": "objective_id",
     "analytic_assumption": "assumption_id",
     "impact_path": "path_id",
+    "impact_edge": "edge_id",
     "response_option": "option_id",
     "historical_episode": "episode_id",
     "historical_analogue": "analogue_id",
@@ -99,6 +117,17 @@ KIND_ALIASES = {
 # A field can name more than one compatible family where the historic schemas
 # reused a generic name.  Resolution includes every matching current record.
 FIELD_KINDS: dict[str, tuple[str, ...]] = {
+    "source_id": ("source",),
+    "ingestion_id": ("ingestion",),
+    "evidence_basis_id": ("provenance_summary",),
+    "model_id": ("model_package",),
+    "key_id": ("actor_key",),
+    "need_id": ("fabric_information_need",),
+    "plan_id": ("fabric_discovery_plan",),
+    "watch_id": ("fabric_watch",),
+    "run_id": ("fabric_watch_run",),
+    "transition_id": (
+        "analytic_transition", "alert_transition", "workflow_transition"),
     "claim_id": ("semantic_claim",),
     "claim_ids": ("semantic_claim",),
     "supporting_claim_ids": ("semantic_claim",),
@@ -108,12 +137,16 @@ FIELD_KINDS: dict[str, tuple[str, ...]] = {
     "affected_claim_ids": ("semantic_claim",),
     "observation_id": ("semantic_observation",),
     "observation_ids": ("semantic_observation",),
+    "change_observation_ids": ("fabric_change",),
     "basis_observation_ids": ("semantic_observation",),
     "prior_observation_id": ("semantic_observation",),
     "current_observation_id": ("semantic_observation",),
     "document_id": ("semantic_document",),
     "manifestation_id": ("fabric_manifestation",),
     "manifestation_ids": ("fabric_manifestation",),
+    "earliest_manifestation_id": ("fabric_manifestation",),
+    "from_manifestation_id": ("fabric_manifestation",),
+    "to_manifestation_id": ("fabric_manifestation",),
     "evidence_manifestation_ids": ("fabric_manifestation",),
     "prior_manifestation_id": ("fabric_manifestation",),
     "current_manifestation_id": ("fabric_manifestation",),
@@ -126,6 +159,7 @@ FIELD_KINDS: dict[str, tuple[str, ...]] = {
     "execution_id": ("fabric_execution",),
     "basis_execution_ids": ("fabric_execution",),
     "activity_id": ("activity",),
+    "entity_ids": ("object_version",),
     "theme_id": ("analytic_theme",),
     "parent_theme_id": ("analytic_theme",),
     "narrative_id": ("analytic_narrative",),
@@ -159,6 +193,7 @@ FIELD_KINDS: dict[str, tuple[str, ...]] = {
     "view_id": ("workbench_saved_view",),
     "relationship_id": ("relationship_version",),
     "relationship_ids": ("relationship_version",),
+    "relation_ids": ("relationship_version",),
     "source_object_id": ("object_version",),
     "target_object_id": ("object_version",),
     "entity_object_id": ("object_version",),
@@ -166,12 +201,25 @@ FIELD_KINDS: dict[str, tuple[str, ...]] = {
     "object_object_id": ("object_version",),
     "actor_object_ids": ("object_version",),
     "affected_object_ids": ("object_version",),
+    "left_object_id": ("object_version",),
+    "right_object_id": ("object_version",),
+    "subject_ids": ("object_version",),
     "event_ids": ("object_version",),
     "dissent_annotation_ids": ("workbench_annotation",),
     "supersedes_key_id": ("actor_key",),
+    "absence_required_source_ids": ("source",),
+    "coverage_required_source_ids": ("source",),
+    "considered_source_ids": ("source",),
+    "source_ids": ("source",),
+    "custody_ingestion_id": ("ingestion",),
+    "ingestion_ids": ("ingestion",),
+    "fabric_change_id": ("fabric_change",),
+    "transformation_ids": ("transformation",),
+    "section_id": ("workbench_report",),
+    "sentence_id": ("workbench_report",),
 }
 
-TYPED_PAIR_FIELDS = frozenset({"proposition_refs", "depends_on"})
+TYPED_PAIR_FIELDS = frozenset({"proposition_refs", "source_refs", "depends_on"})
 DYNAMIC_PAIR_FIELDS = (
     ("subject_kind", "subject_id"),
     ("target_kind", "target_id"),
@@ -182,13 +230,48 @@ DYNAMIC_PAIR_FIELDS = (
 )
 ANY_REFERENCE_FIELDS = frozenset({
     "affected_ids", "basis_ids", "basis_refs", "caused_by", "evidence_refs",
-    "input_refs", "desired_subject_ref", "anchor_ref",
+    "fired_evidence_refs", "resolution_evidence_refs",
+    "input_refs", "output_refs", "external_refs", "world_refs",
+    "current_ref", "prior_ref", "from_ref", "to_ref", "object_ref",
+    "payload_ref", "subject_ref", "target_ref", "claim_subject_ref",
+    "event_subject_ref", "desired_subject_ref", "anchor_ref",
     "correction_of", "duplicate_of", "source_alert_id", "superseded_by",
 })
 PER_RECORD_EXCLUSIONS = {
     # A forecast listing its watchers does not embed their restricted state.
     ("analytic_forecast", "indicator_ids"),
 }
+
+# Identifier-shaped fields that are deliberately authority, provenance,
+# schema, external-namespace, or nested-component labels rather than material
+# in-store object references.  Keeping this explicit makes a newly introduced
+# ``*_id(s)``/``*_ref(s)`` field fail the policy-completeness test until it is
+# classified as material or deliberately non-material.
+NON_MATERIAL_REFERENCE_FIELDS = frozenset({
+    "actor_id", "case_id", "connector_id", "dependence_group_id",
+    "dependence_group_ids", "external_id", "implementation_id",
+    "input_schema_id", "mapping_id", "mission_id", "native_id",
+    "output_schema_id", "position_id", "producer_id", "provider_id",
+    "resolver_id", "retrieval_id", "rule_id", "schema_id", "tier_rule_id",
+    "translation_id", "unmatched_query_ids",
+})
+
+REFERENCE_FIELD_SUFFIXES = ("_id", "_ids", "_ref", "_refs")
+
+
+def reference_field_is_classified(record_type: str, field_name: str) -> bool:
+    """Whether an identifier-shaped contract field has an explicit policy."""
+    if not field_name.endswith(REFERENCE_FIELD_SUFFIXES):
+        return True
+    return (
+        PRIMARY_ID_FIELDS.get(record_type) == field_name
+        or field_name in FIELD_KINDS
+        or field_name in ANY_REFERENCE_FIELDS
+        or field_name in TYPED_PAIR_FIELDS
+        or field_name in NON_MATERIAL_REFERENCE_FIELDS
+        or field_name in {item for pair in DYNAMIC_PAIR_FIELDS for item in pair}
+        or (record_type, field_name) in PER_RECORD_EXCLUSIONS
+    )
 
 
 @dataclass(frozen=True, order=True)

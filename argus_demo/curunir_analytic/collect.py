@@ -60,8 +60,8 @@ def analytic_collection_needs(store: AnalyticStore) -> list[dict[str, Any]]:
         needs.append(_need(
             "analytic_theme", theme["theme_id"],
             f"Does any independent source family corroborate the theme "
-            f"{theme['title'][:100]!r}? All current support descends from one "
-            f"origin family.",
+            f"analytic_theme:{theme['theme_id']}? All current support descends "
+            "from one origin family.",
             claim_ids=tuple(theme["basis"]["supporting_claim_ids"]),
             desired_type="ENTITY_ATTRIBUTE"
             if anchor_claim["predicate"] in ("entity_status", "legal_name",
@@ -81,10 +81,8 @@ def analytic_collection_needs(store: AnalyticStore) -> list[dict[str, Any]]:
         anchor_claim = _claim(store, narrative["basis"]["supporting_claim_ids"][0])
         if anchor_claim is None:
             continue
-        question = (f"What is the earliest historical manifestation of the "
-                    f"proposition {narrative['statement'][:100]!r}? Earliest "
-                    f"currently observed: "
-                    f"{narrative['earliest_time'][:19] or 'unknown'}."
+        question = (f"What is the earliest historical manifestation bearing "
+                    f"on analytic_narrative:{narrative['narrative_id']}?"
                     + (" Independent corroboration is also missing: all support "
                        "descends from one origin family." if single_family else ""))
         needs.append(_need(
@@ -112,9 +110,9 @@ def analytic_collection_needs(store: AnalyticStore) -> list[dict[str, Any]]:
             subject_ref = based_on["subject_ref"] if based_on else ""
         needs.append(_need(
             "stakeholder_assessment", assessment["assessment_id"],
-            f"Is there a primary public statement by {assessment['entity_label']} "
-            f"bearing on: {interest['statement'][:120]}? The interest is inferred; "
-            f"no explicit position is in evidence.",
+            f"Is there a primary public statement bearing on "
+            f"stakeholder_assessment:{assessment['assessment_id']}? The "
+            "interest is inferred; no explicit position is in evidence.",
             claim_ids=tuple(interest["claim_ids"]),
             desired_type="STATEMENT", desired_subject=subject_ref,
             desired_attribute="", independence_required=False))
@@ -143,10 +141,8 @@ def analytic_collection_needs(store: AnalyticStore) -> list[dict[str, Any]]:
             continue
         needs.append(_need(
             "impact_path", path["path_id"],
-            f"What evidence would discriminate the uncertain link "
-            f"{edge['from_id'][:18]} → {edge['to_id'][:18]} "
-            f"({edge['authority']}) in the exposure of the objective? "
-            f"{edge['note'][:120]}",
+            f"What evidence would discriminate the uncertain link recorded "
+            f"by impact_path:{path['path_id']}?",
             claim_ids=(anchor_claim["claim_id"],),
             desired_type="ENTITY_ATTRIBUTE"
             if anchor_claim["predicate"] in ("entity_status", "legal_name",
@@ -188,16 +184,15 @@ def analytic_collection_needs(store: AnalyticStore) -> list[dict[str, Any]]:
             # skip is deliberate and mirrors the indicator loop below
             continue
         if coverage_blocked:
-            question = (f"Resolution of the forecast "
-                        f"{forecast['question'][:100]!r} is coverage-blocked: "
-                        f"the sources its rule declares "
-                        f"({', '.join(rule['absence_required_source_ids'])}) "
-                        f"have not been successfully searched since the "
-                        f"horizon. Silence means nothing until they are.")
+            question = (f"Resolution of analytic_forecast:"
+                        f"{forecast['forecast_id']} is coverage-blocked: its "
+                        f"declared sources ({', '.join(rule['absence_required_source_ids'])}) "
+                        "have not been successfully searched "
+                        "since the horizon. Silence means nothing until they are.")
         else:
             question = (f"Does any independent source family bear on the "
-                        f"forecast {forecast['question'][:100]!r}? Its entire "
-                        f"basis descends from "
+                        f"analytic_forecast:{forecast['forecast_id']}? Its "
+                        f"entire basis descends from "
                         f"{'one origin family' if forecast['basis']['origin_families'] else 'no evidence at all'}.")
         needs.append(_need(
             "analytic_forecast", forecast["forecast_id"], question,
@@ -218,8 +213,6 @@ def analytic_collection_needs(store: AnalyticStore) -> list[dict[str, Any]]:
                or forecasts[fid]["status"] in FORECAST_TERMINAL_STATUSES
                for fid in indicator["forecast_ids"]):
             continue  # a dead question does not drive collection
-        required = ", ".join(indicator["coverage_required_source_ids"]) \
-            or f"{indicator['coverage_min_successful_sources']} source(s)"
         watched_claims = tuple(dict.fromkeys(
             claim_id
             for forecast_id in indicator["forecast_ids"]
@@ -230,11 +223,10 @@ def analytic_collection_needs(store: AnalyticStore) -> list[dict[str, Any]]:
             continue  # nothing typed to bind the discriminator to
         needs.append(_need(
             "forecast_indicator", indicator["indicator_id"],
-            (f"The absence indicator {indicator['description'][:120]!r} "
+            (f"The forecast_indicator:{indicator['indicator_id']} "
              + ("passed its deadline without its declared coverage"
                 if blocked else
-                f"needs its declared coverage ({required}) searched before "
-                f"its deadline {indicator['deadline'][:19]}")
+                "needs its declared coverage searched before its deadline")
              + ": absence only means something where someone looked."),
             claim_ids=watched_claims,
             desired_type=indicator["desired_observation_type"]
@@ -259,6 +251,7 @@ def open_analytic_requirements(ctx: AnalyticContext, *, mission_context: str,
         discriminator = propose_discriminator(
             store, question=need["question"],
             claim_ids=tuple(need["claim_ids"]),
+            source_refs=((need["source_kind"], need["source_id"]),),
             desired_observation_type=need["desired_observation_type"],
             desired_subject_ref=need["desired_subject_ref"],
             desired_attribute=need["desired_attribute"],

@@ -14,6 +14,22 @@ pytestmark = pytest.mark.no_db
 PACKAGE_ROOT = Path(__file__).resolve().parents[2]
 
 
+def test_terminal_validator_refuses_failure_error_kind_changes():
+    from tools.validate_v67 import _outcome_kind_changes
+
+    baseline = {
+        "allowed_error_nodeids": ["suite::error-node"],
+    }
+    assert _outcome_kind_changes(
+        baseline,
+        {"suite::error-node": "error", "suite::failure-node": "failure"},
+    ) == []
+    assert _outcome_kind_changes(
+        baseline,
+        {"suite::error-node": "failure", "suite::failure-node": "error"},
+    ) == ["suite::error-node", "suite::failure-node"]
+
+
 def test_clean_checkout_reconstruction_uses_committed_bytes_and_pinned_kernel(tmp_path):
     kernel = Path(os.environ.get("CURUNIR_ARGUS_KERNEL", PACKAGE_ROOT / "argus"))
     assert kernel.is_dir(), "the explicit external kernel input is unavailable"

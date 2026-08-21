@@ -287,6 +287,10 @@ class DiscriminatingObservation(Record):
     basis_groups_at_pose: tuple[str, ...]
     requirement_id: str; status: str
     recorded_time: str; marking: Marking
+    # The analytical object whose uncertainty caused this discriminator.
+    # Typed source references make the derived record inherit that object's
+    # marking without quoting its potentially restricted prose.
+    source_refs: tuple[tuple[str, str], ...] = ()
     version: int = 1  # strict next-version: a stale writer raises, never shadows
 
     def __post_init__(self):
