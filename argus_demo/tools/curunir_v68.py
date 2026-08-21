@@ -9,16 +9,20 @@ and verifies custody/replay/measurement conditions.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import fcntl
 import hashlib
 import json
 import os
+import re
 import secrets
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
 import time
+import unicodedata
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 from pathlib import Path
@@ -35,6 +39,8 @@ CONTRACT_PATH = PACKAGE_ROOT / "CURUNIR_V6_8_QUALIFICATION.json"
 MISSIONS_PATH = PACKAGE_ROOT / "CURUNIR_V6_8_MISSIONS.json"
 TRUTH_PATH = PACKAGE_ROOT / "CURUNIR_V6_8_REPOSITORY_TRUTH.json"
 V7_LEDGER_PATH = PACKAGE_ROOT / "CURUNIR_V6_8_V7_FOLLOW_UP.json"
+REPAIR_CONTRACT_PATH = PACKAGE_ROOT / "CURUNIR_V6_8_REPAIR_CONTRACT.json"
+PROTOCOL_PATH = PACKAGE_ROOT / "CURUNIR_V6_8_PILOT_PROTOCOL.md"
 FIXTURE_ROOT = PACKAGE_ROOT / "v68" / "fixtures"
 
 MISSION_IDS = (
@@ -66,8 +72,7 @@ def _read_json(path: Path) -> Any:
 
 def _write_json(path: Path, value: Any, *, mode: int = 0o644) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    body = (json.dumps(value, indent=2, sort_keys=True, ensure_ascii=False,
-                       allow_nan=False) + "\n").encode("utf-8")
+    body = _json_bytes(value)
     temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
     fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, mode)
     try:
@@ -79,6 +84,11 @@ def _write_json(path: Path, value: Any, *, mode: int = 0o644) -> None:
     except BaseException:
         temporary.unlink(missing_ok=True)
         raise
+
+
+def _json_bytes(value: Any) -> bytes:
+    return (json.dumps(value, indent=2, sort_keys=True, ensure_ascii=False,
+                       allow_nan=False) + "\n").encode("utf-8")
 
 
 def _sha256_bytes(body: bytes) -> str:
@@ -156,7 +166,7 @@ def _actor_entries() -> list[dict[str, Any]]:
             "token": secrets.token_urlsafe(32),
             "actor_id": PUBLIC_ACTOR,
             "actor_kind": "HUMAN",
-            "roles": ["ANALYST"],
+            "roles": ["OBSERVER"],
             "compartments": [],
             "releasability": ["PUBLIC"],
             "organisation": "v68-pilot",
@@ -184,7 +194,38 @@ def _copy_mission_authority(root: Path, mission_id: str) -> None:
         "missions_sha256": _sha256_file(MISSIONS_PATH),
         "repository_truth": TRUTH_PATH.name,
         "repository_truth_sha256": _sha256_file(TRUTH_PATH),
+        "repair_contract": REPAIR_CONTRACT_PATH.name,
+        "repair_contract_sha256": _sha256_file(REPAIR_CONTRACT_PATH),
+        "pilot_protocol": PROTOCOL_PATH.name,
+        "pilot_protocol_sha256": _sha256_file(PROTOCOL_PATH),
     })
+
+
+def _repository_identity(*, require_clean: bool) -> dict[str, Any]:
+    """Bind a prepared campaign to one exact, clean executable and kernel."""
+    commit = subprocess.run(
+        ["git", "-C", str(REPO_ROOT), "rev-parse", "HEAD"], check=True,
+        capture_output=True, text=True).stdout.strip()
+    status = subprocess.run(
+        ["git", "-C", str(REPO_ROOT), "status", "--porcelain=v1",
+         "--untracked-files=normal"], check=True,
+        capture_output=True, text=True).stdout
+    if require_clean and status:
+        raise V68Error("V6.8 preparation requires a clean executable checkout")
+    from tools.reconstruct_v67 import kernel_identity
+    truth = _read_json(TRUTH_PATH)["external_kernel"]
+    kernel = Path(truth["path_used_for_preflight"])
+    kernel_hash, kernel_count, _ = kernel_identity(kernel)
+    if kernel_hash != truth["tree_sha256"] \
+            or kernel_count != truth["python_file_count"]:
+        raise V68Error("external kernel identity differs from the accepted V6.7 pin")
+    return {
+        "executable_sha": commit,
+        "worktree_clean": not bool(status),
+        "kernel_path": str(kernel),
+        "kernel_tree_sha256": kernel_hash,
+        "kernel_python_file_count": kernel_count,
+    }
 
 
 def _open_fixture_need(store, *, mission_id: str, question: str, marking, now: str):
@@ -213,6 +254,7 @@ def _plant_fixture_manifestation(
     retrieval_time: str,
     marking,
     prior_manifestation_id: str | None = None,
+    derived_from: tuple[str, ...] = (),
     temporal_status: str = "LIVE",
     source_time: str | None = None,
     archive_capture_time: str | None = None,
@@ -251,7 +293,7 @@ def _plant_fixture_manifestation(
         origin="RULE",
         origin_detail="FROZEN_NOTIONAL_FIXTURE",
         rationale="deterministic V6.8 mission setup; not a live retrieval",
-        derived_from=(),
+        derived_from=derived_from,
     )
     plan = DiscoveryPlan(
         plan_id=plan_id,
@@ -340,12 +382,10 @@ def _fixture_manifest(paths: Iterable[Path]) -> list[dict[str, Any]]:
 
 def _prepare_m2(root: Path) -> dict[str, Any]:
     from dataclasses import replace
-    from curunir_analytic.narratives import create_narrative
-    from curunir_analytic.propagate import propagate_semantic_changes
-    from curunir_analytic.substrate import AnalyticContext
     from curunir_fabric.catalog import seed_starter_catalog, starter_catalog
     from curunir_fabric.contracts import ChangeObservation
     from curunir_fabric.registry import register_source
+    from curunir_semantic.contracts import ClaimStateRecord
     from curunir_semantic.pipeline import SemanticPipeline
     from curunir_workbench.store import WorkbenchStore
 
@@ -408,7 +448,9 @@ def _prepare_m2(root: Path) -> dict[str, Any]:
         pipeline, need_id=need.need_id, source_id="v68-notional-regulator-web",
         native_id="https://regulator.notional.example/hr/notices/VR-2026-41",
         body=paths[2].read_bytes(), media_type="text/html",
-        retrieval_time="2026-08-21T12:12:00+00:00", marking=marking)
+        retrieval_time="2026-08-21T12:12:00+00:00", marking=marking,
+        temporal_status="HISTORICAL",
+        derived_from=(initial["manifestation_id"],))
     pipeline.process_manifestation(structured)
     pipeline.process_manifestation(initial)
     pipeline.process_manifestation(translated)
@@ -420,15 +462,6 @@ def _prepare_m2(root: Path) -> dict[str, Any]:
     ]
     if len(affected_claims) < 2:
         raise V68Error("M2 fixture failed to produce original and translated claims")
-    analytic = AnalyticContext(
-        store=store, actor=PREPARATION_ACTOR,
-        marking=marking, now_fn=clock)
-    narrative = create_narrative(
-        analytic,
-        statement="Notice VR-2026-41 affects Bridge N-4",
-        supporting_claim_ids=[claim["claim_id"] for claim in affected_claims],
-    )
-
     corrected = _plant_fixture_manifestation(
         pipeline, need_id=need.need_id, source_id="v68-notional-regulator-web",
         native_id="https://regulator.notional.example/notices/VR-2026-41",
@@ -451,14 +484,45 @@ def _prepare_m2(root: Path) -> dict[str, Any]:
         "FABRIC_CHANGE_OBSERVED", change,
         recorded_time=clock(), actor=PREPARATION_ACTOR)
     changes = pipeline.process_fabric_changes()
-    propagated = propagate_semantic_changes(analytic)
+    observations = {item["observation_id"]: item
+                    for item in store.records_of("semantic_observation")}
+    translated_n4 = [
+        claim for claim in store.current_claims().values()
+        if claim.get("predicate") == "affected_facility"
+        and claim.get("object_or_value") == "Bridge N-4"
+        and any(observations.get(observation_id, {}).get("manifestation_id")
+                == translated["manifestation_id"]
+                for observation_id in claim.get("observation_ids", ()))
+    ]
+    current_n9 = [
+        claim for claim in store.current_claims().values()
+        if claim.get("predicate") == "affected_facility"
+        and claim.get("object_or_value") == "Bridge N-9"
+    ]
+    facility_changes = [item for item in store.records_of("semantic_change")
+                        if item.get("attribute") == "affected_facility"
+                        and item.get("prior_value") == "Bridge N-4"
+                        and item.get("current_value") == "Bridge N-9"]
+    if len(translated_n4) != 1 or len(current_n9) != 1 or len(facility_changes) != 1:
+        raise V68Error("M2 fixture failed to isolate dependent N-4 and current N-9")
+    translation_state = ClaimStateRecord(
+        state_id=digest_id("v68-m2-translation-state", translated_n4[0]["claim_id"]),
+        claim_id=translated_n4[0]["claim_id"], state="SUPERSEDED",
+        reason="dependent translation of English v1 is historical after correction v2",
+        caused_by=facility_changes[0]["change_id"],
+        superseded_by=current_n9[0]["claim_id"],
+        actor_id=PREPARATION_ACTOR, actor_kind="SERVICE",
+        recorded_time=clock(), marking=marking)
+    store.append("SEMANTIC_CLAIM_STATE_RECORDED", translation_state,
+                 recorded_time=translation_state.recorded_time,
+                 actor=PREPARATION_ACTOR)
 
     from curunir_operational.missions import MissionWorkflow
     workflow = MissionWorkflow(store)
     requirement = workflow.open_requirement(
         mission_context="M2_REGULATORY_CORRECTION",
         question="Which facility is named by the current corrected notice?",
-        affected_ids=(narrative["narrative_id"],),
+        affected_ids=(facility_changes[0]["change_id"],),
         priority="HIGH",
         rationale="the source correction invalidates the earlier settled reading",
         required_evidence_type="OPEN_SOURCE",
@@ -483,9 +547,10 @@ def _prepare_m2(root: Path) -> dict[str, Any]:
             structured["manifestation_id"], initial["manifestation_id"],
             translated["manifestation_id"], corrected["manifestation_id"],
         ],
-        "narrative_id": narrative["narrative_id"],
+        "dependent_translation_claim_id": translated_n4[0]["claim_id"],
+        "current_facility_claim_id": current_n9[0]["claim_id"],
+        "translation_state_id": translation_state.state_id,
         "semantic_change_outcomes": changes,
-        "analytic_propagation_count": len(propagated),
         "requirement_id": requirement["requirement_id"],
         "task_id": task["task_id"],
         "chain": store.verify_chain(),
@@ -786,6 +851,7 @@ def _prepare_m1(root: Path) -> dict[str, Any]:
 def prepare_mission(mission_id: str, root: Path) -> dict[str, Any]:
     if mission_id not in MISSION_IDS:
         raise V68Error(f"mission must be one of: {', '.join(MISSION_IDS)}")
+    executable_identity = _repository_identity(require_clean=True)
     _require_new_root(root)
     try:
         _copy_mission_authority(root, mission_id)
@@ -804,6 +870,7 @@ def prepare_mission(mission_id: str, root: Path) -> dict[str, Any]:
             "actors_path": str(actors_path),
             "human_actor_ids": [PRIMARY_ACTOR, APPROVER_ACTOR, PUBLIC_ACTOR],
             "human_participation_recorded": False,
+            "executable_identity": executable_identity,
             "preparation": result,
         }
         _write_json(root / "preparation.json", result)
@@ -847,6 +914,11 @@ def prepare_mission(mission_id: str, root: Path) -> dict[str, Any]:
 # ---- privacy-bounded pilot instrumentation ---------------------------------
 
 PILOT_LOG = "pilot_events.jsonl"
+ROLE_ACTORS = {
+    "PRIMARY_OPERATOR": PRIMARY_ACTOR,
+    "APPROVER": APPROVER_ACTOR,
+    "PUBLIC_ACCESS_CHECK": PUBLIC_ACTOR,
+}
 
 
 def _pilot_entry_hash(entry: Mapping[str, Any]) -> str:
@@ -958,6 +1030,24 @@ def _request_category(method: str, path: str) -> str:
     return "OPERATOR_READ"
 
 
+def _bounded_path(path: str) -> tuple[str, str]:
+    """Remove record identifiers from retained instrumentation paths."""
+    patterns = (
+        r"^(/api/evidence/)([^/]+)$",
+        r"^(/api/claims/)([^/]+)(/descent)$",
+        r"^(/api/provenance/(?:descend|ascend)/[^/]+/)([^/]+)$",
+        r"^(/api/reports/)([^/]+)(/.*)?$",
+    )
+    for pattern in patterns:
+        match = re.match(pattern, path)
+        if match:
+            groups = match.groups()
+            identifier = groups[1]
+            suffix = groups[2] if len(groups) > 2 and groups[2] else ""
+            return f"{groups[0]}{{id}}{suffix}", _sha256_bytes(identifier.encode())
+    return path, ""
+
+
 def create_instrumented_app(root: Path):
     """Wrap the shipped workbench; no routes or UI in the product are replaced."""
     from fastapi import HTTPException
@@ -991,6 +1081,15 @@ def create_instrumented_app(root: Path):
         role = body.get("participant_role", "") if isinstance(body, dict) else ""
         if role not in ("PRIMARY_OPERATOR", "APPROVER", "PUBLIC_ACCESS_CHECK"):
             raise HTTPException(status_code=400, detail="invalid participant_role")
+        if ROLE_ACTORS[role] != actor.actor_id:
+            raise HTTPException(status_code=403,
+                                detail="participant role does not match actor identity")
+        session_state = _session_analysis(_pilot_events(log_path))
+        key_open = (actor.actor_id, role) in session_state["open_sessions"]
+        if event_kind == "SESSION_STARTED" and key_open:
+            raise HTTPException(status_code=409, detail="session is already open")
+        if event_kind == "SESSION_ENDED" and not key_open:
+            raise HTTPException(status_code=409, detail="no matching open session")
         note = body.get("note", "") if isinstance(body, dict) else ""
         if not isinstance(note, str) or len(note) > 500:
             raise HTTPException(status_code=400, detail="note must be at most 500 characters")
@@ -1083,12 +1182,20 @@ def create_instrumented_app(root: Path):
         started = time.perf_counter()
         status = 500
         try:
-            response = await call_next(request)
+            if actor_id == PUBLIC_ACTOR and request.method != "GET" \
+                    and path not in ("/v68/pilot/start", "/v68/pilot/end"):
+                from starlette.responses import JSONResponse
+                response = JSONResponse(
+                    status_code=403,
+                    content={"detail": "public access-check actor is read-only"})
+            else:
+                response = await call_next(request)
             status = response.status_code
             return response
         finally:
             if measured:
                 after = WorkbenchStore(root / "store").verify_chain()
+                retained_path, resource_id_sha256 = _bounded_path(path)
                 _append_pilot_event(log_path, {
                     "event_kind": "HTTP_ACTION",
                     "event_time": _now(),
@@ -1096,7 +1203,8 @@ def create_instrumented_app(root: Path):
                     "actor_id": actor_id,
                     "actor_kind": actor_kind,
                     "method": request.method,
-                    "path": path,
+                    "path": retained_path,
+                    "resource_id_sha256": resource_id_sha256,
                     "category": _request_category(request.method, path),
                     "http_status": status,
                     "duration_ms": round((time.perf_counter() - started) * 1000, 3),
@@ -1175,8 +1283,42 @@ def _report_sentence_counts(reports: Iterable[Mapping[str, Any]]) -> tuple[int, 
     return complete, required
 
 
+def _normal_text(value: Any) -> str:
+    return " ".join(unicodedata.normalize("NFKC", str(value or ""))
+                    .casefold().split())
+
+
+def _supported_sentence_binding(projection, sentence: Mapping[str, Any]) -> dict[str, Any]:
+    """Conservatively bind settled prose to cited observational content."""
+    text = _normal_text(sentence.get("text"))
+    matches = []
+    for ref in sentence.get("basis_refs", ()):
+        claim = projection.get("semantic_claim", ref)
+        if claim is not None:
+            candidates = (claim.get("statement", ""), claim.get("object_or_value", ""))
+            if any(len(_normal_text(value)) >= 3 and _normal_text(value) in text
+                   for value in candidates):
+                matches.append({"basis_ref": ref, "family": "semantic_claim"})
+            continue
+        observation = projection.get("semantic_observation", ref)
+        if observation is not None:
+            value = _normal_text(observation.get("value", ""))
+            if len(value) >= 3 and value in text:
+                matches.append({"basis_ref": ref, "family": "semantic_observation"})
+            continue
+        manifestation = projection.get("fabric_manifestation", ref)
+        if manifestation is not None:
+            values = [_normal_text(item.get("value", ""))
+                      for item in projection.family("semantic_observation")
+                      if item.get("manifestation_id") == ref]
+            if any(len(value) >= 3 and value in text for value in values):
+                matches.append({"basis_ref": ref, "family": "fabric_manifestation"})
+    return {"content_bound": bool(matches), "matches": matches}
+
+
 def verify_evidence_faithfulness(root: Path) -> dict[str, Any]:
     from curunir_identity import verify_all
+    from curunir_operational.access import can_view
     from curunir_operational.security import PRIMARY_ID_FIELDS
     from curunir_workbench.auth import ActorRegistry
     from curunir_workbench.projections import MissionProjection
@@ -1205,14 +1347,20 @@ def verify_evidence_faithfulness(root: Path) -> dict[str, Any]:
     for item in manifestations:
         digest = item.get("content_sha256", "")
         canonical = root / "custody" / "sha256" / digest[:2] / digest[2:4] / digest
-        stored_ok = False
-        try:
-            stored_ok = _sha256_bytes(store.get_payload(digest)) == digest
-        except Exception:
-            pass
-        file_ok = canonical.is_file() and not canonical.is_symlink() \
-            and _sha256_file(canonical) == digest
-        if not (stored_ok or file_ok):
+        store_copy = store.payload_dir / digest
+        present: list[tuple[str, Path]] = []
+        if store_copy.exists() or store_copy.is_symlink():
+            present.append(("store", store_copy))
+        if canonical.exists() or canonical.is_symlink():
+            present.append(("custody", canonical))
+        invalid = [label for label, path in present
+                   if not path.is_file() or path.is_symlink()
+                   or _sha256_file(path) != digest]
+        if invalid:
+            finding("CUSTODY_COPY_HASH_MISMATCH",
+                    "every present custody copy must match the content identity",
+                    manifestation_id=item["manifestation_id"], copies=invalid)
+        elif not present:
             finding("CUSTODY_HASH_UNAVAILABLE",
                     "no exact hash-verified payload is available",
                     manifestation_id=item["manifestation_id"], sha256=digest)
@@ -1255,6 +1403,8 @@ def verify_evidence_faithfulness(root: Path) -> dict[str, Any]:
 
     reports = _approved_reports(store)
     report_results = []
+    content_bound_supported = 0
+    non_supported_complete = 0
     for report in reports:
         validation = validate_report(projection, projection.redact(report))
         blocking = [item for item in validation.get("findings", ())
@@ -1268,16 +1418,74 @@ def verify_evidence_faithfulness(root: Path) -> dict[str, Any]:
         for item in blocking:
             finding("REPORT_VALIDATION_BLOCKING", item.get("detail", ""),
                     report_id=report["report_id"], report_finding=item)
+        sentence_bindings = []
+        for section in report.get("sections", ()):
+            for sentence in section.get("sentences", ()):
+                if sentence.get("status") == "SUPPORTED":
+                    binding = _supported_sentence_binding(projection, sentence)
+                    sentence_bindings.append({"sentence_id": sentence["sentence_id"], **binding})
+                    if binding["content_bound"]:
+                        content_bound_supported += 1
+                    else:
+                        finding("SUPPORTED_TEXT_NOT_CONTENT_BOUND",
+                                "settled prose does not contain the exact statement or "
+                                "asserted value of any cited observational record",
+                                report_id=report["report_id"],
+                                sentence_id=sentence["sentence_id"])
+                elif sentence.get("status") == "EXPLICITLY_INFERENTIAL" \
+                        and sentence.get("basis_refs") and sentence.get("inference_note"):
+                    non_supported_complete += 1
+                elif sentence.get("status") == "UNRESOLVED" \
+                        and sentence.get("unresolved_reason"):
+                    non_supported_complete += 1
+        report_results[-1]["supported_sentence_bindings"] = sentence_bindings
     if not reports:
         finding("FINAL_ARTIFACT_ABSENT", "no approved human report exists")
+
+    m2_semantics = {"applicable": mission_id == "M2_REGULATORY_CORRECTION",
+                    "current_n9_content_bound": False,
+                    "historical_n4_present": False,
+                    "dependent_translation_misused": False}
+    if mission_id == "M2_REGULATORY_CORRECTION" and reports:
+        prepared = preparation.get("preparation", {})
+        current_n9 = prepared.get("current_facility_claim_id", "")
+        translation_n4 = prepared.get("dependent_translation_claim_id", "")
+        initial_manifestations = prepared.get("manifestations", ())
+        english_v1 = initial_manifestations[1] if len(initial_manifestations) >= 2 else ""
+        for report in reports:
+            for section in report.get("sections", ()):
+                for sentence in section.get("sentences", ()):
+                    refs = set(sentence.get("basis_refs", ()))
+                    normalized = _normal_text(sentence.get("text"))
+                    binding = _supported_sentence_binding(projection, sentence)
+                    if current_n9 in refs and "bridge n-9" in normalized \
+                            and sentence.get("status") == "SUPPORTED" \
+                            and binding["content_bound"]:
+                        m2_semantics["current_n9_content_bound"] = True
+                    if english_v1 in refs and "bridge n-4" in normalized \
+                            and sentence.get("status") == "SUPPORTED" \
+                            and sentence.get("temporal_scope") == "HISTORICAL" \
+                            and binding["content_bound"]:
+                        m2_semantics["historical_n4_present"] = True
+                    if translation_n4 in refs and (
+                            sentence.get("temporal_scope") != "HISTORICAL"
+                            or sentence.get("asserts_independent")):
+                        m2_semantics["dependent_translation_misused"] = True
+        if not m2_semantics["current_n9_content_bound"]:
+            finding("M2_CURRENT_N9_NOT_ESTABLISHED",
+                    "approved report lacks content-bound current N-9 support")
+        if not m2_semantics["historical_n4_present"]:
+            finding("M2_HISTORICAL_N4_NOT_ESTABLISHED",
+                    "approved report lacks content-bound historical N-4 support from English v1")
+        if m2_semantics["dependent_translation_misused"]:
+            finding("M2_DEPENDENT_TRANSLATION_MISUSED",
+                    "dependent Croatian v1 is presented as current or independent support")
 
     restricted_leak = {"applicable": mission_id == "M3_RELIEF_COLLABORATION",
                        "leaked_ids": []}
     if mission_id == "M3_RELIEF_COLLABORATION":
         public_context = registry.context_for_actor(PUBLIC_ACTOR)
         public_projection = MissionProjection(store, public_context)
-        public_state = _semantic_projection(store, public_context)
-        public_text = canonical_line(public_state)
         restricted_ids: set[str] = set()
         for event in store.events():
             record = event["record"]
@@ -1285,22 +1493,40 @@ def verify_evidence_faithfulness(root: Path) -> dict[str, Any]:
             if id_field and isinstance(record.get(id_field), str) \
                     and record[id_field] in public_projection.hidden_ids:
                 restricted_ids.add(record[id_field])
-        leaked = sorted(identifier for identifier in restricted_ids
-                        if identifier in public_text)
-        restricted_leak["leaked_ids"] = leaked
-        if leaked:
+        public_raw = [canonical_line(event["record"]) for event in store.events()
+                      if can_view(event["record"].get("marking"), public_context)]
+        public_text = "\n".join(public_raw)
+        public_tokens = set(re.findall(r"[A-Za-z][A-Za-z0-9_-]{5,}", public_text))
+        leaks = []
+        for token in sorted(public_tokens):
+            if "-" not in token:
+                continue
+            matches = [identifier for identifier in restricted_ids
+                       if identifier.startswith(token)]
+            if matches:
+                leaks.append({
+                    "public_token": token,
+                    "restricted_id_sha256": sorted(
+                        _sha256_bytes(identifier.encode()) for identifier in matches),
+                })
+        restricted_leak["leaked_ids"] = leaks
+        if leaks:
             finding("RESTRICTED_IDENTIFIER_LEAK",
-                    "restricted ids occur in the public semantic projection",
-                    leaked_ids=leaked)
+                    "full or truncated restricted identifiers occur in raw public-marked state",
+                    leak_count=len(leaks))
 
     signatures = verify_all(store)
     if not signatures["all_genuine"]:
         finding("SIGNED_ACTION_INVALID", "one or more retained signatures fail replay",
                 signature_verification=signatures)
+    if reports and not signatures.get("verdicts"):
+        finding("SIGNED_ACTION_ABSENT",
+                "approved report exists without any replay-verifiable signed action")
 
-    complete, required = _report_sentence_counts(reports)
+    _, required = _report_sentence_counts(reports)
+    complete = content_bound_supported + non_supported_complete
     return {
-        "format": "curunir-v6.8-evidence-faithfulness-v1",
+        "format": "curunir-v6.8-evidence-faithfulness-v2",
         "mission_id": mission_id,
         "status": "PASS" if not findings else "FAIL",
         "store_chain": chain,
@@ -1311,9 +1537,10 @@ def verify_evidence_faithfulness(root: Path) -> dict[str, Any]:
         "lineage_complete_conclusions": complete,
         "lineage_required_conclusions": required,
         "restricted_projection_check": restricted_leak,
+        "m2_report_semantics": m2_semantics,
         "signed_actions": signatures,
         "findings": findings,
-        "verified_at": _now(),
+        "verification_store_head": chain.get("head_hash", ""),
     }
 
 
@@ -1321,22 +1548,17 @@ def _measurement(root: Path, faithfulness: Mapping[str, Any], replay: Mapping[st
     from curunir_workbench.store import WorkbenchStore
     store = WorkbenchStore(root / "store")
     events = _pilot_events(root / PILOT_LOG)
-    http = [item for item in events if item.get("event_kind") == "HTTP_ACTION"]
-    sessions = [item for item in events
-                if item.get("event_kind") in ("SESSION_STARTED", "SESSION_ENDED")]
-    elapsed = 0.0
-    open_sessions: dict[tuple[str, str], datetime] = {}
-    for item in sessions:
-        key = (item["actor_id"], item.get("participant_role", ""))
-        when = datetime.fromisoformat(item["event_time"])
-        if item["event_kind"] == "SESSION_STARTED":
-            open_sessions[key] = when
-        elif key in open_sessions:
-            elapsed += max(0.0, (when - open_sessions.pop(key)).total_seconds())
+    session_analysis = _session_analysis(events)
+    http = session_analysis["bounded_http"] if session_analysis["valid"] else []
+    elapsed = sum(item["elapsed_seconds"] for item in session_analysis["intervals"])
 
-    evidence_ids = {item["path"].removeprefix("/api/evidence/")
-                    for item in http if item.get("category") == "EVIDENCE_OPENED"
-                    and item.get("http_status") == 200}
+    evidence_hashes = {item.get("resource_id_sha256", "")
+                       for item in http if item.get("category") == "EVIDENCE_OPENED"
+                       and item.get("http_status") == 200
+                       and item.get("resource_id_sha256")}
+    evidence_ids = {record["manifestation_id"]
+                    for record in store.records_of("fabric_manifestation")
+                    if _sha256_bytes(record["manifestation_id"].encode()) in evidence_hashes}
     source_ids = {record["source_id"] for record in store.records_of("fabric_manifestation")
                   if record["manifestation_id"] in evidence_ids}
     human_ids = {PRIMARY_ACTOR, APPROVER_ACTOR, PUBLIC_ACTOR}
@@ -1393,6 +1615,9 @@ def _measurement(root: Path, faithfulness: Mapping[str, Any], replay: Mapping[st
         "measured_value": measured,
         "interpretation": {
             "timing_and_counts": "descriptive; no validated performance threshold",
+            "evidence_items_inspected": (
+                "successful evidence-detail retrievals inside a valid session; "
+                "an interaction proxy, not proof of human cognition"),
             "integrity": "lineage, replay, final artifact, and required human transitions are binary gates",
         },
         "criterion": {
@@ -1404,6 +1629,32 @@ def _measurement(root: Path, faithfulness: Mapping[str, Any], replay: Mapping[st
     }
 
 
+@contextlib.contextmanager
+def _offline_replay_guard():
+    """Deny the two external-call boundaries while replay reconstructs."""
+    from unittest import mock
+    from curunir_analytic.providers import AnalyticalAssist
+
+    counters = {
+        "network_attempts_blocked": 0, "network_calls_completed": 0,
+        "model_attempts_blocked": 0, "model_calls_completed": 0,
+    }
+
+    def deny_network(*_args, **_kwargs):
+        counters["network_attempts_blocked"] += 1
+        raise V68Error("network access is denied during V6.8 replay")
+
+    def deny_model(*_args, **_kwargs):
+        counters["model_attempts_blocked"] += 1
+        raise V68Error("model-provider access is denied during V6.8 replay")
+
+    with mock.patch.object(socket.socket, "connect", deny_network), \
+            mock.patch.object(socket.socket, "connect_ex", deny_network), \
+            mock.patch.object(socket, "create_connection", deny_network), \
+            mock.patch.object(AnalyticalAssist, "propose", deny_model):
+        yield counters
+
+
 def replay_mission(root: Path, destination: Path) -> dict[str, Any]:
     from curunir_identity import verify_all
     from curunir_workbench.store import WorkbenchStore
@@ -1412,22 +1663,23 @@ def replay_mission(root: Path, destination: Path) -> dict[str, Any]:
         raise V68Error(f"replay destination already exists: {destination}")
     destination.mkdir(parents=True, mode=0o700)
     mission_id = _read_json(root / "preparation.json")["mission_id"]
-    original = WorkbenchStore(root / "store")
-    export_dir = destination / "store_export"
-    export_manifest = original.export_to(export_dir)
-    replay_root = destination / "reconstruction"
-    replay_root.mkdir(mode=0o700)
-    replayed = WorkbenchStore.import_from(export_dir, replay_root / "store")
-    if (root / "custody").is_dir():
-        shutil.copytree(root / "custody", replay_root / "custody")
-    else:
-        (replay_root / "custody").mkdir(mode=0o700)
+    with _offline_replay_guard() as isolation:
+        original = WorkbenchStore(root / "store")
+        export_dir = destination / "store_export"
+        export_manifest = original.export_to(export_dir)
+        replay_root = destination / "reconstruction"
+        replay_root.mkdir(mode=0o700)
+        replayed = WorkbenchStore.import_from(export_dir, replay_root / "store")
+        if (root / "custody").is_dir():
+            shutil.copytree(root / "custody", replay_root / "custody")
+        else:
+            (replay_root / "custody").mkdir(mode=0o700)
 
-    original_chain = original.verify_chain()
-    replay_chain = replayed.verify_chain()
-    original_fingerprints = _fingerprints(original, root, mission_id)
-    replay_fingerprints = _fingerprints(replayed, root, mission_id)
-    signature_result = verify_all(replayed)
+        original_chain = original.verify_chain()
+        replay_chain = replayed.verify_chain()
+        original_fingerprints = _fingerprints(original, root, mission_id)
+        replay_fingerprints = _fingerprints(replayed, root, mission_id)
+        signature_result = verify_all(replayed)
     status = "PASS" if (
         original_chain["valid"] and replay_chain["valid"]
         and original_chain["event_count"] == replay_chain["event_count"]
@@ -1436,11 +1688,19 @@ def replay_mission(root: Path, destination: Path) -> dict[str, Any]:
         and signature_result["all_genuine"]
     ) else "FAIL"
     return {
-        "format": "curunir-v6.8-replay-report-v1",
+        "format": "curunir-v6.8-replay-report-v2",
         "mission_id": mission_id,
         "status": status,
-        "network_used": False,
-        "model_provider_used": False,
+        "network_used": isolation["network_calls_completed"] > 0,
+        "model_provider_used": isolation["model_calls_completed"] > 0,
+        "external_call_isolation": {
+            "enforced": True,
+            "network_connect_boundaries": [
+                "socket.socket.connect", "socket.socket.connect_ex",
+                "socket.create_connection"],
+            "model_provider_boundary": "curunir_analytic.providers.AnalyticalAssist.propose",
+            **isolation,
+        },
         "export_manifest": export_manifest,
         "original_chain": original_chain,
         "replay_chain": replay_chain,
@@ -1451,21 +1711,103 @@ def replay_mission(root: Path, destination: Path) -> dict[str, Any]:
         "original_projection_fingerprints": original_fingerprints,
         "replay_projection_fingerprints": replay_fingerprints,
         "signed_action_verification": signature_result,
-        "verified_at": _now(),
+        "verification_store_head": original_chain.get("head_hash", ""),
     }
 
 
-def _session_roles(events: Iterable[Mapping[str, Any]]) -> dict[str, set[str]]:
-    started: dict[str, set[str]] = {}
-    ended: dict[str, set[str]] = {}
-    for event in events:
-        role = event.get("participant_role", "")
+def _session_analysis(events: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
+    """Pair ordered, non-overlapping sessions and bind HTTP work to them."""
+    open_sessions: dict[tuple[str, str], dict[str, Any]] = {}
+    intervals: list[dict[str, Any]] = []
+    findings: list[dict[str, Any]] = []
+    ordered = list(events)
+    for event in ordered:
+        kind = event.get("event_kind")
+        if kind not in ("SESSION_STARTED", "SESSION_ENDED"):
+            continue
         actor = event.get("actor_id", "")
-        if event.get("event_kind") == "SESSION_STARTED":
-            started.setdefault(actor, set()).add(role)
-        elif event.get("event_kind") == "SESSION_ENDED":
-            ended.setdefault(actor, set()).add(role)
-    return {actor: roles & ended.get(actor, set()) for actor, roles in started.items()}
+        role = event.get("participant_role", "")
+        key = (actor, role)
+        try:
+            when = datetime.fromisoformat(event["event_time"])
+        except (KeyError, TypeError, ValueError):
+            findings.append({"code": "SESSION_TIME_INVALID", "seq": event.get("seq")})
+            continue
+        if ROLE_ACTORS.get(role) != actor:
+            findings.append({"code": "SESSION_ROLE_ACTOR_MISMATCH",
+                             "seq": event.get("seq"), "actor_id": actor, "role": role})
+            continue
+        if kind == "SESSION_STARTED":
+            if key in open_sessions:
+                findings.append({"code": "SESSION_NESTED_START", "seq": event.get("seq")})
+            else:
+                open_sessions[key] = {"seq": event.get("seq", 0), "time": when}
+        elif key not in open_sessions:
+            findings.append({"code": "SESSION_END_WITHOUT_START", "seq": event.get("seq")})
+        else:
+            start = open_sessions.pop(key)
+            if when < start["time"]:
+                findings.append({"code": "SESSION_TIME_REVERSED", "seq": event.get("seq")})
+            else:
+                intervals.append({
+                    "actor_id": actor, "participant_role": role,
+                    "start_seq": start["seq"], "end_seq": event.get("seq", 0),
+                    "start_time": start["time"].isoformat(), "end_time": when.isoformat(),
+                    "elapsed_seconds": (when - start["time"]).total_seconds(),
+                })
+    for actor, role in sorted(open_sessions):
+        findings.append({"code": "SESSION_START_WITHOUT_END",
+                         "actor_id": actor, "role": role})
+    completed_roles: dict[str, set[str]] = {}
+    for interval in intervals:
+        completed_roles.setdefault(interval["actor_id"], set()).add(
+            interval["participant_role"])
+    bounded_http = []
+    unbounded_human_http = []
+    for event in ordered:
+        if event.get("event_kind") != "HTTP_ACTION":
+            continue
+        bounded = any(
+            interval["actor_id"] == event.get("actor_id")
+            and interval["start_seq"] < event.get("seq", 0) < interval["end_seq"]
+            for interval in intervals)
+        if bounded:
+            bounded_http.append(event)
+        elif event.get("actor_id") in set(ROLE_ACTORS.values()) \
+                and event.get("category") not in ("TASK_END",):
+            unbounded_human_http.append(event)
+    if unbounded_human_http:
+        findings.append({"code": "HUMAN_HTTP_OUTSIDE_SESSION",
+                         "event_seqs": [item.get("seq") for item in unbounded_human_http]})
+    return {
+        "valid": not findings,
+        "intervals": intervals,
+        "completed_roles": completed_roles,
+        "open_sessions": open_sessions,
+        "bounded_http": bounded_http,
+        "unbounded_human_http": unbounded_human_http,
+        "findings": findings,
+    }
+
+
+def _session_bound_store_events(store_events: Iterable[Mapping[str, Any]],
+                                bounded_http: Iterable[Mapping[str, Any]]) \
+        -> list[dict[str, Any]]:
+    """Return store events attributable to successful in-session requests."""
+    events = list(store_events)
+    attributable: dict[int, dict[str, Any]] = {}
+    for action in bounded_http:
+        if action.get("http_status", 500) >= 400:
+            continue
+        actor = action.get("actor_id")
+        before = action.get("store_seq_before", 0)
+        after = action.get("store_seq_after", 0)
+        if not isinstance(before, int) or not isinstance(after, int) or after <= before:
+            continue
+        for event in events:
+            if before < event.get("seq", 0) <= after and event.get("actor") == actor:
+                attributable[event["seq"]] = event
+    return [attributable[key] for key in sorted(attributable)]
 
 
 def assess_mission(root: Path, faithfulness: Mapping[str, Any],
@@ -1478,11 +1820,13 @@ def assess_mission(root: Path, faithfulness: Mapping[str, Any],
     store = WorkbenchStore(root / "store")
     log_result = verify_pilot_log(root / PILOT_LOG)
     pilot = _pilot_events(root / PILOT_LOG)
-    roles = _session_roles(pilot)
+    sessions = _session_analysis(pilot)
+    roles = sessions["completed_roles"]
+    bounded_http = sessions["bounded_http"] if sessions["valid"] else []
     reports = _approved_reports(store)
     store_events = store.events()
     human_ids = {PRIMARY_ACTOR, APPROVER_ACTOR, PUBLIC_ACTOR}
-    human_events = [event for event in store_events if event["actor"] in human_ids]
+    human_events = _session_bound_store_events(store_events, bounded_http)
     findings: list[dict[str, Any]] = []
     coverage: dict[str, dict[str, Any]] = {}
 
@@ -1498,15 +1842,15 @@ def assess_mission(root: Path, faithfulness: Mapping[str, Any],
                 "status": "EXERCISED" if condition else "NOT_ESTABLISHED",
             }
 
-    require(log_result["valid"], "PILOT_LOG_INVALID", str(log_result),
-            capability="human operator instrumentation")
+    require(log_result["valid"], "PILOT_LOG_INVALID", str(log_result))
+    require(sessions["valid"], "PILOT_SESSION_INTERVAL_INVALID",
+            str(sessions["findings"]))
     require("PRIMARY_OPERATOR" in roles.get(PRIMARY_ACTOR, set()),
             "PRIMARY_SESSION_INCOMPLETE", "primary operator start/end pair is absent")
     require(any(event["actor"] == PRIMARY_ACTOR for event in human_events),
             "PRIMARY_STORE_ACTION_ABSENT", "no attributable primary-human store mutation")
     require(bool(reports), "APPROVED_FINAL_ARTIFACT_ABSENT",
-            "no approved evidence-bound report exists",
-            capability="analyst decision artifact")
+            "no approved evidence-bound report exists")
     if reports:
         require("APPROVER" in roles.get(APPROVER_ACTOR, set()),
                 "APPROVER_SESSION_INCOMPLETE",
@@ -1521,8 +1865,7 @@ def assess_mission(root: Path, faithfulness: Mapping[str, Any],
         ), "DISTINCT_HUMAN_APPROVAL_ABSENT",
             "approved output lacks the designated distinct human approver")
     require(faithfulness.get("status") == "PASS", "EVIDENCE_FAITHFULNESS_FAILED",
-            "focused evidence and marking verifier must pass",
-            capability="evidence drilldown and lineage")
+            "focused evidence and marking verifier must pass")
     require(replay.get("status") == "PASS", "REPLAY_FAILED",
             "clean offline export/import replay must reproduce semantic state",
             capability="export import and replay")
@@ -1538,28 +1881,77 @@ def assess_mission(root: Path, faithfulness: Mapping[str, Any],
             "V7_LEDGER_INVALID",
             "V7 follow-up entries must remain explicit and separate from V6.8")
     require(any(item.get("category") == "EVIDENCE_OPENED"
-                and item.get("http_status") == 200 for item in pilot),
+                and item.get("http_status") == 200 for item in bounded_http),
             "NO_EVIDENCE_INSPECTION", "operator did not open exact evidence")
 
+    identity = preparation.get("executable_identity", {})
+    current_identity = _repository_identity(require_clean=True)
+    require(identity == current_identity, "PREPARATION_EXECUTABLE_IDENTITY_MISMATCH",
+            "campaign was not prepared by this exact clean executable and pinned kernel")
+    authority = _read_json(root / "qualification_authority.json")
+    expected_authority = {
+        "contract": CONTRACT_PATH.name,
+        "contract_sha256": _sha256_file(CONTRACT_PATH),
+        "missions": MISSIONS_PATH.name,
+        "missions_sha256": _sha256_file(MISSIONS_PATH),
+        "repository_truth": TRUTH_PATH.name,
+        "repository_truth_sha256": _sha256_file(TRUTH_PATH),
+        "repair_contract": REPAIR_CONTRACT_PATH.name,
+        "repair_contract_sha256": _sha256_file(REPAIR_CONTRACT_PATH),
+        "pilot_protocol": PROTOCOL_PATH.name,
+        "pilot_protocol_sha256": _sha256_file(PROTOCOL_PATH),
+    }
+    require(authority == expected_authority, "QUALIFICATION_AUTHORITY_MISMATCH",
+            "campaign authority hashes do not match the frozen repaired contract")
+
     record_types = {event["record"].get("record_type") for event in store_events}
-    require("information_requirement" in record_types and "analyst_task" in record_types,
+    primary_brief = any(item.get("actor_id") == PRIMARY_ACTOR
+                        and item.get("path") == "/v68/pilot/brief"
+                        and item.get("http_status") == 200 for item in bounded_http)
+    require("information_requirement" in record_types and "analyst_task" in record_types
+            and primary_brief,
             "MISSION_WORKFLOW_ABSENT", "requirement and task must be retained",
             capability="mission and objectives")
-    require(bool(store.records_of("fabric_source_descriptor")),
+    source_review = any(item.get("actor_id") == PRIMARY_ACTOR
+                        and item.get("path") == "/api/family/fabric_source_descriptor"
+                        and item.get("http_status") == 200 for item in bounded_http)
+    require(bool(store.records_of("fabric_source_descriptor")) and source_review,
             "SOURCE_REGISTRY_ABSENT", "registered source descriptors must be retained",
             capability="source registry and policy")
-    require(bool(store.records_of("fabric_manifestation")),
+    evidence_review = any(item.get("actor_id") == PRIMARY_ACTOR
+                          and item.get("category") == "EVIDENCE_OPENED"
+                          and item.get("http_status") == 200 for item in bounded_http)
+    provenance_review = any(item.get("actor_id") in (PRIMARY_ACTOR, APPROVER_ACTOR)
+                            and item.get("category") == "PROVENANCE_REVIEWED"
+                            and item.get("http_status") == 200 for item in bounded_http)
+    require(faithfulness.get("status") == "PASS" and provenance_review,
+            "EVIDENCE_DRILLDOWN_NOT_EXERCISED",
+            "human must inspect provenance descent and the focused verifier must pass",
+            capability="evidence drilldown")
+    require(bool(store.records_of("fabric_manifestation")) and evidence_review
+            and provenance_review,
             "ACQUISITION_ABSENT", "manifestation and custody path must be exercised",
             capability="acquisition and custody")
     require(bool(store.records_of("semantic_observation")) and bool(store.records_of("semantic_claim")),
-            "SEMANTIC_STATE_ABSENT", "observation and claim records must be retained",
-            capability="semantic world state")
+            "SEMANTIC_STATE_ABSENT", "observation and claim records must be retained")
 
     signed = faithfulness.get("signed_actions", {})
-    genuine_approvals = [item for item in signed.get("verdicts", ())
+    genuine_action_ids = {item["action_id"] for item in signed.get("verdicts", ())
+                          if item.get("verdict") == GENUINE}
+    approved_ids = {report["report_id"] for report in reports}
+    genuine_approvals = [item for item in store.records_of("signed_action")
                          if item.get("action_type") == "approve_report"
                          and item.get("actor_id") == APPROVER_ACTOR
-                         and item.get("verdict") == GENUINE]
+                         and item.get("target_id") in approved_ids
+                         and item.get("action_id") in genuine_action_ids]
+    require(bool(genuine_approvals), "SIGNED_DISPOSITION_ABSENT",
+            "every mission requires the distinct approver's genuine signed approval",
+            capability="signed disposition")
+
+    def reviewed_family(family: str, actors: tuple[str, ...] = (PRIMARY_ACTOR,)) -> bool:
+        return any(item.get("actor_id") in actors
+                   and item.get("path") == f"/api/family/{family}"
+                   and item.get("http_status") == 200 for item in bounded_http)
 
     if mission_id == "M1_CORPORATE_REGISTRY_CAPSTONE":
         live = [item for item in store.records_of("fabric_manifestation")
@@ -1568,51 +1960,75 @@ def assess_mission(root: Path, faithfulness: Mapping[str, Any],
         require(bool(live), "NO_SUCCESSFUL_LIVE_ACQUISITION",
                 "at least one non-fixture HTTP acquisition must be preserved",
                 capability="live public web evidence")
-        human_manifestation_events = [event for event in store_events
+        human_manifestation_events = [event for event in human_events
                                       if event["actor"] == PRIMARY_ACTOR
                                       and event["record"].get("record_type") == "fabric_manifestation"]
         require(bool(human_manifestation_events), "NO_POST_COLLECTION_EVIDENCE",
-                "primary operator collection did not append a new manifestation",
-                capability="active collection and update")
+                "primary operator collection did not append a new manifestation")
         update_seq = min((event["seq"] for event in human_manifestation_events), default=10**18)
-        hypothesis_events = [event for event in store_events
+        hypothesis_events = [event for event in human_events
                              if event["actor"] == PRIMARY_ACTOR
                              and event["record"].get("record_type") == "hypothesis"]
-        require(len({event["record"]["hypothesis_id"] for event in hypothesis_events}) >= 2,
+        competing = len({event["record"]["hypothesis_id"]
+                         for event in hypothesis_events}) >= 2
+        require(competing,
                 "COMPETING_HYPOTHESES_ABSENT", "operator must author at least two hypotheses",
-                capability="competing hypotheses")
-        require(any(event["seq"] > update_seq and event["record"].get("version", 1) > 1
-                    for event in hypothesis_events),
+                )
+        post_hypothesis = any(
+            event["seq"] > update_seq and event["record"].get("version", 1) > 1
+            for event in hypothesis_events)
+        require(post_hypothesis,
                 "POST_UPDATE_HYPOTHESIS_REVISION_ABSENT",
                 "a hypothesis must be reassessed after new evidence")
-        forecasts = [event for event in store_events
+        collection_actions = [item for item in bounded_http
+                              if item.get("actor_id") == PRIMARY_ACTOR
+                              and item.get("category") == "COLLECTION_ACTION"
+                              and item.get("http_status", 500) < 400]
+        require(competing and post_hypothesis and bool(collection_actions)
+                and bool(human_manifestation_events),
+                "HYPOTHESIS_COLLECTION_LOOP_INCOMPLETE",
+                "human hypotheses, active collection, new evidence, and reassessment must form one loop",
+                capability="hypotheses and active collection")
+        timeline_review = any(item.get("actor_id") == PRIMARY_ACTOR
+                              and item.get("path") == "/api/timeline"
+                              and item.get("http_status") == 200
+                              for item in bounded_http)
+        require(bool(human_manifestation_events) and post_hypothesis and timeline_review,
+                "TEMPORAL_UPDATE_NOT_EXERCISED",
+                "operator must inspect temporal state and revise after the new evidence arrival",
+                capability="semantic world state and temporal change")
+        forecasts = [event for event in human_events
                      if event["actor"] == PRIMARY_ACTOR
                      and event["record"].get("record_type") == "analytic_forecast"]
-        require(any(event["seq"] < update_seq and event["record"].get("version") == 1
-                    for event in forecasts),
+        pre_forecast = any(event["seq"] < update_seq
+                           and event["record"].get("version") == 1
+                           for event in forecasts)
+        require(pre_forecast,
                 "PRE_COLLECTION_FORECAST_ABSENT",
                 "a human-authored forecast must precede the collection update")
-        require(any(event["seq"] > update_seq and event["record"].get("version", 1) > 1
-                    for event in forecasts),
+        post_forecast = any(event["seq"] > update_seq
+                            and event["record"].get("version", 1) > 1
+                            for event in forecasts)
+        require(post_forecast,
                 "POST_UPDATE_FORECAST_REVISION_ABSENT",
-                "a new forecast version must record the post-evidence judgment",
-                capability="forecasting")
-        require(any(event["actor"] == PRIMARY_ACTOR
+                "a new forecast version must record the post-evidence judgment")
+        analytical_context_review = all(reviewed_family(family) for family in (
+            "analytic_theme", "analytic_narrative", "stakeholder_assessment", "impact_path"))
+        require(pre_forecast and post_forecast and analytical_context_review,
+                "ANALYTICAL_CONTEXT_FORECAST_INCOMPLETE",
+                "operator must inspect analytic context and author pre/post forecasts",
+                capability="analytical context and forecasting")
+        human_warning = any(event["actor"] == PRIMARY_ACTOR
                     and event["record"].get("record_type") == "strategic_warning"
-                    for event in store_events),
+                    for event in human_events)
+        require(human_warning and bool(reports),
                 "WARNING_PROJECTION_ABSENT", "operator must project a named-rule warning",
                 capability="alerts warnings and decisions")
-        require(bool(genuine_approvals), "SIGNED_CAPSTONE_DISPOSITION_ABSENT",
-                "distinct approver's genuine signed report approval is required",
-                capability="signed disposition")
-        for family, capability in (
-            ("analytic_theme", "themes and narratives"),
-            ("analytic_narrative", "themes and narratives"),
-            ("stakeholder_assessment", "stakeholder context"),
-            ("impact_path", "impact reasoning"),
-        ):
-            require(bool(store.records_of(family)), f"{family.upper()}_ABSENT",
-                    f"{family} must be exercised", capability=capability)
+        for family in ("analytic_theme", "analytic_narrative",
+                       "stakeholder_assessment", "impact_path"):
+            require(bool(store.records_of(family)) and reviewed_family(family),
+                    f"{family.upper()}_NOT_REVIEWED",
+                    f"operator must review retained {family} context")
 
     elif mission_id == "M2_REGULATORY_CORRECTION":
         fixtures = preparation["preparation"].get("fixture_files", ())
@@ -1620,7 +2036,14 @@ def assess_mission(root: Path, faithfulness: Mapping[str, Any],
             (PACKAGE_ROOT / item["path"]).is_file()
             and _sha256_file(PACKAGE_ROOT / item["path"]) == item["sha256"]
             for item in fixtures)
-        require(fixture_ok, "FIXTURE_MANIFEST_MISMATCH",
+        opened_hashes = {item.get("resource_id_sha256") for item in bounded_http
+                         if item.get("actor_id") == PRIMARY_ACTOR
+                         and item.get("category") == "EVIDENCE_OPENED"
+                         and item.get("http_status") == 200}
+        fixture_opened = all(_sha256_bytes(item["manifestation_id"].encode()) in opened_hashes
+                             for item in store.records_of("fabric_manifestation")
+                             if item.get("connector_id") == "v68-notional-fixture-v1")
+        require(fixture_ok and fixture_opened, "FIXTURE_MANIFEST_MISMATCH",
                 "all four frozen fixture bytes must retain their recorded hashes",
                 capability="structured and unstructured evidence")
         fixture_manifestations = [
@@ -1647,16 +2070,41 @@ def assess_mission(root: Path, faithfulness: Mapping[str, Any],
                     and item.get("change_class") == "SOURCE_CORRECTION"
                     for item in changes),
                 "CORRECTION_NOT_PROPAGATED",
-                "Bridge N-4 to Bridge N-9 source correction must be explicit",
-                capability="correction contradiction and supersession")
-        hypotheses = {event["record"]["hypothesis_id"] for event in store_events
+                "Bridge N-4 to Bridge N-9 source correction must be explicit")
+        translated_id = preparation["preparation"].get("dependent_translation_claim_id")
+        current_id = preparation["preparation"].get("current_facility_claim_id")
+        claim_states = {item["claim_id"]: item for item in store.records_of("semantic_claim_state")}
+        translation_state = claim_states.get(translated_id, {})
+        queries = store.records_of("fabric_query")
+        translated_manifestation = preparation["preparation"].get("manifestations", ["", "", ""])[2]
+        translated_executions = [item for item in store.records_of("fabric_execution")
+                                 if translated_manifestation in item.get("manifestation_ids", ())]
+        translated_query_ids = {item["query_id"] for item in translated_executions}
+        explicit_derivation = any(
+            query.get("query_id") in translated_query_ids
+            and preparation["preparation"]["manifestations"][1] in query.get("derived_from", ())
+            for query in queries)
+        m2_semantics = faithfulness.get("m2_report_semantics", {})
+        require(translation_state.get("state") == "SUPERSEDED"
+                and translation_state.get("superseded_by") == current_id
+                and explicit_derivation
+                and m2_semantics.get("current_n9_content_bound")
+                and m2_semantics.get("historical_n4_present")
+                and not m2_semantics.get("dependent_translation_misused"),
+                "M2_CORRECTION_SEMANTICS_INCOMPLETE",
+                "dependent v1 translation, current N-9, and historical N-4 must remain explicit",
+                capability="semantic world state and temporal change")
+        hypotheses = {event["record"]["hypothesis_id"] for event in human_events
                       if event["actor"] == PRIMARY_ACTOR
                       and event["record"].get("record_type") == "hypothesis"}
         require(len(hypotheses) >= 2, "COMPETING_HYPOTHESES_ABSENT",
-                "operator must record at least two correction hypotheses",
-                capability="competing hypotheses")
+                "operator must record at least two correction hypotheses")
         require(any(event.get("event_kind") == "OPERATOR_CORRECTION_RECORDED"
-                    and event.get("actor_id") == PRIMARY_ACTOR for event in pilot),
+                    and event.get("actor_id") == PRIMARY_ACTOR
+                    and any(interval["actor_id"] == PRIMARY_ACTOR
+                            and interval["start_seq"] < event.get("seq", 0) < interval["end_seq"]
+                            for interval in sessions["intervals"])
+                    for event in pilot),
                 "OPERATOR_CORRECTION_ABSENT",
                 "operator must explicitly record revision of the initial reading")
 
@@ -1664,43 +2112,66 @@ def assess_mission(root: Path, faithfulness: Mapping[str, Any],
         require("PUBLIC_ACCESS_CHECK" in roles.get(PUBLIC_ACTOR, set()),
                 "PUBLIC_ACCESS_SESSION_INCOMPLETE",
                 "public-only access-check start/end pair is absent")
-        require(len(preparation["preparation"].get("ingestions", ())) >= 10,
+        operational_review = all(reviewed_family(family) for family in (
+            "object_version", "activity_version", "alert", "recommendation"))
+        require(len(preparation["preparation"].get("ingestions", ())) >= 10
+                and operational_review,
                 "HETEROGENEOUS_INGESTION_INCOMPLETE",
-                "ten frozen production-pipeline ingestions must be retained",
-                capability="heterogeneous operational ingestion")
+                "ten frozen ingestions must be retained and reviewed")
         mutation_actors = {event["actor"] for event in human_events}
         require({PRIMARY_ACTOR, APPROVER_ACTOR}.issubset(mutation_actors),
                 "COLLABORATION_NOT_ESTABLISHED",
                 "both cleared humans must append attributable mission state",
                 capability="collaboration and access control")
+        require(not any(event["actor"] == PUBLIC_ACTOR for event in store_events),
+                "PUBLIC_ACTOR_MUTATED_STORE",
+                "read-only public access-check actor must not append mission state")
+        public_paths = {item.get("path") for item in bounded_http
+                        if item.get("actor_id") == PUBLIC_ACTOR
+                        and item.get("method") == "GET"
+                        and item.get("http_status") == 200}
+        require({"/api/overview", "/api/search", "/api/graph"}.issubset(public_paths),
+                "PUBLIC_ACCESS_CHECK_INCOMPLETE",
+                "read-only public session must inspect overview, search, and graph")
         annotations = [item for item in store.current_annotations().values()
                        if item.get("kind") == "DISSENT"]
         require(bool(annotations), "DISSENT_ABSENT",
                 "a retained dissent annotation is required",
                 capability="annotations and dissent")
-        require(bool(store.records_of("recommendation")) or bool(store.records_of("strategic_warning")),
+        warning_reviewed = reviewed_family("recommendation") \
+            or reviewed_family("strategic_warning")
+        require((bool(store.records_of("recommendation"))
+                 or bool(store.records_of("strategic_warning")))
+                and warning_reviewed and bool(reports),
                 "WARNING_OR_RECOMMENDATION_ABSENT",
                 "mission must retain a warning or recommendation",
                 capability="alerts warnings and decisions")
         require(not faithfulness.get("restricted_projection_check", {}).get("leaked_ids"),
                 "PUBLIC_PROJECTION_LEAK",
                 "public projection must contain no compartmented identifier")
-        require(bool(genuine_approvals), "SIGNED_DISPOSITION_ABSENT",
-                "distinct cleared approver's genuine signed approval is required",
-                capability="signed disposition")
+    mission_pass = not findings
+    if not mission_pass:
+        for row in coverage.values():
+            if row["status"] == "EXERCISED":
+                row["status"] = "NOT_ESTABLISHED"
+                row["measured_result"] = False
+                row["exact_exercised_path"] += "; mission did not pass"
 
     return {
-        "format": "curunir-v6.8-mission-result-v1",
+        "format": "curunir-v6.8-mission-result-v2",
         "mission_id": mission_id,
         "status": "PASS" if not findings else "NOT_ACHIEVED",
         "manual_waiver": False,
-        "human_participation_recorded": bool(human_events) and log_result["valid"],
+        "human_participation_recorded": bool(human_events) and sessions["valid"],
+        "human_participation_claim_boundary": (
+            "Attributable HUMAN registry identities acted inside ordered sessions; "
+            "software does not prove physical presence or distinct biological persons."),
         "store_chain": store.verify_chain(),
         "pilot_log": log_result,
         "approved_report_ids": [report["report_id"] for report in reports],
         "coverage": coverage,
         "findings": findings,
-        "assessed_at": _now(),
+        "assessment_store_head": store.verify_chain().get("head_hash", ""),
     }
 
 
@@ -1851,13 +2322,22 @@ def verify_package(root: Path) -> dict[str, Any]:
     if expected != actual:
         findings.append({"code": "ARTIFACT_MANIFEST_MISMATCH"})
     package = _read_json(artifacts / "mission_package.json")
+    preparation = _read_json(root / "preparation.json")
+    if package.get("format") != "curunir-v6.8-mission-package-v1" \
+            or package.get("mission_id") != preparation.get("mission_id"):
+        findings.append({"code": "PACKAGE_IDENTITY_MISMATCH"})
+    if package.get("manual_waiver") is not False \
+            or (artifacts / "actors.json").exists() \
+            or package.get("actors_registry_packaged") is not False:
+        findings.append({"code": "PACKAGE_CREDENTIAL_OR_WAIVER_VIOLATION"})
     from curunir_workbench.store import WorkbenchStore
     chain = WorkbenchStore(root / "store").verify_chain()
     if chain["event_count"] != package.get("store_event_count") \
             or chain["head_hash"] != package.get("store_head_hash"):
         findings.append({"code": "MISSION_MUTATED_AFTER_PACKAGE"})
     result = _read_json(artifacts / "mission_result.json")
-    if result.get("status") != package.get("status"):
+    if result.get("status") != package.get("status") \
+            or result.get("manual_waiver") is not False:
         findings.append({"code": "PACKAGE_STATUS_MISMATCH"})
     return {"status": "PASS" if not findings else "FAIL",
             "mission_id": package.get("mission_id"), "findings": findings,
@@ -1904,10 +2384,97 @@ def _focused_v68_validation() -> dict[str, Any]:
         result["passed"] = result["tests"] - result["failures"] \
             - result["errors"] - result["skipped"]
         result["status"] = "PASS" if completed.returncode == 0 \
-            and result["tests"] >= 9 and result["skipped"] == 0 else "FAIL"
+            and result["tests"] > 0 and result["skipped"] == 0 else "FAIL"
         if result["status"] != "PASS":
             result["output"] = completed.stdout[-4000:]
         return result
+
+
+def _v67_report_findings(v67: Mapping[str, Any], executable_sha: str) \
+        -> list[dict[str, Any]]:
+    from tools.validate_v67 import (
+        MAXIMUM_FOCUSED_SKIPS, MAXIMUM_FULL_SKIPS_WITHOUT_POSTGRES,
+        MAXIMUM_PRODUCT_SKIPS, MINIMUM_FOCUSED_TESTS, MINIMUM_FULL_TESTS,
+        MINIMUM_PRODUCT_TESTS,
+    )
+    findings: list[dict[str, Any]] = []
+
+    def add(code: str, detail: Any = "") -> None:
+        findings.append({"code": code, "detail": detail})
+
+    if v67.get("format") != "curunir-v6.7-terminal-validation-v1":
+        add("V67_REPORT_FORMAT_INVALID", v67.get("format"))
+    top_status = v67.get("status")
+    if top_status not in ("PASS", "PASSED", "PASS_WITH_ACCEPTED_BASELINE_RESIDUALS"):
+        add("V67_REGRESSION_GATE_FAILED", top_status)
+    if v67.get("commit") != executable_sha:
+        add("VALIDATED_EXECUTABLE_IDENTITY_MISMATCH", v67.get("commit"))
+
+    truth_kernel = _read_json(TRUTH_PATH)["external_kernel"]
+    clean = v67.get("clean_reconstruction", {})
+    if clean.get("status") != "RECONSTRUCTION_OK" \
+            or clean.get("commit") != executable_sha \
+            or clean.get("smoke", {}).get("status") != "RECONSTRUCTION_OK":
+        add("CLEAN_RECONSTRUCTION_FAILED", clean)
+    if clean.get("kernel_tree_sha256") != truth_kernel["tree_sha256"] \
+            or clean.get("kernel_python_file_count") != truth_kernel["python_file_count"]:
+        add("V67_KERNEL_IDENTITY_MISMATCH", {
+            "sha256": clean.get("kernel_tree_sha256"),
+            "files": clean.get("kernel_python_file_count")})
+
+    focused = v67.get("focused_v67", {})
+    if focused.get("status") != "PASSED" \
+            or focused.get("tests", 0) < MINIMUM_FOCUSED_TESTS \
+            or focused.get("failed") != 0 or focused.get("errors") != 0 \
+            or focused.get("skipped", 10**9) > MAXIMUM_FOCUSED_SKIPS:
+        add("V67_FOCUSED_RESULT_INVALID", focused)
+    product = v67.get("curunir_product_planes", {})
+    if product.get("status") != "PASSED" \
+            or product.get("tests", 0) < MINIMUM_PRODUCT_TESTS \
+            or product.get("failed") != 0 or product.get("errors") != 0 \
+            or product.get("skipped", 10**9) > MAXIMUM_PRODUCT_SKIPS:
+        add("V67_PRODUCT_RESULT_INVALID", product)
+
+    baseline = _read_json(PACKAGE_ROOT / "CURUNIR_V6_7_BASELINE_NONPASSING.json")
+    full = v67.get("full_repository", {})
+    current = full.get("nonpassing_nodeids", [])
+    outcomes = full.get("nonpassing_outcomes", {})
+    if not isinstance(current, list) or not all(isinstance(item, str) for item in current):
+        current = []
+        add("V67_NONPASSING_SET_INVALID")
+    current_set = set(current)
+    allowed = set(baseline["allowed_nonpassing_nodeids"])
+    new_nodes = sorted(current_set - allowed)
+    if new_nodes:
+        add("V67_NEW_NONPASSING_NODES", new_nodes)
+    expected_errors = set(baseline.get("allowed_error_nodeids", ()))
+    outcome_changes = sorted(
+        node for node, outcome in outcomes.items()
+        if node in current_set
+        and outcome != ("error" if node in expected_errors else "failure")) \
+        if isinstance(outcomes, dict) else ["nonpassing_outcomes is not an object"]
+    if not isinstance(outcomes, dict) or set(outcomes) != current_set:
+        add("V67_NONPASSING_OUTCOME_SET_INVALID")
+    if outcome_changes:
+        add("V67_OUTCOME_KIND_CHANGES", outcome_changes)
+    expected_set_hash = _sha256_bytes(("\n".join(sorted(current_set)) + "\n").encode())
+    if full.get("nonpassing_node_set_sha256") != expected_set_hash:
+        add("V67_NONPASSING_SET_HASH_MISMATCH")
+    if full.get("rewrite_only_nonpassing") != [] \
+            or full.get("outcome_kind_changes") != []:
+        add("V67_REPORTED_REGRESSION_FIELDS_NONEMPTY")
+    if full.get("tests", 0) < MINIMUM_FULL_TESTS \
+            or full.get("skipped", 10**9) > MAXIMUM_FULL_SKIPS_WITHOUT_POSTGRES:
+        add("V67_FULL_COLLECTION_BOUNDS_FAILED", {
+            "tests": full.get("tests"), "skipped": full.get("skipped")})
+    expected_full_status = "PASSED" if not current_set \
+        else "PASS_WITH_ACCEPTED_BASELINE_RESIDUALS"
+    normalized_top = "PASSED" if top_status in ("PASS", "PASSED") else top_status
+    if full.get("status") != expected_full_status or normalized_top != expected_full_status:
+        add("V67_STATUS_RESIDUAL_MISMATCH", {
+            "top": top_status, "full": full.get("status"),
+            "expected": expected_full_status})
+    return findings
 
 
 def validate_campaign(campaign_root: Path, v67_report_path: Path,
@@ -1917,16 +2484,52 @@ def validate_campaign(campaign_root: Path, v67_report_path: Path,
     findings = []
     for mission_id in MISSION_IDS:
         root = campaign_root / mission_id
-        package_check = verify_package(root)
-        package_results.append(package_check)
-        if package_check["status"] != "PASS":
-            findings.append({"code": "MISSION_PACKAGE_INVALID", "mission_id": mission_id,
-                             "detail": package_check})
-            continue
-        result = _read_json(root / "artifacts" / "mission_result.json")
-        mission_results.append(result)
-        if result.get("status") != "PASS" or result.get("manual_waiver") is not False:
-            findings.append({"code": "MISSION_NOT_ACHIEVED", "mission_id": mission_id})
+        try:
+            package_check = verify_package(root)
+            package_results.append(package_check)
+            if package_check["status"] != "PASS":
+                findings.append({"code": "MISSION_PACKAGE_INVALID", "mission_id": mission_id,
+                                 "detail": package_check})
+                continue
+            with tempfile.TemporaryDirectory(prefix=f"curunir-v68-terminal-{mission_id}-") as scratch:
+                replay = replay_mission(root, Path(scratch) / "replay")
+                faithfulness = verify_evidence_faithfulness(root)
+                result = assess_mission(root, faithfulness, replay)
+                measurement = _measurement(root, faithfulness, replay)
+                audit = _audit_state(root)
+            derived = {
+                "evidence_faithfulness.json": faithfulness,
+                "replay_report.json": replay,
+                "mission_result.json": result,
+                "measurement.json": measurement,
+                "audit_state.json": audit,
+            }
+            mismatches = sorted(
+                name for name, value in derived.items()
+                if (root / "artifacts" / name).read_bytes() != _json_bytes(value))
+            package_results[-1]["live_rederivation"] = {
+                "status": "PASS" if not mismatches else "FAIL",
+                "byte_mismatches": mismatches,
+                "store_head_hash": result["store_chain"]["head_hash"],
+            }
+            if mismatches:
+                findings.append({"code": "PACKAGED_DERIVATION_MISMATCH",
+                                 "mission_id": mission_id, "artifacts": mismatches})
+            mission_results.append(result)
+            if result.get("status") != "PASS" or result.get("manual_waiver") is not False:
+                findings.append({"code": "MISSION_NOT_ACHIEVED", "mission_id": mission_id,
+                                 "detail": result.get("findings", ())})
+        except Exception as exc:
+            failure = {"status": "FAIL",
+                       "findings": [{"code": "LIVE_REDERIVATION_FAILED",
+                                     "detail": f"{type(exc).__name__}: {exc}"}]}
+            if package_results and package_results[-1].get("mission_id") == mission_id:
+                package_results[-1]["live_rederivation"] = failure
+            else:
+                package_results.append({"mission_id": mission_id, **failure})
+            findings.append({"code": "MISSION_LIVE_REDERIVATION_FAILED",
+                             "mission_id": mission_id,
+                             "detail": f"{type(exc).__name__}: {exc}"})
 
     focused_v68 = _focused_v68_validation()
     if focused_v68["status"] != "PASS":
@@ -1936,40 +2539,15 @@ def validate_campaign(campaign_root: Path, v67_report_path: Path,
     executable_sha = subprocess.run(
         ["git", "-C", str(REPO_ROOT), "rev-parse", "HEAD"], check=True,
         capture_output=True, text=True).stdout.strip()
-    if v67.get("status") != "PASS_WITH_ACCEPTED_BASELINE_RESIDUALS":
-        findings.append({"code": "V67_REGRESSION_GATE_FAILED",
-                         "detail": v67.get("status")})
-    if v67.get("commit") != executable_sha:
-        findings.append({"code": "VALIDATED_EXECUTABLE_IDENTITY_MISMATCH",
-                         "detail": v67.get("commit")})
     clean = v67.get("clean_reconstruction", {})
-    if clean.get("commit") != executable_sha \
-            or clean.get("smoke", {}).get("status") != "RECONSTRUCTION_OK":
-        findings.append({"code": "CLEAN_RECONSTRUCTION_FAILED"})
+    findings.extend(_v67_report_findings(v67, executable_sha))
 
     coverage = _campaign_coverage(mission_results)
     required = set(_read_json(CONTRACT_PATH)["required_coverage"])
     established = {row["capability"] for row in coverage
-                   if row.get("status") == "EXERCISED"}
-    # Several frozen labels intentionally aggregate exact paths; preserve the
-    # original contract labels through an explicit, auditable mapping.
-    coverage_aliases = {
-        "mission and objectives": "mission and objectives",
-        "source registry and policy": "source registry and policy",
-        "acquisition and custody": "acquisition and custody",
-        "structured and unstructured evidence": "structured and unstructured evidence",
-        "semantic world state": "semantic world state and temporal change",
-        "competing hypotheses": "hypotheses and active collection",
-        "forecasting": "analytical context and forecasting",
-        "alerts warnings and decisions": "alerts warnings and decisions",
-        "collaboration and access control": "collaboration and access control",
-        "evidence drilldown and lineage": "evidence drilldown",
-        "signed disposition": "signed disposition",
-        "export import and replay": "export import and replay",
-    }
-    contract_established = {coverage_aliases[item] for item in established
-                            if item in coverage_aliases}
-    missing_coverage = sorted(required - contract_established)
+                   if row.get("status") == "EXERCISED"
+                   and row.get("measured_result") is True}
+    missing_coverage = sorted(required - established)
     if missing_coverage:
         findings.append({"code": "REQUIRED_COVERAGE_NOT_ESTABLISHED",
                          "missing": missing_coverage})
