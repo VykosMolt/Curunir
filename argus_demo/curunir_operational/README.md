@@ -1,11 +1,19 @@
-# Curunír operational plane — mission data fabric and workbench (V1)
+# Curunír operational plane — the trusted core
 
-Research-shadow implementation of `CURUNIR_MISSION_DATA_FABRIC_AND_WORKBENCH_V1`.
+The store, the access lattice, the record ontology, and the canonical byte
+contract that every other `curunir_*` package builds on. Rebuilt under
+`CURUNIR_V6_7_ARCHITECTURE.md`; exercised end to end by the V6.8 human pilot.
 
-**Status:** `FUNCTIONAL_RESEARCH_SHADOW_VERTICAL_SLICE` — a coherent mission-data
-workflow exists and runs end to end in a synthetic environment. It is **not**
-production-ready, not accredited, not validated intelligence, and not a system
-of record. See `docs/curunir-operational-current-state.md` for exact limitations.
+**Status:** `FUNCTIONAL` — a coherent mission workflow runs end to end, was
+driven by real operators in the V6.8 pilot, and reproduces under offline
+replay. It is **not** accredited, not validated intelligence, and not a system
+of record. `../CURUNIR_V6_8_QUALIFICATION.json` states exactly what was and
+was not established.
+
+> **History.** This package once also carried the `v3`..`v5_8_1` research
+> campaign tree. That was removed in the V6.9 excision
+> (`../CURUNIR_V6_9_EXCISION.json`); it survives at the git tag
+> `archive/curunir-campaign-tree-v5x`. Nothing below depends on it.
 
 ## Purpose
 
@@ -48,7 +56,6 @@ cd argus_demo
 
 | Module | Responsibility |
 |---|---|
-| `canonical` | single reuse seam: canonical bytes/hash/id/timestamp helpers |
 | `contracts` | operational record ontology (validated frozen dataclasses) |
 | `access`, `geometry` | fail-closed markings/contexts; WGS84 geometry + deterministic distances |
 | `store` | append-only hash-chained JSONL event log, payload custody, export/import |
@@ -64,6 +71,15 @@ cd argus_demo
 | `sitrep` | evidence-bound situation reports (JSON/Markdown/plain text) |
 | `explain` | provenance/quality/history explanation traversal |
 | `sovereignty` | sovereignty manifest, open-export exit test, PACE bundle |
+| `security` | material-reference registry, reference closure, marking admission |
+| `canonical` | strict canonical values: the single persisted byte contract |
+| `missions` | mission and objective records |
+| `geometry` | WGS84 geometry and deterministic distances |
+| `delta` | delta bundles: preflight, staged install, conflict semantics |
+| `partition_custody` | custody across store partitions |
+| `xml_safety` | bounded, hostile-input-safe XML handling |
+| `stress` | deterministic load and integrity stress runs |
+| `providers_eval` | provider comparison harness (no analytical provider wired yet) |
 | `cli` | thin command layer |
 | `scenario/` | synthetic Vessia Corridor fixtures + runner (never imported by core) |
 
