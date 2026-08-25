@@ -77,9 +77,42 @@
     "interpretation": "Every surviving node kept its exact outcome. The collection count drop is declared here and is the excision itself, not a regression or an increase in skipping."
   },
   "residual_nonpassing_after": {
-    "count": 77,
-    "node_set_sha256": "8a0d254a0da29786212ce64f3cabd9dc0eb38c62bb0b878ed4182856a8fd0c86",
-    "composition": "Pre-existing ARGUS neural/extractor/capsule residuals that need untracked corpora, plus the V6.8 harness tests, which refuse a dirty checkout by design and pass from a clean one.",
-    "curunir_product_plane_regressions": 0
+    "measured_environment": "committed tree, external ARGUS kernel mounted at argus_demo/argus/, full pytest run",
+    "count": 62,
+    "node_set_sha256": "fd7198066a722d865e002792aa32d526ece9cb30f915edf606411f2e9d35e0e9",
+    "curunir_product_plane": {
+      "count": 1,
+      "nodes": [
+        "tests.test_operational_v2_integration::test_live_vs_synthetic_distinct"
+      ],
+      "status": "PRE_EXISTING",
+      "cause": "requires live capture fixtures that are not tracked",
+      "regressions_introduced_by_this_excision": 0
+    },
+    "inherited_argus_research_lines": {
+      "count": 61,
+      "modules": {
+        "tests.test_neural_extractor": 13,
+        "tests.test_universal_extractor_v5e": 10,
+        "tests.test_neural_review_ui_v5": 9,
+        "tests.test_review_label_feedback_v5b": 7,
+        "tests.test_neural_staging_v4": 6,
+        "tests.test_true_public_v5c_endpoint_repair": 6,
+        "tests.test_universal_extractor_v5h": 6,
+        "tests.test_codec_stage2_field_head_study": 1,
+        "tests.test_neural_carrier_no_symbolic_decoder": 1,
+        "tests.test_universal_extractor_v5d": 1,
+        "tests.test_universal_extractor_v5f": 1
+      },
+      "status": "PRE_EXISTING",
+      "cause": "separate ARGUS research lines sharing this repository; they need corpora, models and ledgers that are not tracked here",
+      "owned_by_this_programme": false
+    },
+    "environment_gated_note": "tests/v67/test_clean_reconstruction.py needs the kernel (CURUNIR_ARGUS_KERNEL or argus_demo/argus/); with it supplied, all 3 pass. tests/test_curunir_v68.py refuses a dirty checkout by design; all 23 pass on a clean one."
+  },
+  "verification": {
+    "clean_checkout_reconstruction": "tests/v67/test_clean_reconstruction.py PASSES (3/3): exports committed bytes with git archive, mounts the pinned kernel, and runs import -> create store -> export -> import -> replay with the isolated tree as the only import path. This is the load-bearing evidence that nothing the product needs was removed.",
+    "curunir_product_plane": "769 passed, 1 pre-existing failure, 5 skipped",
+    "v6_8_harness": "23/23 pass on a clean checkout"
   }
 }
