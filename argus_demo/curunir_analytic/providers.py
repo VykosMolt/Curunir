@@ -120,9 +120,17 @@ class AnalyticalAssist:
     infer_fn: InferFn | None = None
     provider_actor: str = "analytic-assist"
     allowed_input_marking: Marking | None = None
+    # A `model_backends.ModelBackend`. A real provider must know which
+    # analytical kind it is being asked for, because that determines the
+    # response schema it is constrained to; `InferFn` cannot carry it. Set
+    # this instead of `infer_fn` for such a provider. Held as an explicit
+    # field rather than sniffed from `infer_fn`, and typed loosely to keep
+    # this module free of a dependency on the backend package.
+    backend: Any = None
 
     def available(self) -> bool:
-        return self.infer_fn is not None and self.package is not None
+        return ((self.infer_fn is not None or self.backend is not None)
+                and self.package is not None)
 
     def status(self) -> dict[str, Any]:
         if self.available():
@@ -186,7 +194,9 @@ class AnalyticalAssist:
         self._ensure_registered(ctx)
         started = ctx.now_fn()
         try:
-            raw_output = self.infer_fn(task, clean_inputs)
+            raw_output = (self.backend.infer(task, clean_inputs, target_kind)
+                          if self.backend is not None
+                          else self.infer_fn(task, clean_inputs))
             if not isinstance(raw_output, Mapping):
                 raise ValueError("provider response must be an object")
             output = _provider_json(raw_output)

@@ -26,6 +26,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from curunir_analytic.model_backends import availability as model_availability
 from curunir_operational.access import AccessContext
 
 from . import commands
@@ -374,6 +375,21 @@ def create_app(mission_root: str | Path, actors_path: str | Path,
     def cmd_review(request: Request, item_id: str, body: ReviewBody):
         return run(request, commands.resolve_review_item, command_context(request),
                    item_id, **body.model_dump())
+
+    class ProposalRequestBody(BaseModel):
+        task: str; target_kind: str
+        input_refs: list[str] = Field(default_factory=list)
+
+    @app.post("/api/commands/proposals")
+    def cmd_request_proposal(request: Request, body: ProposalRequestBody):
+        return run(request, commands.request_model_proposal, command_context(request),
+                   task=body.task, target_kind=body.target_kind,
+                   input_refs=tuple(body.input_refs))
+
+    @app.get("/api/model/status")
+    def model_status(request: Request):
+        command_context(request)          # authenticated actors only
+        return {"configured": model_availability()}
 
     class ProposalBody(BaseModel):
         accept: bool; note: str = ""

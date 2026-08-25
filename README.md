@@ -56,6 +56,12 @@ live outside it. `argus_demo/CURUNIR_RECONSTRUCTION.md` is the authority.
    (poppler-utils) is optional; a missing binary is recorded as a bounded
    processing failure, never as absence of evidence.
 
+An **analytical model provider** (`anthropic` or `openai`) is optional and
+deliberately outside the pinned set — `requirements.txt` is hash-pinned by the
+V6.7 reconstruction manifest, so adding one is a change-control decision. With
+neither installed the product behaves exactly as one with no provider
+configured. See `argus_demo/curunir_analytic/README.md`.
+
 ## Running it
 
 ```bash
@@ -98,8 +104,11 @@ These are enforced in code, not aspirational:
   value. A citation-shaped reference is not enough.
 - **Fail closed.** Unknown, malformed, stale, replayed or tampered input is a
   typed refusal with no partial authoritative state.
-- **Human authority.** A model may propose; only a human accepts. Approval is an
-  Ed25519 signed act bound to actor, mission, report and version, and the author
-  may not be the approver.
+- **Human authority.** A model may propose; only a human accepts. A proposal is
+  constrained to a schema generated from the same table the review path
+  enforces, may cite only identifiers it was shown, and is retained in full —
+  failures included — as an inference record. Approval is an Ed25519 signed act
+  bound to actor, mission, report and version, and the author may not be the
+  approver.
 - **Exportable.** Documented open formats, full lineage, no vendor-specific
   transformation required to leave.

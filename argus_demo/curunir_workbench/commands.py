@@ -19,6 +19,8 @@ from argus.source_intelligence.models import digest_id
 from curunir_analytic.contracts import ResolutionRule
 from curunir_analytic.forecasts import (create_forecast, resolve_forecast_human,
                                         update_probability)
+from curunir_analytic.candidate_schema import refusal_reason
+from curunir_analytic.model_backends import assist_from_environment
 from curunir_analytic.substrate import AnalyticContext, resolve_candidate
 from curunir_fabric.executor import ExecutionContext, RateGate
 from curunir_fabric.registry import load_registry
@@ -26,6 +28,7 @@ from curunir_fabric.watch import register_watch, retire_watch
 from curunir_operational.access import (AccessContext, Marking, can_view,
                                         marking_from_record, most_restrictive)
 from curunir_operational.missions import MissionWorkflow
+from curunir_operational.security import MaterialReference, resolve_reference_records
 from curunir_operational.canonical import validate_interchange
 from curunir_operational.workflow import WorkflowEngine
 from curunir_semantic.collection import assign_human_route, execute_route
@@ -444,6 +447,43 @@ def resolve_model_proposal(ctx: CommandContext, proposal_id: str, *,
     return resolve_candidate(ctx.analytic(_record_marking(latest)), proposal_id,
                              accept=accept, actor_id=ctx.actor,
                              actor_kind=ctx.actor_kind, note=note)
+
+
+def request_model_proposal(ctx: CommandContext, *, task: str, target_kind: str,
+                           input_refs: tuple[str, ...]) -> dict:
+    """Ask the configured provider for one analytical candidate.
+
+    The analyst chooses the evidence; the provider sees only records this
+    actor can already view, so a proposal request can never be used to read
+    around the access lattice. A record the actor cannot see is reported as
+    unknown, exactly as elsewhere — visibility must not be an existence
+    oracle. The provider's answer becomes a PROPOSED candidate that only a
+    human can accept; this command grants no authority beyond asking.
+    """
+    assist = assist_from_environment()
+    if assist is None or not assist.available():
+        return {"status": "ANALYTICAL_PROVIDER_UNAVAILABLE",
+                "detail": ("no analytical provider is configured; deterministic "
+                           "candidates and analyst acts remain fully available")}
+    if not input_refs:
+        raise ValueError("a proposal request must cite the evidence it rests on")
+    reason = refusal_reason(target_kind)
+    if reason is not None:
+        raise ValueError(f"{target_kind} cannot be model-proposed: {reason}")
+
+    records: list[Mapping[str, Any]] = []
+    markings: list[Any] = []
+    for ref in dict.fromkeys(input_refs):
+        resolved = resolve_reference_records(ctx.store, (MaterialReference("*", ref),))
+        visible = [r for r in resolved if can_view(r.get("marking"), ctx.context)]
+        if not visible:
+            raise NotFound(f"unknown record: {ref}")
+        for record in visible:
+            records.append(record)
+            markings.append(_record_marking(record))
+    subject = most_restrictive(markings) if markings else ctx.marking
+    return assist.propose(ctx.analytic(subject), task=task, target_kind=target_kind,
+                          inputs={"records": records}, input_refs=tuple(input_refs))
 
 
 def decide_recommendation(ctx: CommandContext, recommendation_id: str, *,

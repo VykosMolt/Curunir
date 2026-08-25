@@ -244,6 +244,61 @@ cd argus_demo
 .venv/bin/python -m pytest tests/ -k analytic
 ```
 
+## Model providers
+
+`providers.py` is the sole boundary between an inference provider and
+analytical content, and it was always the interesting half: it derives the
+effective marking from authoritative records, refuses egress before invoking,
+invokes once, retains the complete outcome as an `InferenceRecord` — a failure
+included, as `validation="INVALID"` — turns a success only into a `PROPOSED`
+candidate awaiting a human, and never calls a provider again on replay.
+
+`model_backends.py` supplies the other half:
+
+| Provider | How |
+|---|---|
+| `anthropic` | official `anthropic` SDK, structured output via `output_config.format` |
+| `openai` | official `openai` SDK, structured output via `response_format` |
+| `deterministic` | offline; no network, no credential, no SDK. What the tests use. |
+
+Three things are worth knowing:
+
+**The response schema is generated, not written.** `candidate_schema.py` builds
+it from `substrate.CANDIDATE_BINDING_KEYS` and the closed vocabularies in
+`contracts.py` — the same tables `record_candidate` enforces. They cannot drift,
+because there is only one of them. A kind whose binding field is machine-computed
+(`impact_path`, which binds an edge-chain fingerprint) is refused rather than
+invited to fabricate one.
+
+**A provider may only cite identifiers it was shown.** The backend checks emitted
+ids against the payload before returning, so a hallucinated claim id is a
+provider error retained as an INVALID inference — not a plausible proposal a
+human has to catch by eye.
+
+**Credentials are not handled here.** Each backend constructs a zero-argument
+client and lets the vendor SDK run its own resolution chain, so an API key, an
+`ant auth login` OAuth profile, or workload identity all work, and keep working
+when a vendor extends the chain. `base_url` is passed through for gateways and
+self-hosted endpoints.
+
+Configure by environment — provider choice is a deployment decision:
+
+```bash
+export CURUNIR_MODEL_PROVIDER=anthropic   # | openai | deterministic
+export CURUNIR_MODEL_ID=claude-opus-5     # optional; vendor default otherwise
+export CURUNIR_MODEL_EFFORT=high          # low | medium | high | xhigh | max
+export CURUNIR_MODEL_BASE_URL=...         # optional gateway/proxy
+```
+
+Unset means no provider, which is a supported state. The egress ceiling
+(`allowed_input_marking`) is deliberately **not** environment-configurable: it
+defaults to public-releasable-only, and widening what may leave the deployment
+is a code and review change, not a variable.
+
+`GET /api/model/status` reports what the environment could actually run without
+calling anything. `POST /api/commands/proposals` requests one candidate; the
+provider sees only records the requesting actor can already view.
+
 ## Deferred
 
 The analyst workbench GUI (V6.6), report/dossier generation (structured
