@@ -1,6 +1,6 @@
 # Curunír documents — what each one is, and what to read first
 
-Sixteen `CURUNIR_*` files sit beside the source (this one included). They are not interchangeable:
+Seventeen `CURUNIR_*` files sit beside the source (this one included). They are not interchangeable:
 some are **frozen authority** (a contract sealed before the work it governs,
 sometimes hash-pinned by another document), some are **evidence** (what a
 campaign measured), and some are **live reference** (kept current). Editing a
@@ -10,6 +10,7 @@ frozen document is a change-control event, not a docs fix.
 
 | Order | Document | Why |
 |---|---|---|
+| 0 | `CURUNIR_V6_9_HANDOFF.md` | If you are resuming work, read this before anything else |
 | 1 | `../README.md` | What Curunír is, where everything lives, how to run it |
 | 2 | `CURUNIR_V6_8_QUALIFICATION.json` | The honest statement of what has and has not been established |
 | 3 | `CURUNIR_V6_7_ARCHITECTURE.md` | The ten-point trusted-core contract the code is built to |
@@ -58,6 +59,7 @@ and frozen, M2 signed but harness-`NOT_ACHIEVED`, M3 prepared and not run.
 
 | Document | Status | Contents |
 |---|---|---|
+| `CURUNIR_V6_9_HANDOFF.md` | Live | **Start here to resume work.** Branch and head, current state, what the last session did, the traps that cost it time, what is open and in what order. |
 | `CURUNIR_V6_9_EXCISION.json` | Ledger | Removal of the `v3`..`v5_8_1` research-campaign tree: what was lifted first and how equivalence was proven, what was removed, what was retained and why, and the measured node-set effect (zero new nodes, zero outcome-kind changes). The removed files live at tag `archive/curunir-campaign-tree-v5x`. |
 
 ## Conventions

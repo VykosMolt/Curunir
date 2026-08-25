@@ -9,6 +9,7 @@ Saulot/
 ├── README.md ........................ what Curunír is, how to run it, design commitments
 ├── NAVIGATION.md ................... you are here
 └── argus_demo/ ..................... THE PRODUCT ROOT (the name is historical)
+    ├── CURUNIR_V6_9_HANDOFF.md ..... START HERE if you are resuming work
     ├── OVERVIEW.md ................. the node map for everything below
     ├── CURUNIR_DOCUMENTS.md ........ index of all 16 contracts and ledgers
     │
