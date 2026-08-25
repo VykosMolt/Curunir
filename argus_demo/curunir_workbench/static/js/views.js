@@ -5,7 +5,7 @@ import { get, post, ApiError } from "./api.js";
 import {
   annotationList, badge, chainNode, claimDescentView, clip, emptyBox, errorBox,
   fmtTime, graphSvg, h, kv, loading, mapSvg, pivot, probabilityChart,
-  recordRoute, refLink, table,
+  recordRoute, refLink, table, ident,
 } from "./ui.js";
 
 export function nav(route) { location.hash = `#${route}`; }
@@ -84,8 +84,12 @@ export async function overviewView(main) {
         items.length ? items.map(renderItem) : emptyBox(emptyMsg));
     return [
       h("h1", {}, "Common operating picture"),
-      h("p", { class: "faint mono" },
-        `store ${ov.meta.store_id} · state ${ov.meta.state_token} · snapshot ${fmtTime(ov.meta.snapshot_time)} · context ${ov.meta.context_id}`),
+      // The mission, in the operator's words. Store, state token and context
+      // are custody detail: real, retained, and shown in Auditor mode only.
+      h("p", { class: "muted" },
+        `as at ${fmtTime(ov.meta.snapshot_time)}`,
+        h("code", { class: "ident" },
+          ` store ${ov.meta.store_id} · state ${ov.meta.state_token} · context ${ov.meta.context_id}`)),
       h("div", { class: "statline" },
         stat("entities", c.entities, "/entities"), stat("events", c.events, "/events"),
         stat("claims", c.claims), stat("evidence", c.manifestations, "/evidence"),
@@ -733,4 +737,87 @@ export async function recordView(main, params, kind, id) {
       annotationsSection(rec.annotations, kind, id, refresh),
     ];
   });
+}
+
+// ---- claims: the reading surface -------------------------------------------
+// What the evidence says, grouped by the thing it is about, with the VALUE as
+// the headline rather than the predicate or the identifier.
+
+function _humanPredicate(p) {
+  const w = String(p || "").replace(/[_-]+/g, " ").trim().toLowerCase();
+  return w.charAt(0).toUpperCase() + w.slice(1);
+}
+
+function _pips(count) {
+  const n = Math.max(0, Math.min(Number(count) || 0, 3));
+  return h("span", { class: "pips", title: `${count} independent source${count === 1 ? "" : "s"}` },
+    [0, 1, 2].map((i) => h("i", { class: i < n ? "on" : "" })));
+}
+
+function _claimState(c) {
+  const r = c.review_state, e = c.epistemic_state;
+  if (r === "SUPERSEDED" || e === "SUPERSEDED") return ["superseded", "is-historic"];
+  if (r === "CONTESTED" || e === "CONTESTED") return ["contested", "is-tension"];
+  if (e === "INFERRED") return ["inferred", "is-open"];
+  if (r === "REVIEWED" || r === "CONFIRMED") return ["reviewed", "is-settled"];
+  return [String(r || e || "recorded").toLowerCase(), ""];
+}
+
+export async function claimsView(main) {
+  main.replaceChildren(loading());
+  try {
+    const records = (await get("/api/family/semantic_claim")).records || [];
+    const groups = new Map();
+    for (const c of records) {
+      const key = c.subject_ref || c.subject_object_id || "(unattributed)";
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(c);
+    }
+    const frag = h("div", {},
+      h("h1", {}, "What the evidence says"),
+      h("p", { class: "statline" },
+        h("b", {}, String(records.length)), ` claims about `,
+        h("b", {}, String(groups.size)),
+        ` subject${groups.size === 1 ? "" : "s"} — select one to follow it to the captured bytes`));
+
+    for (const [subject, group] of groups) {
+      frag.append(h("h2", {}, subject));
+      // A tension is the SAME subject asserting the SAME predicate with
+      // different values. Anything looser invents disagreement the evidence
+      // does not support.
+      const byPred = new Map();
+      for (const c of group) {
+        const k = String(c.predicate || "").toLowerCase();
+        if (!byPred.has(k)) byPred.set(k, []);
+        byPred.get(k).push(c);
+      }
+      for (const [, g] of byPred) {
+        const values = new Set(g.map((c) => String(c.object_or_value ?? "").trim()).filter(Boolean));
+        if (g.length > 1 && values.size > 1) {
+          frag.append(h("div", { class: "notice bad" },
+            h("b", {}, "Unresolved tension"), " ",
+            [...values].map((v) => `“${v}”`).join("  vs  "),
+            h("div", { class: "sub" },
+              "Two captures disagree; neither is retracted.")));
+        }
+      }
+      for (const c of group) {
+        const [word, cls] = _claimState(c);
+        const value = String(c.object_or_value ?? "");
+        frag.append(h("button", {
+          class: `claim ${cls}`, type: "button",
+          onclick: () => { location.hash = `#/claims/${c.claim_id}`; },
+        },
+          h("div", { class: "lbl" }, _humanPredicate(c.predicate)),
+          h("div", { class: `val ${value.length > 48 ? "long" : ""}` }, value || "—"),
+          h("div", { class: "whisper" },
+            _pips(c.independent_basis_count), " ",
+            h("span", { class: "state" }, word), " ",
+            h("span", {}, fmtTime(c.recorded_time)), " ",
+            ident(c.claim_id))));
+      }
+    }
+    if (!groups.size) frag.append(emptyBox("no claims recorded"));
+    main.replaceChildren(frag);
+  } catch (err) { main.replaceChildren(errorBox(err)); }
 }

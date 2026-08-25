@@ -91,9 +91,29 @@ export function recordRoute(kind, id) {
   return map[kind] || `/record/${kind}/${id}`;
 }
 
+// A short, stable handle. An operator refers to a record by the tail of its
+// id; the whole hash is custody detail, not vocabulary.
+export function handle(kind, id) {
+  const family = String(kind || "").replace(/^(semantic|analytic|fabric|workbench)_/, "")
+    .replace(/_/g, " ");
+  const tail = String(id || "").split("-").pop().slice(-6);
+  return `${family || "record"} \u00b7${tail}`;
+}
+
+// The full identifier, rendered only in Auditor mode.
+export function ident(id) {
+  if (id === undefined || id === null || id === "") return null;
+  return h("code", { class: "ident" }, String(id));
+}
+
 export function refLink(kind, id, label) {
   if (id === "REDACTED") return h("span", { class: "faint" }, "[not accessible]");
-  return pivot(recordRoute(kind, id), label ?? clip(id, 28));
+  // A caller that knows what the record SAYS passes a label; only fall back to
+  // an identifier when nothing better exists, and demote it when we do.
+  const shown = label ?? handle(kind, id);
+  const link = pivot(recordRoute(kind, id), shown);
+  if (label !== undefined && label !== null) return link;
+  return h("span", {}, link, " ", ident(id));
 }
 
 // ---- provenance chain -------------------------------------------------------

@@ -10,7 +10,8 @@ const NAV = [
   ["MISSION", [
     ["/overview", "Overview"], ["/investigation", "Investigation"],
     ["/search", "Search"], ["/activity", "Activity"]]],
-  ["WORLD", [
+  ["THE WORLD", [
+    ["/claims", "Claims"],
     ["/entities", "Entities"], ["/events", "Events"], ["/timeline", "Timeline"],
     ["/graph", "Graph"], ["/map", "Map"], ["/evidence", "Evidence"],
     ["/sources", "Sources"]]],
@@ -41,7 +42,7 @@ const ROUTES = [
   ["/map", v1.mapViewPage],
   ["/evidence/:id", v1.evidenceView], ["/evidence", v1.evidenceListView],
   ["/sources/:id", v1.sourceView], ["/sources", v1.sourcesView],
-  ["/claims/:id", v1.claimView],
+  ["/claims/:id", v1.claimView], ["/claims", v1.claimsView],
   ["/themes/:id", v2.themeView], ["/themes", v2.themesView],
   ["/narratives/:id", v2.narrativeView], ["/narratives", v2.narrativesView],
   ["/stakeholders/:id", v2.stakeholderView], ["/stakeholders", v2.stakeholdersView],
@@ -144,7 +145,34 @@ async function boot() {
     clearToken(); location.reload();
   });
 
-  window.addEventListener("hashchange", route);
+
+/* ---- display modes ------------------------------------------------------- */
+const rootEl = document.documentElement;
+function setTheme(v) {
+  v ? rootEl.setAttribute("data-theme", v) : rootEl.removeAttribute("data-theme");
+  try { v ? localStorage.setItem("curunir-theme", v) : localStorage.removeItem("curunir-theme"); } catch {}
+}
+function toggleTheme() {
+  const now = rootEl.getAttribute("data-theme");
+  setTheme(now === "dark" ? "light" : now === "light" ? null : "dark");
+}
+function toggleAuditor() {
+  const on = rootEl.getAttribute("data-auditor") === "on";
+  rootEl.setAttribute("data-auditor", on ? "off" : "on");
+  try { localStorage.setItem("curunir-auditor", on ? "off" : "on"); } catch {}
+}
+try {
+  const saved = localStorage.getItem("curunir-theme"); if (saved) setTheme(saved);
+  if (localStorage.getItem("curunir-auditor") === "on") rootEl.setAttribute("data-auditor", "on");
+} catch {}
+addEventListener("keydown", (e) => {
+  if (e.target.matches("input, textarea, select")) return;
+  if (e.metaKey || e.ctrlKey || e.altKey) return;
+  if (e.key === "a") toggleAuditor();
+  if (e.key === "t") toggleTheme();
+});
+
+window.addEventListener("hashchange", route);
   document.getElementById("quick-search").addEventListener("keydown", (e) => {
     if (e.key === "Enter") {
       location.hash = `#/search?q=${encodeURIComponent(e.target.value)}`;
