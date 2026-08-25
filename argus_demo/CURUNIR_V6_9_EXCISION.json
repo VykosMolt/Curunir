@@ -1,0 +1,85 @@
+{
+  "format": "curunir-v6.9-excision-ledger-v1",
+  "recorded_on": "2026-08-25",
+  "objective": "Remove the retired research-campaign tree (curunir_operational/v3 through v5_8_1) and the tests that exercised only it, after lifting the surface the live product still depended on.",
+  "archive": {
+    "git_tag": "archive/curunir-campaign-tree-v5x",
+    "commit": "b314da83dd92a910cddcb97710a78b9e3151a25c",
+    "note": "Every removed file is reachable at this tag. Nothing in this excision is unrecoverable."
+  },
+  "lift": {
+    "reason": "curunir_semantic/extract.py::extract_text_signals reached the campaign tree through two function-local imports, which a module-level scan does not see. The reachable surface was lifted before any deletion.",
+    "destination": "curunir_semantic/provenance_capture.py",
+    "sources": [
+      "curunir_operational/v4/models.py",
+      "curunir_operational/v5_1/models.py",
+      "curunir_operational/v5_3/provenance.py",
+      "curunir_operational/v5_3/observations.py"
+    ],
+    "lines_reachable_of_total": {
+      "reachable": 316,
+      "in_source_modules": 1808
+    },
+    "equivalence_evidence": {
+      "method": "Differential execution of the original and lifted capture() over the same corpus, comparing every field except wall-clock timestamps.",
+      "corpus_documents": 58,
+      "capture_invocations": 116,
+      "observations_compared": 493,
+      "mismatches": 0,
+      "corpus_composition": [
+        "every payload in the V6.8 pilot custody stores",
+        "multilingual synthetics exercising all 18 declared patterns",
+        "empty / whitespace / NUL / oversize / role-name-trap inputs"
+      ]
+    },
+    "deliberate_deviations": [
+      {
+        "id": "LIFT-DEVIATION-1",
+        "was": "module-level `assert` that no observation type names a source role",
+        "now": "unconditional raise of ProvenanceViolation",
+        "why": "`python -O` strips assert; the layer separation it guards is load-bearing."
+      }
+    ],
+    "byte_contract_note": "The lifted _sha256/_canonical_json/_stable_id reproduce the legacy contract, which differs from curunir_operational.canonical. They are module-private and their outputs are capture-internal: extract.py consumes only observation_type, observed_value and raw_text, so no lifted identifier or timestamp ever reaches the store. curunir_operational.canonical remains the sole owner of every persisted byte contract."
+  },
+  "removed": {
+    "package_files": 134,
+    "test_files": 98,
+    "package_file_set_sha256": "7bab95d5a54d40e78ff2b8dfeb05bdd329afcbb1c27901ab9a5fb2bff420b1bd",
+    "test_file_set_sha256": "827acfc51910ecbe6f75aefd404179557c11c827244cba3f7e99795e855f384d",
+    "product_lines": 56543,
+    "test_lines": 32118,
+    "curunir_operational_lines": {
+      "before": 67314,
+      "after": 10886
+    },
+    "also_removed": {
+      "curunir_operational/write_observation.py": "767 lines; zero live importers \u2014 imported only by the campaign tree."
+    },
+    "split_not_deleted": {
+      "tests/test_c11_capability_gaps.py": "Mixed legacy and live coverage. F01 (kernel acquisition policy) and F14 (sovereignty exit test) retained; F03 prediction and the V4 security-review guard removed with the tree."
+    }
+  },
+  "retained_despite_no_package_importer": {
+    "delta.py": "exercised by tests/v67/test_store_integrity.py and the V2 suites",
+    "partition_custody.py": "exercised by its own test and tools/validate_v67.py",
+    "stress.py": "exercised by test_operational_v2_fabric and the surface audit",
+    "providers_eval.py": "no current caller, but it is the harness that evaluates an analytical provider; retained for the model-provider work"
+  },
+  "node_set_effect": {
+    "method": "Full pytest run with junitxml before and after, in one environment, comparing every node id and its outcome kind.",
+    "nodes_before": 5699,
+    "nodes_after": 1493,
+    "nodes_removed": 4206,
+    "nodes_removed_outside_declared_set": 0,
+    "new_nodes": 0,
+    "outcome_kind_changes": 0,
+    "interpretation": "Every surviving node kept its exact outcome. The collection count drop is declared here and is the excision itself, not a regression or an increase in skipping."
+  },
+  "residual_nonpassing_after": {
+    "count": 77,
+    "node_set_sha256": "8a0d254a0da29786212ce64f3cabd9dc0eb38c62bb0b878ed4182856a8fd0c86",
+    "composition": "Pre-existing ARGUS neural/extractor/capsule residuals that need untracked corpora, plus the V6.8 harness tests, which refuse a dirty checkout by design and pass from a clean one.",
+    "curunir_product_plane_regressions": 0
+  }
+}

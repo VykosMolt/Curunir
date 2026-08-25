@@ -1,7 +1,10 @@
 """Direct exercise of capability families whose mapped tests never called
-their named implementations (C11 handoff: F01 lawful acquisition, F03
-production prediction, F14 sovereignty exit test), plus the guard for the
-executed relabelling of the V4 security-review record.
+their named implementations (C11 handoff: F01 lawful acquisition, F14
+sovereignty exit test).
+
+The F03 production-prediction cases and the V4 security-review guard were
+removed with the research-campaign tree in the V6.9 excision; they live on at
+tag ``archive/curunir-campaign-tree-v5x``.
 
 Each test calls the named product function itself, with both a positive and a
 negative case where the capability is a decision, so it cannot pass by
@@ -94,54 +97,6 @@ def test_f01_connectors_shape_leads_without_granting_acquisition():
 
 
 # ---------------------------------------------------------------------------
-# F03 — v5_3/predict.py production prediction wrappers
-# ---------------------------------------------------------------------------
-
-def test_f03_predict_source_role_records_resolution_with_provenance():
-    from curunir_operational.v5_3 import observations as OB
-    from curunir_operational.v5_3 import predict
-    from curunir_operational.v5_3 import roles as RO
-
-    def obs(kind, value, strength="EXPLICIT", mode="EXPLICIT"):
-        return OB.normalized_observation(
-            raw_evidence_ids=[f"raw-{kind}"], observation_type=kind, observed_value=value,
-            normalization="test", mode=mode, strength=strength)
-
-    resolved_prediction, resolution = predict.predict_source_role(
-        [obs("EXPLICIT_PUBLISHER_LINE", "Publications Office")],
-        subject_id="s1", role="PUBLISHED_BY")
-    assert resolution.state == "RESOLVED"
-    record = resolved_prediction.to_record()
-    assert record["prediction"] == "PUBLISHED_BY"
-    assert record["structured_rationale"]["agent"] == "Publications Office"
-    assert record["producer_module"].endswith("v5_3/roles.py")
-    assert record["input_observation_ids"], "prediction must cite its observations"
-
-    refused_prediction, refused = predict.predict_source_role(
-        [obs("DOCUMENT_IDENTIFIER", "SIB 2022-02R4", strength="WEAKLY_IMPLIED")],
-        subject_id="s1", role="ISSUED_BY")
-    assert refused.state == "UNRESOLVED_EVIDENCE_ABSENT"
-    assert refused_prediction.to_record()["prediction"] == "NO_ROLE_ESTABLISHED"
-
-
-def test_f03_predict_extraction_binds_decision_and_producer():
-    import sys
-    sys.path.insert(0, "tests")
-    from conftest_v5_2_helpers import candidate_over
-    from curunir_operational.v5_3 import predict
-    from curunir_operational.v5_3 import ranking as RK
-    document, candidate = candidate_over(
-        "The Council adopted the regulation on 16 January 2026.",
-        "The Council adopted the regulation on 16 January 2026.")
-    prediction, decision = predict.predict_extraction(candidate, document, RK.RankingModel())
-    record = prediction.to_record()
-    assert record["prediction"] == decision.stage
-    assert record["producer_module"].endswith("v5_3/ranking.py")
-    assert record["structured_rationale"]["ranker_version"] == decision.ranker_version
-    assert set(record["structured_rationale"]["ranked_scores"]) == set(RK.OUTCOMES)
-
-
-# ---------------------------------------------------------------------------
 # F14 — sovereignty.run_exit_test
 # ---------------------------------------------------------------------------
 
@@ -176,19 +131,3 @@ def test_f14_exit_test_passes_on_faithful_export_and_fails_on_tamper(tmp_path):
     from curunir_operational.store import MissionDataStore, StoreError
     with pytest.raises(StoreError, match="tampered"):
         MissionDataStore.import_from(tmp_path / "export", tmp_path / "fresh2")
-
-
-# ---------------------------------------------------------------------------
-# V4 security review — the relabelling stays executed
-# ---------------------------------------------------------------------------
-
-def test_v4_security_review_reports_a_declaration_not_a_result(tmp_path):
-    from curunir_operational.v4.mutation import (SECURITY_NOT_EXECUTED, threat_model,
-                                                 write_security_review)
-    report = write_security_review(tmp_path / "security.json")
-    assert report["verdict"] == SECURITY_NOT_EXECUTED
-    assert report["security_review_execution"] == "DECLARED_NOT_EXECUTED"
-    assert "tests_run" not in report and "failed" not in report
-    for threat in threat_model():
-        assert threat["result"] == SECURITY_NOT_EXECUTED, \
-            "no per-threat PASS may survive: nothing was executed"

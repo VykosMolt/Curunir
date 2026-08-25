@@ -2,7 +2,8 @@
 
 The correct instrument per source shape: field-path extraction for structured
 registry/API records (GLEIF, Wikidata, EDGAR), element-path extraction for
-feeds, and the reusable V5.3 text-observation capture for prose/HTML pages.
+feeds, and the text-observation capture in `provenance_capture` for
+prose/HTML pages.
 Nothing here routes a clean structured field through a model; model providers
 plug in through the operational inference plane and are recorded as
 MODEL_PROVIDER observations — none are required for this pipeline.
@@ -21,6 +22,7 @@ from argus.source_intelligence.models import digest_id
 from . import PARSER_VERSION
 from .contracts import EvidenceAnchor, SemanticObservation
 from .normalize import load_fields, load_text
+from .provenance_capture import DerivativeMapping, NormalizedDocument, capture
 from .store import SemanticStore
 
 FIELD_MAPPING = "EXACT_FIELD_PATH"
@@ -311,10 +313,7 @@ def extract_feed(emitter: _Emitter, fields: dict[str, str]) -> None:
 
 
 def extract_text_signals(emitter: _Emitter, text: str) -> None:
-    """Reuse the V5.3 typed-observation capture over normalized text."""
-    from curunir_operational.v4.models import DerivativeMapping, NormalizedDocument
-    from curunir_operational.v5_3 import observations as v53
-
+    """Run the typed-observation capture over normalized text."""
     document = emitter.document
     shim = NormalizedDocument(
         document_id=document["document_id"],
@@ -334,13 +333,13 @@ def extract_text_signals(emitter: _Emitter, text: str) -> None:
         warnings=tuple(document["warnings"]), omitted_content=(),
         generated_time=document["recorded_time"],
     )
-    raws, observations = v53.capture(
+    raws, observations = capture(
         shim, source_object_id=document["manifestation_id"],
         content_hash=document["content_sha256"], title=document.get("title") or None)
     # the anchoring below relies on capture appending one raw per observation
     # in lockstep; if that contract ever changes, fail loudly, never mis-pair
     if len(raws) != len(observations):
-        raise ValueError("v5_3 capture returned unpaired raws/observations; "
+        raise ValueError("capture returned unpaired raws/observations; "
                          "anchor pairing would be wrong")
     # the subject of a page's statements is the page's origin, not the
     # capture: an archived manifestation speaks for the archived site
