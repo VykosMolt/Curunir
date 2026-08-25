@@ -758,6 +758,13 @@ def create_app(mission_root: str | Path, actors_path: str | Path,
         def index():
             return FileResponse(STATIC_DIR / "index.html")
 
+        # The "Quiet Instrument" surface, served alongside the shipped SPA
+        # while it reaches parity. It is a reading surface over the same
+        # authorized projections -- it adds no endpoint and no authority.
+        @app.get("/next", include_in_schema=False)
+        def index_next():
+            return FileResponse(STATIC_DIR / "next" / "index.html")
+
     return app
 
 

@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Curunír</title>
+<link rel="stylesheet" href="/static/next/app.css">
+</head>
+<body>
+<div id="login" class="login hidden">
+  <form id="login-form" aria-label="Sign in">
+    <h1>Curunír</h1>
+    <p>Every conclusion here descends to captured evidence. Sign in with your actor token.</p>
+    <label for="token">Actor token</label>
+    <input id="token" type="password" autocomplete="off" autofocus>
+    <button type="submit" class="primary">Sign in</button>
+    <p id="login-error" class="error" role="alert"></p>
+  </form>
+</div>
+
+<div id="shell" class="shell hidden">
+  <div id="rail" class="rail">
+    <div class="brand">Curunír<small></small></div>
+    <nav aria-label="Sections"></nav>
+    <div class="spacer"></div>
+    <nav aria-label="Display">
+      <button class="dest" id="auditor-toggle" type="button" style="border:0;background:none;cursor:pointer;width:100%">Auditor <span class="n">a</span></button>
+      <button class="dest" id="theme-toggle" type="button" style="border:0;background:none;cursor:pointer;width:100%">Theme <span class="n">t</span></button>
+      <button class="dest" id="signout" type="button" style="border:0;background:none;cursor:pointer;width:100%">Sign out</button>
+    </nav>
+  </div>
+  <main id="main" class="main" tabindex="-1"></main>
+  <aside id="aside" class="aside hidden" aria-label="Evidence"></aside>
+</div>
+<div class="auditor-flag">Auditor mode — identifiers visible</div>
+<script type="module" src="/static/next/js/app.js"></script>
+</body>
+</html>
