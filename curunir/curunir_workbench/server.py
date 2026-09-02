@@ -1,33 +1,37 @@
-"""The workbench HTTP boundary: authorized projections and attributable
-commands over one mission store.
+"""The HTTP boundary: filtered views and named commands over one mission store.
 
-Every request authenticates to an actor (bearer token → access context);
-every projection is filtered server-side before serialization; every command
-carries the authenticated actor into the canonical command layer. Unknown and
-forbidden are both 404. Stale writes are 409 with the current version so the
-client can rebase instead of losing work.
+Every request resolves to an actor, every view is filtered on the server before
+it is serialized, and every command carries that actor into the command layer.
+Unknown and forbidden both answer 404; a stale write answers 409 with the
+current version, so the client can rebase instead of losing work.
 
 Run:
     uvicorn curunir_workbench.server:app --port 8100        (env-configured)
-or programmatically:
-    create_app(mission_root, actors_path)
+or build it in process with create_app(mission_root, actors_path).
 
-NOTE: no `from __future__ import annotations` here — the request models are
-defined inside create_app, and stringified annotations would make FastAPI
-unable to resolve them (silently demoting body models to query params).
+Do not add `from __future__ import annotations` here: the request models are
+defined inside create_app, and string annotations would stop FastAPI resolving
+them, quietly turning body models into query parameters.
 """
 import math
 import os
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from fastapi import Depends, FastAPI, HTTPException, Query, Request
+from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from curunir_analytic.model_backends import availability as model_availability
-from curunir_operational.access import AccessContext
+from curunir_identity import KeyRegistry, SessionManager, SignatureRejected
+from curunir_identity.crypto import normalize_public_key
+from curunir_identity.sessions import AuthError as IdentityAuthError
+from curunir_operational.access import AccessContext, Marking, marking_from_record
+from curunir_operational.missions import MissionWorkflowError
+from curunir_operational.workflow import WorkflowError
 
 from . import commands
 from .auth import ActorRegistry, AuthError
@@ -35,8 +39,10 @@ from .commands import CommandContext
 from .errors import Conflict, NotFound
 from .projections import MissionProjection
 from .provenance import ascend, claim_descent, descend, evidence_view
-from .reports import export_html, export_package, role_view, validate_report
+from .reports import (ReportValidationError, export_html, export_package, role_view,
+                      validate_report)
 from .search import search as search_projection
+from .signed_ops import SignedOperations
 from .store import WorkbenchStore
 from .views import (coverage_matrix, entity_dossier, entity_list, event_dossier,
                     event_list, graph, hypothesis_matrix, map_view, review_queue,
@@ -46,12 +52,12 @@ STATIC_DIR = Path(__file__).parent / "static"
 
 
 def render_safe(value) -> str:
-    """Make any error detail UTF-8 renderable without echoing raw bytes."""
+    """Make an error detail printable without echoing raw bytes."""
     return str(value).encode("utf-8", "replace").decode("utf-8")
 
 
 def _deep_render_safe(value):
-    """Total conversion of validation errors to strict JSON response data."""
+    """Turn a validation error into values that always serialize as JSON."""
     if value is None or isinstance(value, (bool, int)):
         return value
     if isinstance(value, float):
@@ -81,8 +87,6 @@ def create_app(mission_root: str | Path, actors_path: str | Path,
     app.state.store = store
     app.state.registry = registry
 
-    from fastapi.exceptions import RequestValidationError
-
     @app.exception_handler(RequestValidationError)
     async def validation_error(_request: Request, error: RequestValidationError):
         try:
@@ -91,7 +95,7 @@ def create_app(mission_root: str | Path, actors_path: str | Path,
             detail = "invalid request body"
         return JSONResponse(status_code=422, content={"detail": detail})
 
-    # ---- auth ---------------------------------------------------------------
+    # ---- auth ----
 
     def context(request: Request) -> AccessContext:
         header = request.headers.get("authorization", "")
@@ -102,8 +106,8 @@ def create_app(mission_root: str | Path, actors_path: str | Path,
             raise HTTPException(status_code=401, detail=str(error))
 
     def fresh_store() -> WorkbenchStore:
-        # re-open per request: another process (scheduler, second server,
-        # import) may have appended; the store's catch-up handles it
+        # Another process may have appended since the last request, so reopen
+        # and let the store catch up.
         return WorkbenchStore(root / "store")
 
     def projection(request: Request) -> MissionProjection:
@@ -116,21 +120,18 @@ def create_app(mission_root: str | Path, actors_path: str | Path,
                               marking=_default_marking(), **kwargs)
 
     def _default_marking():
-        from curunir_operational.access import Marking
         meta = store.meta
         return Marking(owning_authority=meta.get("store_id", "curunir-workbench"),
                        releasability=("PUBLIC",))
 
     def run(request, fn, *args, **kwargs):
-        """Translate command-layer failures into honest HTTP semantics, and
-        scrub the RESPONSE through the caller's own projection — a write
-        path never returns state its author could not read.
+        """Turn a command failure into an honest response, and filter the reply
+        through the caller's own view so a write never hands back state its
+        author could not read.
 
-        Only the typed NotFound becomes 404 — a bare KeyError is a server
-        bug and must surface as 500, never as an existence claim. Workflow
-        authority refusals are 403, not 400."""
-        from curunir_operational.missions import MissionWorkflowError
-        from curunir_operational.workflow import WorkflowError
+        Only a typed NotFound becomes 404; a bare KeyError is a bug and must
+        surface as 500 rather than as a claim about what exists. An authority
+        refusal is 403, not 400."""
         def detail(error):
             return render_safe(error)
 
@@ -156,7 +157,7 @@ def create_app(mission_root: str | Path, actors_path: str | Path,
             raise HTTPException(status_code=404, detail="not found")
         return record
 
-    # ---- session ------------------------------------------------------------
+    # ---- session ----
 
     @app.get("/api/session")
     def session(request: Request):
@@ -165,7 +166,7 @@ def create_app(mission_root: str | Path, actors_path: str | Path,
                 "roles": list(ctx.roles), "organisation": ctx.organisation,
                 "mission_id": store.meta.get("store_id", "curunir-workbench")}
 
-    # ---- mission projections ------------------------------------------------
+    # ---- mission projections ----
 
     @app.get("/api/overview")
     def overview(request: Request):
@@ -275,7 +276,7 @@ def create_app(mission_root: str | Path, actors_path: str | Path,
     def review(request: Request):
         return review_queue(projection(request))
 
-    # ---- reports ------------------------------------------------------------
+    # ---- reports ----
 
     @app.get("/api/reports/{report_id}/validate")
     def report_validate(request: Request, report_id: str):
@@ -312,19 +313,24 @@ def create_app(mission_root: str | Path, actors_path: str | Path,
                                  if p.get("workbench_report_disposition",
                                           d["disposition_id"]) is not None]}
 
-    # ---- commands -----------------------------------------------------------
+    # ---- commands ----
 
     class AnnotateBody(BaseModel):
-        target_kind: str; target_id: str
-        kind: str = "NOTE"; text: str
-        reply_to: str = ""; anchor_ref: str = ""
+        target_kind: str
+        target_id: str
+        kind: str = "NOTE"
+        text: str
+        reply_to: str = ""
+        anchor_ref: str = ""
 
     @app.post("/api/commands/annotate")
     def cmd_annotate(request: Request, body: AnnotateBody):
         return run(request, commands.annotate, command_context(request), **body.model_dump())
 
     class ResolveAnnotationBody(BaseModel):
-        expected_version: int; status: str; note: str
+        expected_version: int
+        status: str
+        note: str
 
     @app.post("/api/commands/annotations/{annotation_id}/resolve")
     def cmd_resolve_annotation(request: Request, annotation_id: str,
@@ -333,8 +339,11 @@ def create_app(mission_root: str | Path, actors_path: str | Path,
                    annotation_id, **body.model_dump())
 
     class RequirementBody(BaseModel):
-        question: str; priority: str = "MEDIUM"; mission_context: str
-        rationale: str; affected_ids: list[str] = Field(default_factory=list)
+        question: str
+        priority: str = "MEDIUM"
+        mission_context: str
+        rationale: str
+        affected_ids: list[str] = Field(default_factory=list)
         compartments: list[str] = Field(default_factory=list)
 
     @app.post("/api/commands/requirements")
@@ -345,7 +354,9 @@ def create_app(mission_root: str | Path, actors_path: str | Path,
         return run(request, commands.open_requirement, command_context(request), **data)
 
     class TaskBody(BaseModel):
-        assigned_actor: str; task_type: str; required_action: str
+        assigned_actor: str
+        task_type: str
+        required_action: str
         affected_ids: list[str] = Field(default_factory=list)
         due_time: str | None = None
         compartments: list[str] = Field(default_factory=list)
@@ -358,7 +369,9 @@ def create_app(mission_root: str | Path, actors_path: str | Path,
         return run(request, commands.assign_task, command_context(request), **data)
 
     class TransitionBody(BaseModel):
-        subject_kind: str; subject_id: str; to_status: str
+        subject_kind: str
+        subject_id: str
+        to_status: str
         evidence_refs: list[str] = Field(default_factory=list)
         note: str = ""
 
@@ -369,7 +382,9 @@ def create_app(mission_root: str | Path, actors_path: str | Path,
         return run(request, commands.transition_workflow, command_context(request), **data)
 
     class ReviewBody(BaseModel):
-        expected_version: int; status: str; note: str
+        expected_version: int
+        status: str
+        note: str
 
     @app.post("/api/commands/review/{item_id}/resolve")
     def cmd_review(request: Request, item_id: str, body: ReviewBody):
@@ -377,7 +392,8 @@ def create_app(mission_root: str | Path, actors_path: str | Path,
                    item_id, **body.model_dump())
 
     class ProposalRequestBody(BaseModel):
-        task: str; target_kind: str
+        task: str
+        target_kind: str
         input_refs: list[str] = Field(default_factory=list)
 
     @app.post("/api/commands/proposals")
@@ -392,7 +408,8 @@ def create_app(mission_root: str | Path, actors_path: str | Path,
         return {"configured": model_availability()}
 
     class ProposalBody(BaseModel):
-        accept: bool; note: str = ""
+        accept: bool
+        note: str = ""
 
     @app.post("/api/commands/proposals/{proposal_id}/resolve")
     def cmd_proposal(request: Request, proposal_id: str, body: ProposalBody):
@@ -400,7 +417,8 @@ def create_app(mission_root: str | Path, actors_path: str | Path,
                    proposal_id, **body.model_dump())
 
     class HypothesisBody(BaseModel):
-        statement: str; case_id: str
+        statement: str
+        case_id: str
         assumptions: list[str] = Field(default_factory=list)
         unknowns: list[str] = Field(default_factory=list)
         compartments: list[str] = Field(default_factory=list)
@@ -414,7 +432,9 @@ def create_app(mission_root: str | Path, actors_path: str | Path,
                    compartments=tuple(body.compartments))
 
     class AssessBody(BaseModel):
-        expected_version: int; status: str; rationale: str
+        expected_version: int
+        status: str
+        rationale: str
 
     @app.post("/api/commands/hypotheses/{hypothesis_id}/assess")
     def cmd_assess(request: Request, hypothesis_id: str, body: AssessBody):
@@ -422,8 +442,11 @@ def create_app(mission_root: str | Path, actors_path: str | Path,
                    hypothesis_id, **body.model_dump())
 
     class ForecastBody(BaseModel):
-        question: str; outcome_semantics: str; horizon_time: str
-        probability: float; probability_basis: str
+        question: str
+        outcome_semantics: str
+        horizon_time: str
+        probability: float
+        probability_basis: str
         proposition_refs: list[list[str]]
         resolution: dict[str, Any]
         domain: str
@@ -442,8 +465,10 @@ def create_app(mission_root: str | Path, actors_path: str | Path,
                    compartments=tuple(body.compartments))
 
     class MoveForecastBody(BaseModel):
-        expected_version: int; probability: float
-        probability_basis: str; change_reason: str
+        expected_version: int
+        probability: float
+        probability_basis: str
+        change_reason: str
         evidence_refs: list[str] = Field(default_factory=list)
 
     @app.post("/api/commands/forecasts/{forecast_id}/move")
@@ -454,7 +479,8 @@ def create_app(mission_root: str | Path, actors_path: str | Path,
                    forecast_id, **data)
 
     class ResolveForecastBody(BaseModel):
-        outcome: str; rationale: str
+        outcome: str
+        rationale: str
         evidence_refs: list[str] = Field(default_factory=list)
 
     @app.post("/api/commands/forecasts/{forecast_id}/resolve")
@@ -465,7 +491,9 @@ def create_app(mission_root: str | Path, actors_path: str | Path,
                    evidence_refs=tuple(body.evidence_refs))
 
     class LinkClaimBody(BaseModel):
-        claim_id: str; stance: str; rationale: str
+        claim_id: str
+        stance: str
+        rationale: str
 
     @app.post("/api/commands/hypotheses/{hypothesis_id}/link")
     def cmd_link_claim(request: Request, hypothesis_id: str, body: LinkClaimBody):
@@ -494,8 +522,12 @@ def create_app(mission_root: str | Path, actors_path: str | Path,
                    assigned_actor=body.assigned_actor)
 
     class WatchBody(BaseModel):
-        need_id: str; target_kind: str; target_ref: str
-        source_id: str; operation: str; query_value: str
+        need_id: str
+        target_kind: str
+        target_ref: str
+        source_id: str
+        operation: str
+        query_value: str
         cadence_seconds: int
         blind_spots: list[str] = Field(default_factory=list)
         compartments: list[str] = Field(default_factory=list)
@@ -518,7 +550,8 @@ def create_app(mission_root: str | Path, actors_path: str | Path,
                    expected_active=body.expected_active)
 
     class SavedViewBody(BaseModel):
-        title: str; view_kind: str
+        title: str
+        view_kind: str
         definition: dict[str, Any] = Field(default_factory=dict)
         compartments: list[str] = Field(default_factory=list)
 
@@ -529,7 +562,8 @@ def create_app(mission_root: str | Path, actors_path: str | Path,
         return run(request, commands.save_view, command_context(request), **data)
 
     class ReportCreateBody(BaseModel):
-        title: str; question: str
+        title: str
+        question: str
         sections: list[dict[str, Any]] = Field(default_factory=list)
         compartments: list[str] = Field(default_factory=list)
 
@@ -542,7 +576,8 @@ def create_app(mission_root: str | Path, actors_path: str | Path,
     class ReportEditBody(BaseModel):
         expected_version: int
         sections: list[dict[str, Any]]
-        title: str | None = None; question: str | None = None
+        title: str | None = None
+        question: str | None = None
         change_note: str = ""
 
     @app.post("/api/commands/reports/{report_id}/edit")
@@ -559,12 +594,12 @@ def create_app(mission_root: str | Path, actors_path: str | Path,
                    expected_version=body.expected_version)
 
     class ReportApproveBody(BaseModel):
-        expected_version: int; note: str = ""
+        expected_version: int
+        note: str = ""
         acknowledge_dissent: list[str] = Field(default_factory=list)
 
     @app.post("/api/commands/reports/{report_id}/approve")
     def cmd_report_approve(request: Request, report_id: str, body: ReportApproveBody):
-        from .reports import ReportValidationError
         try:
             return run(request, commands.approve_report, command_context(request), report_id,
                        expected_version=body.expected_version, note=body.note,
@@ -575,7 +610,8 @@ def create_app(mission_root: str | Path, actors_path: str | Path,
                                          "findings": error.findings})
 
     class ReportRejectBody(BaseModel):
-        expected_version: int; note: str
+        expected_version: int
+        note: str
         return_for_revision: bool = False
 
     @app.post("/api/commands/reports/{report_id}/reject")
@@ -583,14 +619,7 @@ def create_app(mission_root: str | Path, actors_path: str | Path,
         return run(request, commands.reject_report, command_context(request), report_id,
                    **body.model_dump())
 
-    # ---- cryptographic identity -------------------------------------------
-
-    from datetime import datetime, timezone
-    from curunir_identity import KeyRegistry, SessionManager, SignatureRejected
-    from curunir_identity.crypto import normalize_public_key
-    from curunir_identity.sessions import AuthError as IdentityAuthError
-    from curunir_operational.access import marking_from_record
-    from .signed_ops import SignedOperations
+    # ---- cryptographic identity ----
 
     identity_now = now_fn if now_fn is not None else \
         (lambda: datetime.now(timezone.utc).isoformat())
@@ -676,8 +705,6 @@ def create_app(mission_root: str | Path, actors_path: str | Path,
 
     @app.post("/api/commands/reports/{report_id}/approve-signed")
     def cmd_report_approve_signed(report_id: str, body: SignedApproveBody):
-        from .reports import ReportValidationError
-
         signed_command = body.payload.get("command")
         if not isinstance(signed_command, dict):
             raise HTTPException(
@@ -717,9 +744,8 @@ def create_app(mission_root: str | Path, actors_path: str | Path,
                 apply=lambda command_context: commands.approve_report(
                     command_context,
                     report_id,
-                    # apply_signed already proved that the signed target token
-                    # equals this exact raw current version.  The unsigned
-                    # compatibility field in the HTTP body is not authority.
+                    # The signed token already pinned this exact version; the
+                    # unsigned field in the body carries no authority.
                     expected_version=current["version"],
                     note=str(signed_command.get("note", "")),
                     acknowledge_dissent=tuple(dissent),
@@ -749,7 +775,7 @@ def create_app(mission_root: str | Path, actors_path: str | Path,
         return MissionProjection(fresh_store(), actor_context).redact(
             result["result"])
 
-    # ---- UI -----------------------------------------------------------------
+    # ---- UI ----
 
     if STATIC_DIR.exists():
         app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
@@ -762,8 +788,8 @@ def create_app(mission_root: str | Path, actors_path: str | Path,
 
 
 def app() -> FastAPI:
-    """uvicorn entry: CURUNIR_MISSION_ROOT + CURUNIR_ACTORS point at the
-    mission root and actor registry."""
+    """The uvicorn entry point; CURUNIR_MISSION_ROOT and CURUNIR_ACTORS say
+    where the mission and the actor registry live."""
     mission_root = os.environ.get("CURUNIR_MISSION_ROOT")
     actors = os.environ.get("CURUNIR_ACTORS")
     if not mission_root or not actors:

@@ -1,22 +1,15 @@
-"""Persistent watch primitive: keep observing, durably.
+"""Watches: keep observing one target at a cadence and record what changed.
 
-A WatchDefinition binds an information need to one observed target (URL,
-feed, query or native object) at a cadence. All watch state — definitions,
-runs, change observations — is event-sourced in the FabricStore, so a
-process restart loses nothing: ``due_watches`` replays the log to find what
-should run next. Executing a watch reuses the same policy-gated executor and
-custody path as discovery, so watch evidence joins the same lineage.
-
-Change semantics follow the longitudinal vocabulary: byte-identical content
-is no change; new/removed native records in feeds and enumerations are
-NEW_OBJECT / DISAPPEARED_OBJECT; changed bytes for the same target are
-CONTENT_CHANGED; retrieval failures are themselves observations.
+Definitions, runs and change observations all live in the store, so a restart
+loses nothing. A failed retrieval is recorded as a change observation too.
 """
 from __future__ import annotations
 
+import dataclasses
 from datetime import datetime, timedelta
 
 from argus.source_intelligence.models import digest_id
+from curunir_operational.access import marking_from_record
 
 from .contracts import ChangeObservation, QuerySpec, WatchDefinition, WatchRun
 from .executor import ExecutionContext, ExecutionResult, execute_single
@@ -49,15 +42,11 @@ def _parse(value: str) -> datetime:
 
 
 def last_run(store: FabricStore, watch_id: str) -> dict | None:
-    found = None
-    for record in store.records_of("fabric_watch_run"):
-        if record["watch_id"] == watch_id:
-            found = record
-    return found
+    return store.latest_by_id("fabric_watch_run", "watch_id").get(watch_id)
 
 
 def due_watches(store: FabricStore, *, now: str) -> list[dict]:
-    """Active watches whose next observation time has arrived — pure replay."""
+    """Active watches whose next run time has arrived."""
     current = store.latest_by_id("fabric_watch", "watch_id")
     due = []
     for watch in current.values():
@@ -109,7 +98,7 @@ def _diff_changes(watch: dict, run_id: str, previous: dict | None,
         return [change]
 
     if previous is None:
-        return []  # first observation is the baseline, not a change
+        return []  # The first observation is the baseline.
 
     observed_sha = outcome.response.body_sha256() if outcome.response else ""
     previous_sha = previous["observed_content_sha256"]
@@ -147,11 +136,7 @@ def _diff_changes(watch: dict, run_id: str, previous: dict | None,
 
 
 def run_watch(ctx: ExecutionContext, watch: dict, *, scheduled_time: str) -> WatchRun:
-    # a watch run — its acquired manifestations, change observations and the
-    # run record — inherits the WATCH's marking, not the scheduler's: a
-    # compartmented watch never produces lower-marked evidence
-    import dataclasses
-    from curunir_operational.access import marking_from_record
+    # Everything a run writes carries the watch's marking, not the scheduler's.
     watch_marking = marking_from_record(watch["marking"]) \
         if isinstance(watch.get("marking"), dict) else watch["marking"]
     ctx = dataclasses.replace(ctx, marking=watch_marking)
@@ -182,8 +167,7 @@ def run_watch(ctx: ExecutionContext, watch: dict, *, scheduled_time: str) -> Wat
 
 
 def tick(ctx: ExecutionContext, *, now: str | None = None) -> list[WatchRun]:
-    """Run every due watch once. Safe to call from cron, a loop, or the CLI;
-    all state needed to continue after a restart is already in the store."""
+    """Run every due watch once. Safe to call from cron, a loop, or the CLI."""
     moment = now or ctx.now_fn()
     runs = []
     for watch in due_watches(ctx.store, now=moment):

@@ -1,8 +1,8 @@
-"""GeoJSON-compatible geometry with explicit uncertainty and unknown location.
+"""GeoJSON-compatible geometry with explicit uncertainty.
 
-WGS84 only. Distances are deterministic (math module only). Line/segment
-proximity uses an equirectangular local approximation, which is adequate for
-corridor-scale synthetic fixtures and documented as approximate.
+WGS84 only, and distances use the standard library alone so they are
+deterministic. Line proximity is an equirectangular local approximation, good
+enough at corridor scale and approximate by design.
 """
 from __future__ import annotations
 
@@ -91,7 +91,8 @@ def haversine_m(a: Sequence[float], b: Sequence[float]) -> float:
 def point_to_segment_m(point: Sequence[float], start: Sequence[float], end: Sequence[float]) -> float:
     lat0 = math.radians(point[1])
     to_xy = lambda p: ((p[0] - point[0]) * math.cos(lat0), p[1] - point[1])
-    ax, ay = to_xy(start); bx, by = to_xy(end)
+    ax, ay = to_xy(start)
+    bx, by = to_xy(end)
     dx, dy = bx - ax, by - ay
     denominator = dx * dx + dy * dy
     t = 0.0 if denominator == 0 else max(0.0, min(1.0, -(ax * dx + ay * dy) / denominator))

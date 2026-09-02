@@ -1,21 +1,12 @@
-"""Strategic warning: a deterministic projection of (forecast × objective ×
-impact) into a tier — never an independent classifier.
+"""Strategic warning: a projection of one forecast onto one objective, never
+an independent classifier.
 
-Every component is derived from typed state it names in its basis:
-  * probability band — from the forecast's authored probability;
-  * consequence — the threatened objective's recorded priority;
-  * time pressure — distance from now to the forecast horizon;
-  * evidence confidence — the forecast basis's independent origin families
-    (reach is not independence; degraded claims cost a notch).
-
-The tier comes from a NAMED rule (the contract refuses a warning without
-one): a probability×consequence table, then two bounded adjustments that
-are themselves part of the rule and recorded in the component basis —
-imminence bumps one tier, and NONE/WEAK evidence caps at PRIORITY, because
-an unsupported number must not by itself drive CRITICAL.
-
-Projection is idempotent: re-projecting unchanged inputs appends nothing;
-a component change is a new version with a transition naming what moved.
+Each component comes from typed state it names in its basis — the forecast's
+probability, the objective's priority, the distance to the horizon, and the
+independent origin families behind the basis. The tier comes from a named rule:
+a probability-by-consequence table plus two recorded adjustments (imminence
+bumps one tier, weak evidence caps at PRIORITY). Re-projecting unchanged inputs
+appends nothing.
 """
 from __future__ import annotations
 
@@ -31,7 +22,7 @@ from .substrate import AnalyticContext, append_version, record_transition
 
 TIER_RULE_V1 = "curunir-warning-tier-v1"
 
-# probability band → tier, per consequence (objective priority)
+# consequence (the objective's priority) -> probability band -> tier
 _TIER_TABLE = {
     "CRITICAL": {"REMOTE": "ATTENTION", "POSSIBLE": "PRIORITY",
                  "LIKELY": "CRITICAL", "VERY_LIKELY": "CRITICAL"},
@@ -84,8 +75,10 @@ def evidence_confidence(basis: Mapping[str, Any]) -> str:
 
 def derive_tier(band: str, consequence: str, pressure: str,
                 confidence: str) -> tuple[str, tuple[str, ...]]:
-    """The named rule, in the open: table lookup plus its two recorded
-    adjustments. Returns (tier, rule-step notes)."""
+    """The named tier rule: a table lookup plus its two adjustments.
+
+    Returns (tier, one note per rule step).
+    """
     tier = _TIER_TABLE[consequence][band]
     notes = [f"table[{consequence}][{band}] -> {tier}"]
     if pressure == "IMMINENT" and tier != "CRITICAL":
@@ -105,9 +98,8 @@ def warning_id_for(forecast_id: str, objective_id: str) -> str:
 
 def linking_impact_paths(store: AnalyticStore, forecast: Mapping[str, Any],
                          objective_id: str) -> tuple[str, ...]:
-    """Impact paths of the objective whose edge evidence overlaps the
-    forecast's claims or propositions — the typed reason THIS forecast
-    threatens THIS objective."""
+    """The objective's impact paths whose evidence overlaps the forecast — the
+    typed reason this forecast threatens this objective."""
     forecast_refs = set(forecast["basis"]["supporting_claim_ids"]) \
         | set(forecast["basis"]["contradicting_claim_ids"]) \
         | {ref for _, ref in forecast["proposition_refs"]}
@@ -146,21 +138,20 @@ def _components(store: AnalyticStore, forecast: Mapping[str, Any],
             "tier": tier, "component_basis": component_basis}
 
 
-# component_basis is deliberately NOT in the change-detection keys: its
-# "why" strings embed the sampled clock, so including it would append a new
-# version on every projection pass. The trade: while no COMPONENT value
-# moves, the stored basis text describes the state at the last component
-# change, not the latest look — the components themselves are always
-# re-derived and compared live.
+# component_basis is not a change-detection key: its "why" strings embed the
+# clock, so including it would append a version on every pass. The stored text
+# therefore describes the last component change, not the latest look.
 _COMPONENT_KEYS = ("probability_band", "consequence", "time_pressure",
                    "evidence_confidence", "tier", "impact_path_ids", "status")
 
 
 def project_warning(ctx: AnalyticContext, *, forecast_id: str,
                     objective_id: str, caused_by: str = "") -> dict[str, Any]:
-    """Project one forecast onto one objective. First call raises the
-    warning; later calls re-derive and append ONLY on change, with the
-    transition naming what moved. A terminal forecast resolves the warning."""
+    """Project one forecast onto one objective.
+
+    The first call raises the warning; later calls re-derive and append only on
+    change. A settled forecast resolves the warning.
+    """
     store = ctx.store
     forecast = store.current_forecasts().get(forecast_id)
     if forecast is None:
@@ -176,12 +167,12 @@ def project_warning(ctx: AnalyticContext, *, forecast_id: str,
     derived["impact_path_ids"] = linking_impact_paths(store, forecast,
                                                       objective_id)
     if forecast["status"] in FORECAST_TERMINAL_STATUSES:
-        derived["status"] = "RESOLVED" if existing is not None else None
         if existing is None:
             raise ValueError(
                 f"forecast {forecast_id[:24]} is already settled "
                 f"({forecast['status']}): a warning about a resolved question "
                 "cannot be raised, only resolved")
+        derived["status"] = "RESOLVED"
     else:
         derived["status"] = existing["status"] if existing is not None \
             and existing["status"] != "RESOLVED" else "ACTIVE"
@@ -252,8 +243,7 @@ def project_warning(ctx: AnalyticContext, *, forecast_id: str,
     merged["history"] = tuple(existing["history"]) + (f"{transition}:"
                                                       f"{derived['tier']}",)
     merged["recorded_time"] = now
-    # a re-append never re-classifies: keep the warning's own marking (the
-    # high-water mark of the forecast/objective it was first projected from)
+    # a re-append never re-classifies: keep the warning's own marking
     merged["marking"] = marking_from_record(existing["marking"]) \
         if isinstance(existing.get("marking"), dict) else existing["marking"]
     merged["impact_path_ids"] = tuple(merged["impact_path_ids"])
@@ -271,8 +261,7 @@ def project_warning(ctx: AnalyticContext, *, forecast_id: str,
 
 
 def refresh_warnings(ctx: AnalyticContext, *, caused_by: str = "") -> list[dict]:
-    """Re-project every current warning against current state. Pure
-    re-derivation: unchanged warnings append nothing."""
+    """Re-project every standing warning; unchanged ones append nothing."""
     outcomes = []
     for warning in sorted(ctx.store.current_warnings().values(),
                           key=lambda w: w["warning_id"]):

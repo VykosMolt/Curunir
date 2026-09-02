@@ -1,5 +1,5 @@
-"""Workshop validation, workbench rendering, COP HTML, situation reports,
-and the no-scenario-constants-in-core check."""
+"""Workshop definitions, workbench rendering, the COP page, and situation
+reports."""
 from __future__ import annotations
 
 import re
@@ -102,8 +102,8 @@ def test_cop_html_self_contained_and_leak_free(tmp_path):
     low_html = render_cop_html(renderer.render(definition, LOW_CONTEXT), title="Test COP")
     assert "obs-secret" in high_html and "obs-secret" not in low_html
     assert "RESEARCH SHADOW" in low_html
-    assert not re.search(r'(src|href)\s*=\s*["\']https?://', high_html)  # no external assets
-    assert "[REPORTED" in high_html  # epistemic state as text, not colour alone
+    assert not re.search(r'(src|href)\s*=\s*["\']https?://', high_html)  # nothing loaded off the network
+    assert "[REPORTED" in high_html  # the state is written out, not shown by colour alone
     assert '<html lang="en">' in low_html and "<main>" in low_html
     assert '<th scope="col">' in low_html and "<caption>" in low_html
     assert 'aria-labelledby="map-title map-description"' in low_html
@@ -113,7 +113,7 @@ def test_cop_html_self_contained_and_leak_free(tmp_path):
 def test_cop_right_edge_labels_are_end_anchored(tmp_path):
     _, projection = seeded_projection(tmp_path)
     view = WorkbenchRenderer(projection).render(validate_workshop_definition(WORKSHOP), HIGH_CONTEXT)
-    # Move one visible point to the right edge of an otherwise wider extent.
+    # Put one point on the right edge of the extent.
     features = view["map_layers"][0]["feature_collection"]["features"]
     features.append({
         "type": "Feature", "geometry": {"type": "Point", "coordinates": [-20.0, 45.2]},
@@ -140,7 +140,7 @@ def test_situation_report_language_and_determinism(tmp_path):
     high_report = build_situation_report(store, projection, HIGH_CONTEXT, operational_context="test corridor")
     low_report = build_situation_report(store, projection, LOW_CONTEXT, operational_context="test corridor")
     again = build_situation_report(store, projection, HIGH_CONTEXT, operational_context="test corridor")
-    assert high_report["integrity_hash"] == again["integrity_hash"]  # deterministic from frozen projection
+    assert high_report["integrity_hash"] == again["integrity_hash"]
     assert high_report["integrity_hash"] != low_report["integrity_hash"]
     markdown = render_markdown(high_report)
     text = render_text(high_report)

@@ -1,31 +1,28 @@
-"""Sovereignty manifest, open export exit test, and the degraded-mode PACE
-bundle.
+"""Sovereignty manifest, open-export exit test, and the PACE bundle.
 
-Exit test: the complete synthetic mission state exports into documented open
-formats (JSONL event log + content-addressed payloads + JSON manifests) and
-re-imports into a fresh store without losing identifiers, history, provenance,
-access markings, quality, relationships or decisions.
-
-PACE bundle: a deterministic, integrity-hashed, access-filtered directory that
-is inspectable without the application. Standard sha256 only — no classified
-cryptography and no claim of secure cross-domain transport. Restricted content
-is omitted under a fixed policy statement; its existence and counts are never
-represented.
+The exit test proves the whole mission state exports into open formats and
+re-imports into a fresh store with nothing lost. A PACE bundle (a briefing
+pack for degraded conditions) is a deterministic, hashed, access-filtered
+directory readable without this application; restricted content is omitted
+under a fixed statement, and its existence and counts are never shown.
+Integrity is plain sha256 — no claim of secure cross-domain transport.
 """
 from __future__ import annotations
 
 import hashlib
-import json
+import os
+import shutil
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any, Mapping
 
 from . import ENGAGEMENT_BOUNDARY, PACKAGE_VERSION
 from .access import AccessContext
-from .canonical import CONTRACT_VERSION, canonical_line, sha256
+from .canonical import CONTRACT_VERSION, canonical_line, parse_json_strict, sha256
 from .projection import Projection, projection_hash
 from .sitrep import build_situation_report, render_text
-from .store import MissionDataStore
+from .store import MissionDataStore, _exclusive_write, _fsync_directory, refuse_output_overlap
 
 OMISSION_POLICY = ("This bundle contains only content releasable to the stated access context. "
                    "Content outside that releasability, if any exists, is omitted; neither its "
@@ -137,12 +134,11 @@ def run_exit_test(store: MissionDataStore, export_dir: str | Path, fresh_root: s
             "original_head": store.head(), "imported_head": imported.head()}
 
 
-# ---- PACE bundle ------------------------------------------------------------
+# ---- PACE bundle ----
 
 def build_pace_bundle(store: MissionDataStore, projection: Projection, context: AccessContext,
                       out_dir: str | Path, *, operational_context: str, since_seq: int = 0) -> dict[str, Any]:
-    out_dir = Path(out_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
+    out_dir = refuse_output_overlap(out_dir, source_root=store.root, label="PACE bundle")
     view = projection.view(context)
     changes = projection.changes_since(since_seq, context, store)
     report = build_situation_report(store, projection, context, operational_context=operational_context,
@@ -158,10 +154,8 @@ def build_pace_bundle(store: MissionDataStore, projection: Projection, context: 
         "provenance_refs.json": canonical_line(report["report"]["provenance_references"]) + "\n",
         "sitrep.txt": render_text(report),
     }
-    member_hashes = {}
-    for name, content in members.items():
-        (out_dir / name).write_text(content, encoding="utf-8")
-        member_hashes[name] = hashlib.sha256(content.encode("utf-8")).hexdigest()
+    member_hashes = {name: hashlib.sha256(content.encode("utf-8")).hexdigest()
+                     for name, content in members.items()}
     manifest = {
         "bundle_type": "OperationalPACEBundle", "bundle_format": "curunir-operational-pace-v1",
         "store_id": store.meta["store_id"], "snapshot_time": view["meta"]["snapshot_time"],
@@ -171,43 +165,76 @@ def build_pace_bundle(store: MissionDataStore, projection: Projection, context: 
         "members": member_hashes, "combined_sha256": sha256(member_hashes),
         "boundary_note": "integrity by standard sha256 only; no secure cross-domain transport is claimed",
     }
-    (out_dir / "bundle_manifest.json").write_text(canonical_line(manifest) + "\n", encoding="utf-8")
+    # Stage into a private directory and rename it into place, so a bundle is
+    # never half-written and a planted path is never followed.
+    stage = Path(tempfile.mkdtemp(prefix=f".{out_dir.name}.pace.", dir=out_dir.parent))
+    try:
+        for name, content in members.items():
+            _exclusive_write(stage / name, content.encode("utf-8"))
+        _exclusive_write(stage / "bundle_manifest.json",
+                         (canonical_line(manifest) + "\n").encode("utf-8"))
+        _fsync_directory(stage)
+        os.rename(stage, out_dir)
+        _fsync_directory(out_dir.parent)
+    except BaseException:
+        shutil.rmtree(stage, ignore_errors=True)
+        raise
+    return manifest
+
+
+def _read_manifest(bundle_dir: Path) -> dict[str, Any]:
+    try:
+        raw = (bundle_dir / "bundle_manifest.json").read_bytes()
+    except OSError as exc:
+        raise ValueError(f"bundle_manifest.json is missing or unreadable: {exc}") from exc
+    manifest = parse_json_strict(raw, label="PACE manifest")
+    if not isinstance(manifest, dict):
+        raise ValueError("PACE manifest is not an object")
     return manifest
 
 
 def verify_pace_bundle(bundle_dir: str | Path) -> dict[str, Any]:
     bundle_dir = Path(bundle_dir)
     try:
-        manifest = json.loads((bundle_dir / "bundle_manifest.json").read_text(encoding="utf-8"))
-    except FileNotFoundError:
-        return {"valid": False, "reason": "bundle_manifest.json missing"}
+        manifest = _read_manifest(bundle_dir)
+    except ValueError as exc:
+        return {"valid": False, "failures": [str(exc)], "reason": str(exc)}
+    members = manifest.get("members")
+    if not isinstance(members, dict):
+        return {"valid": False, "failures": ["manifest declares no members"],
+                "reason": "manifest declares no members"}
     failures = []
-    for name, expected in manifest["members"].items():
+    for name, expected in members.items():
+        # A member name is a bare filename; anything else would read outside.
+        if not isinstance(name, str) or "/" in name or "\\" in name or name in ("", ".", ".."):
+            failures.append(f"{name}: not a bare member filename")
+            continue
         path = bundle_dir / name
-        if not path.exists():
+        if path.is_symlink() or not path.is_file():
             failures.append(f"{name}: missing")
             continue
-        actual = hashlib.sha256(path.read_bytes()).hexdigest()
-        if actual != expected:
+        if hashlib.sha256(path.read_bytes()).hexdigest() != expected:
             failures.append(f"{name}: hash mismatch")
-    if sha256(manifest["members"]) != manifest["combined_sha256"]:
+    if sha256(members) != manifest.get("combined_sha256"):
         failures.append("combined hash mismatch")
     return {"valid": not failures, "failures": failures, "bundle_format": manifest.get("bundle_format"),
             "state_token": manifest.get("state_token"), "access_context_id": manifest.get("access_context_id")}
 
 
 def import_pace_bundle(bundle_dir: str | Path) -> dict[str, Any]:
-    """Load a verified bundle as a NON-AUTHORITATIVE briefing snapshot. A PACE
-    bundle is a filtered projection, not the event log; full-fidelity import
-    goes through the open export (run_exit_test path)."""
+    """Load a verified bundle as a briefing snapshot with no authority.
+
+    A bundle is a filtered projection, not the event log; a full-fidelity
+    import goes through the open export instead.
+    """
     verification = verify_pace_bundle(bundle_dir)
     if not verification["valid"]:
         raise ValueError(f"PACE bundle failed verification: {verification['failures']}")
     bundle_dir = Path(bundle_dir)
     return {
         "non_authoritative_import": True,
-        "manifest": json.loads((bundle_dir / "bundle_manifest.json").read_text(encoding="utf-8")),
-        "projection": json.loads((bundle_dir / "projection.json").read_text(encoding="utf-8")),
-        "changes": json.loads((bundle_dir / "changes.json").read_text(encoding="utf-8")),
+        "manifest": _read_manifest(bundle_dir),
+        "projection": parse_json_strict((bundle_dir / "projection.json").read_bytes(), label="PACE projection"),
+        "changes": parse_json_strict((bundle_dir / "changes.json").read_bytes(), label="PACE changes"),
         "sitrep_text": (bundle_dir / "sitrep.txt").read_text(encoding="utf-8"),
     }

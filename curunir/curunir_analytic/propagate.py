@@ -1,17 +1,11 @@
-"""Semantic change → analytical update, incrementally.
+"""Carry recorded semantic changes up into the analytical layer.
 
-The semantic plane already interprets watch-detected byte changes into typed
-SemanticChangeRecords with affected objects and claims. This module carries
-those changes one layer up: through the reverse-dependency index it finds
-exactly the analytical objects resting on the changed state, refreshes only
-those, questions assumptions whose support degraded, refreshes touched
-hypotheses through the existing engine, and raises evidence-bound analytical
-alerts that explain what changed, which analytical object moved, and which
-mission state is affected.
-
-Everything is idempotent: refreshes append only on material change and
-transitions are keyed by their cause, so re-running after a crash completes
-the propagation instead of duplicating it.
+The reverse-dependency index finds exactly the analytical objects resting on
+the changed state; this refreshes only those, questions assumptions whose
+support degraded, refreshes the touched hypotheses, and raises alerts naming
+what changed, what moved, and which mission state is affected. Refreshes append
+only on material change and transitions are keyed by cause, so re-running after
+a crash completes the propagation instead of duplicating it.
 """
 from __future__ import annotations
 
@@ -31,10 +25,10 @@ from .store import AnalyticStore
 from .substrate import AnalyticContext, DependencyIndex, record_transition
 from .themes import refresh_theme
 
-# change classes that do not touch analytical state
+# change classes that touch no analytical state
 _INERT_CLASSES = ("SEMANTICALLY_UNCHANGED",)
 
-# analytical transitions worth an alert when they fire
+# the transitions worth an alert when they fire
 _ALERTABLE = {
     ("analytic_theme", "CONTRADICTION_ADDED"), ("analytic_theme", "STALE"),
     ("analytic_theme", "WEAKENED"), ("analytic_theme", "SOURCE_DIVERSITY_CHANGED"),
@@ -61,18 +55,23 @@ _REFRESHERS = {
 
 def _refresh_degraded_basis(ctx: AnalyticContext, kind: str, object_id: str,
                             claim_ids, transition_type: str) -> None:
-    """Basis-degradation watch for the kinds without a richer refresher:
-    when supporting evidence of an influence assertion, response option,
-    episode or analogue leaves CURRENT, the fact is recorded as a typed
-    transition (idempotent per degraded set), never silently ignored."""
+    """Record a typed transition when supporting evidence leaves CURRENT.
+
+    The basis watch for the kinds without a fuller refresher, keyed by the
+    degraded set so it fires once per finding.
+    """
     store = ctx.store
     record = store.current_analytics(kind).get(object_id)
     if record is None:
         return
-    degraded = sorted(f"{claim_id}:{store.claim_state(claim_id)}"
-                      for claim_id in claim_ids
-                      if claim_id in store.current_claims()
-                      and store.claim_state(claim_id) in DEGRADED_CLAIM_STATES)
+    claims = store.current_claims()
+    states = store.claim_states()
+    degraded = sorted(
+        f"{claim_id}:{states[claim_id]['state']}"
+        for claim_id in claim_ids
+        if claim_id in claims
+        and states.get(claim_id, {}).get("state", "CURRENT")
+        in DEGRADED_CLAIM_STATES)
     if not degraded:
         return
     record_transition(
@@ -132,15 +131,10 @@ def propagate_semantic_changes(ctx: AnalyticContext, *,
                                raise_alerts: bool = True) -> list[dict[str, Any]]:
     """Carry every recorded semantic change into the analytical layer.
 
-    Changes are propagated per affected object over the object's FULL set of
-    pending changes: the refreshers diff against live state, so attributing
-    the accumulated movement to whichever change happened to sit first in the
-    log would leave later, materially different changes permanently inert and
-    falsify causality. Each refresh is caused by the change set as a whole,
-    and every change in the set is named in the transition detail.
-
-    Safe to call repeatedly: already-propagated change sets fall through as
-    no-ops because every downstream write is idempotent by cause.
+    Each affected object is refreshed once against its whole set of pending
+    changes, caused by the set as a whole: the refreshers diff against live
+    state, so attributing the movement to whichever change came first would
+    leave the later ones permanently inert. Safe to call repeatedly.
     """
     store: AnalyticStore = ctx.store
     index = DependencyIndex(store)
@@ -171,13 +165,15 @@ def propagate_semantic_changes(ctx: AnalyticContext, *,
         if kind == "analytic_assumption":
             assumption = assumptions.get(object_id)
             if assumption and assumption["status"] == "HELD":
-                # caused per triggering CHANGE, not per changeset: a later
-                # unrelated change must not re-fire the same questioning
+                states = store.claim_states()
+                # caused per change, not per set, so a later unrelated change
+                # does not re-fire the same questioning
                 for change in object_changes:
                     relevant = [
                         claim_id for claim_id in assumption["supporting_claim_ids"]
                         if claim_id in change["affected_claim_ids"]
-                        and (store.claim_state(claim_id) in DEGRADED_CLAIM_STATES
+                        and (states.get(claim_id, {}).get("state", "CURRENT")
+                             in DEGRADED_CLAIM_STATES
                              or change["change_class"] in ("SOURCE_RETRACTION",
                                                            "SOURCE_CORRECTION",
                                                            "VALUE_CHANGED",
@@ -212,8 +208,7 @@ def propagate_semantic_changes(ctx: AnalyticContext, *,
                                 for t in new_transitions],
                 "alerts": alerts,
             })
-    # hypotheses refresh over the union of touched claims, reported when a
-    # new hypothesis version actually landed
+    # hypotheses refresh over every touched claim at once
     hypothesis_records_before = len(store.records_of("hypothesis"))
     if all_touched_claims:
         integration = IntegrationContext(store=store, actor=ctx.actor,
@@ -225,8 +220,8 @@ def propagate_semantic_changes(ctx: AnalyticContext, *,
             "changeset": "hypotheses",
             "hypotheses_refreshed": sorted({h["hypothesis_id"] for h in hypotheses}),
         })
-    # identity ambiguity opens without a semantic change; keep assessments'
-    # caveats in step with the live review queue on every propagation pass
+    # identity ambiguity opens without a semantic change, so nothing else
+    # would bring the assessments' caveats up to date
     from .stakeholders import refresh_identity_caveats
     caveats = refresh_identity_caveats(ctx, caused_by="propagate")
     if caveats:
@@ -234,19 +229,16 @@ def propagate_semantic_changes(ctx: AnalyticContext, *,
             "changeset": "identity-caveats",
             "assessments_refreshed": [a["assessment_id"] for a in caveats],
         })
-    # the forecast plane runs a full pass every propagation: new evidence can
-    # fire indicators (which execute pre-authorized effects), and any moved
-    # probability, basis or clock re-derives the standing warnings. Every step
-    # is idempotent, so a quiet pass appends nothing.
+    # the forecast plane runs every pass: new evidence can fire indicators, and
+    # a moved probability, basis or clock re-derives the warnings
     from .indicators import check_indicators
     from .warning import refresh_warnings
     transitions_before = len(store.records_of("analytic_transition"))
     check_indicators(ctx)
     for forecast in sorted(store.current_forecasts().values(),
                            key=lambda f: f["forecast_id"]):
-        # HORIZON_PASSED is included: a coverage-blocked forecast is WAITING
-        # for executions that produce no semantic change, so only this pass
-        # can notice the coverage arriving and complete the resolution
+        # HORIZON_PASSED is included because a coverage-blocked forecast waits
+        # on executions that produce no semantic change
         if forecast["status"] in ("OPEN", "UPDATE_REQUIRED", "HORIZON_PASSED"):
             refresh_forecast(ctx, forecast["forecast_id"],
                              caused_by="propagate")
@@ -265,9 +257,10 @@ def propagate_semantic_changes(ctx: AnalyticContext, *,
 
 def _raise_forecast_plane_alerts(ctx: AnalyticContext,
                                  transitions: list[Mapping[str, Any]]) -> list[str]:
-    """Alerts for forecast-plane movement not attributable to a single
-    semantic change: warning escalations and degraded forecast bases.
-    Dedup-keyed by transition, so a re-run raises nothing twice."""
+    """Alerts for forecast-plane movement no single semantic change caused.
+
+    Keyed by transition, so a re-run raises nothing twice.
+    """
     engine = WorkflowEngine(ctx.store)
     raised = []
     for transition in transitions:
@@ -298,8 +291,8 @@ def _raise_analytic_alerts(ctx: AnalyticContext, change: Mapping[str, Any],
                            transitions: list[Mapping[str, Any]], *,
                            change_count: int = 1,
                            index: DependencyIndex | None = None) -> list[str]:
-    """Analytical alerts explain the full chain: the evidence change, the
-    analytical object it moved, and the mission state affected."""
+    """Raise alerts naming the evidence change, what it moved, and the mission
+    state affected."""
     store = ctx.store
     engine = WorkflowEngine(store)
     if index is None:

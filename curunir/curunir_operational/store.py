@@ -1,15 +1,12 @@
 """Durable append-only mission-data store.
 
-The trusted core is intentionally small:
+The trusted core is small on purpose: strict regular-file reads that refuse
+links and special files, atomic replacement that publishes whole files, one
+lock that serializes every mutation, one validator for load, append, delta and
+recovery, and one staged installer for restoration.
 
-* strict regular-file reads reject links and special files;
-* atomic replacement publishes complete files;
-* one append lock serializes every store mutation;
-* one event validator serves load, append, delta, and recovery; and
-* one staged installer serves verified backup restoration.
-
-The raw log remains the authoritative substrate.  Projections may filter it
-for readers, but they never determine what may be committed.
+The raw log is authoritative. Projections filter it for readers; they never
+decide what may be committed.
 """
 from __future__ import annotations
 
@@ -35,7 +32,7 @@ from .canonical import (
     validate_interchange,
 )
 from .contracts import Record
-from .security import admit_marking
+from .security import PRIMARY_ID_FIELDS, admit_marking
 
 CHAIN_GENESIS = "0" * 64
 EXPORT_FORMAT = "curunir-operational-open-export-v1"
@@ -106,7 +103,7 @@ def _require_real_directory(path: Path, *, label: str) -> None:
 
 
 def _ensure_real_directory(path: Path, *, label: str) -> None:
-    """Create missing parents, then reject symlinks anywhere in the path."""
+    """Create missing parents, then refuse a symlink anywhere in the path."""
     absolute = path.absolute()
     absolute.mkdir(parents=True, exist_ok=True)
     current = Path(absolute.anchor)
@@ -121,7 +118,7 @@ def refuse_output_overlap(
     source_root: str | Path,
     label: str,
 ) -> Path:
-    """Validate an absent output root without following a planted store path."""
+    """Check that an output root is absent, without following a planted path."""
     destination = Path(destination)
     source = Path(source_root).absolute()
     target = destination.absolute()
@@ -133,7 +130,8 @@ def refuse_output_overlap(
     return destination
 
 
-def _read_regular(path: Path, *, label: str) -> bytes:
+def _open_regular(path: Path, *, label: str) -> tuple[int, os.stat_result]:
+    """Open a real single-link regular file; refuse links, swaps and specials."""
     try:
         before = path.lstat()
     except FileNotFoundError as exc:
@@ -143,8 +141,8 @@ def _read_regular(path: Path, *, label: str) -> bytes:
         raise StoreError(
             f"{label} is not a regular file, is hardlinked, or is otherwise "
             f"unsafe (single-link required): {path}")
-    # O_NONBLOCK is inert for regular files and prevents a swap to a FIFO from
-    # hanging before fstat can reject it.
+    # O_NONBLOCK does nothing to a regular file but stops a swap to a FIFO
+    # from hanging before fstat can reject it.
     flags = (os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
              | getattr(os, "O_NONBLOCK", 0))
     try:
@@ -158,12 +156,41 @@ def _read_regular(path: Path, *, label: str) -> bytes:
             raise StoreError(
                 f"{label} is not a regular file, is hardlinked, or changed "
                 f"during open (single-link required): {path}")
+    except BaseException:
+        os.close(fd)
+        raise
+    return fd, info
+
+
+def _read_regular(path: Path, *, label: str) -> bytes:
+    fd, _ = _open_regular(path, label=label)
+    try:
         chunks: list[bytes] = []
         while True:
             chunk = os.read(fd, 1024 * 1024)
             if not chunk:
                 break
             chunks.append(chunk)
+        return b"".join(chunks)
+    finally:
+        os.close(fd)
+
+
+def _read_regular_tail(path: Path, offset: int, *, label: str) -> bytes:
+    """Read only the bytes past ``offset``, under the same file checks."""
+    fd, info = _open_regular(path, label=label)
+    try:
+        size = info.st_size
+        if size < offset:
+            raise StoreError("event log shrank while the store was open")
+        chunks: list[bytes] = []
+        position = offset
+        while position < size:
+            chunk = os.pread(fd, min(1024 * 1024, size - position), position)
+            if not chunk:
+                break
+            chunks.append(chunk)
+            position += len(chunk)
         return b"".join(chunks)
     finally:
         os.close(fd)
@@ -178,7 +205,8 @@ def _fsync_directory(path: Path) -> None:
 
 
 def _atomic_write(path: Path, body: bytes, *, mode: int = 0o600) -> None:
-    """Publish verified bytes without an absent/truncated destination window."""
+    """Publish bytes with no window where the destination is missing or
+    half-written."""
     _require_real_directory(path.parent, label="destination parent")
     temp = path.parent / f".{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp"
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
@@ -329,6 +357,7 @@ class MissionDataStore:
         self._idempotency: dict[str, str] = {}
         self._alert_dedup: dict[str, str] = {}
         self._records_by_type: dict[str, list[dict[str, Any]]] = {}
+        self._records_by_id: dict[str, dict[str, list[dict[str, Any]]]] = {}
         self._source_watermarks: dict[str, str] = {}
         self._file_offset = 0
 
@@ -402,9 +431,8 @@ class MissionDataStore:
         expected_id = f"evt-{event['seq']:06d}-{expected_hash[:8]}"
         if event["event_id"] != expected_id:
             raise StoreError(f"event_id does not bind the envelope at {at}")
-        # Integrity is checked before semantic dispatch so a direct mutation of
-        # record_type is reported as the chain corruption it is.  A coherently
-        # re-hashed but unsupported envelope reaches the policy checks below.
+        # Integrity comes before semantic dispatch, so editing record_type is
+        # reported as the chain corruption it is.
         if event_type not in self.EVENT_TYPES:
             raise StoreError(f"unknown event type at {at}: {event_type!r}")
         if record.get("record_type") != self.EVENT_TYPES[event_type]:
@@ -447,6 +475,14 @@ class MissionDataStore:
                     "(record a DUPLICATE instead)")
 
     def _index(self, event: dict[str, Any]) -> None:
+        # A tampered log can carry a coherently re-hashed record that is missing
+        # the id this index needs; report that as chain damage, not a KeyError.
+        try:
+            self._index_record(event)
+        except KeyError as exc:
+            raise StoreError(f"record is missing the index field {exc}") from exc
+
+    def _index_record(self, event: dict[str, Any]) -> None:
         record = event["record"]
         record_type = record["record_type"]
         if record_type == "object_version":
@@ -469,21 +505,21 @@ class MissionDataStore:
             key = (record_type, record[id_field])
             self._generic_versions[key] = record.get("version", 1)
         self._records_by_type.setdefault(record_type, []).append(record)
+        primary_id = PRIMARY_ID_FIELDS.get(record_type)
+        if primary_id:
+            record_id = record.get(primary_id)
+            if isinstance(record_id, str) and record_id:
+                self._records_by_id.setdefault(record_type, {}).setdefault(record_id, []).append(record)
         self._events.append(event)
         self._head_hash = event["entry_hash"]
         self._last_recorded = event["recorded_time"]
 
     def _catch_up(self) -> None:
-        raw = _read_regular(self.events_path, label="event log")
-        if len(raw) < self._file_offset:
-            raise StoreError("event log shrank while the store was open")
-        if len(raw) == self._file_offset:
-            return
-        tail = raw[self._file_offset:]
-        if self._file_offset and not tail:
+        tail = _read_regular_tail(self.events_path, self._file_offset, label="event log")
+        if not tail:
             return
         self._load_event_bytes(tail, label=f"{self.events_path} catch-up")
-        self._file_offset = len(raw)
+        self._file_offset += len(tail)
 
     def _locked_write(self, event: Mapping[str, Any]) -> None:
         body = (canonical_line(event) + "\n").encode("utf-8")
@@ -518,10 +554,9 @@ class MissionDataStore:
     ) -> dict[str, Any]:
         """Append one event under the store mutation lock.
 
-        ``condition`` is evaluated after catch-up while that same lock is held.
-        It is the canonical primitive for invariants whose truth depends on
-        current retained state (for example an actor's active-key cap), avoiding
-        a check-then-append race across store instances.
+        ``condition`` runs after catch-up, still under that lock. It is how a
+        caller re-checks an invariant that depends on current state, closing
+        the gap between a check and the append across store instances.
         """
         if event_type not in self.EVENT_TYPES:
             raise StoreError(f"unknown event type: {event_type}")
@@ -655,11 +690,6 @@ class MissionDataStore:
             accepted.append(event)
         return accepted
 
-    def preflight_imported_events(self, events: list[Mapping[str, Any]]) -> None:
-        with self._append_lock():
-            self._catch_up()
-            self._validate_imported_events(events)
-
     def apply_imported_events_locked(
         self,
         events: list[Mapping[str, Any]],
@@ -684,8 +714,8 @@ class MissionDataStore:
                     (canonical_line(event) + "\n").encode("utf-8")
                     for event in accepted
                 )
-                # A delta is one admission transaction.  Atomic replacement
-                # prevents a crash from committing only a valid prefix of it.
+                # A delta is one transaction; replacing the file atomically
+                # stops a crash committing only part of it.
                 _atomic_write(self.events_path, current + suffix)
                 self._file_offset = len(current) + len(suffix)
             for event in accepted:
@@ -735,12 +765,9 @@ class MissionDataStore:
             raise StoreError(
                 f"refusing to export over an existing path or live store: {directory}")
         _require_real_directory(directory.parent, label="export parent")
-        try:
-            if self.root.resolve() == directory.resolve() \
-                    or self.root.resolve() in directory.resolve().parents:
-                raise StoreError("export destination must not be the store or inside it")
-        except FileNotFoundError:
-            pass
+        if self.root.resolve() == directory.resolve() \
+                or self.root.resolve() in directory.resolve().parents:
+            raise StoreError("export destination must not be the store or inside it")
         stage = Path(tempfile.mkdtemp(prefix=f".{directory.name}.export.", dir=directory.parent))
         try:
             (stage / "payloads").mkdir(mode=0o700)
@@ -881,7 +908,7 @@ class MissionDataStore:
             split = raw.rfind(b"\n")
             kept = raw[:split + 1] if split >= 0 else b""
             tail = raw[split + 1:]
-            # Validate every committed line before preserving or replacing bytes.
+            # Check every committed line before touching any bytes.
             validator = cls.__new__(cls)
             validator.root = root
             validator.meta = dict(probe.meta)

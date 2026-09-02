@@ -1,11 +1,6 @@
-"""Regression pins for the fourth adversarial review.
-
-The centrepiece is a CLASS-level invariant that catches the whole
-marking-derivation defect family in one assertion (findings C1-C4 and any
-future sibling): after a cleared actor runs a command against a SPECIAL
-subject, NO newly-appended record of any family may be visible to an
-uncleared context. Per-finding pins cover the rest.
-"""
+"""One invariant covers the whole family of marking-derivation defects: after a
+cleared actor runs a command against a restricted subject, nothing newly written
+may be visible to an uncleared one. The rest of the module pins single cases."""
 from __future__ import annotations
 
 import json
@@ -26,7 +21,7 @@ from workbench_support import (CTX_A, CTX_B, RESTRICTED_MARK, make_workbench,
 
 pytestmark = pytest.mark.no_db
 
-# registry metadata carries no marking by contract and is visible to all
+# Registry metadata carries no marking and is visible to everyone.
 _UNMARKED_OK = ("fabric_source_descriptor", "fabric_source_profile",
                 "fabric_source_status")
 
@@ -60,12 +55,13 @@ def _assert_no_leak(store, before_seq, ctx_b, label):
 
 
 def test_no_command_declassifies_a_special_subject(mission):
-    """The invariant that would have caught every round-1..4 critical."""
+    """No command run against a restricted subject writes anything an uncleared
+    context can see."""
     ctx, seeded, cc = mission
-    A = cc(CTX_A)  # holds SPECIAL
+    A = cc(CTX_A)  # holds the SPECIAL compartment
     public_claim = seeded["status_claim"]["claim_id"]
 
-    # --- SPECIAL subjects, authored through the very commands under test ---
+    # ---- restricted subjects, made through the commands under test ----
     forecast = commands.author_forecast(
         A, question="Will the compartmented counterparty default by 2027?",
         outcome_semantics="TRUE iff default recorded",
@@ -78,7 +74,7 @@ def test_no_command_declassifies_a_special_subject(mission):
         A, statement="The compartmented counterparty is a front",
         case_id="compartment", compartments=("SPECIAL",))
 
-    # SPECIAL objective, review item, model proposal via setup (no command)
+    # The rest of the restricted subjects go in directly, without a command.
     from curunir_analytic.impact import create_objective
     from curunir_analytic.substrate import AnalyticContext
     setup = AnalyticContext(store=ctx.store, actor="analyst-a",
@@ -104,7 +100,7 @@ def test_no_command_declassifies_a_special_subject(mission):
     forecast_id = forecast["forecast_id"]
     hyp_id = hypothesis["hypothesis_id"]
 
-    # --- each command, snapshot → run → assert nothing leaked --------------
+    # ---- run each command and check nothing visible was written ----
     def run(label, fn):
         before = _head_seq(ctx.store)
         fn()
@@ -133,9 +129,7 @@ def test_no_command_declassifies_a_special_subject(mission):
         A, forecast_id, outcome="VOID", rationale="ill-posed",
         evidence_refs=()))
 
-    # and the uncleared context genuinely sees none of the compartmented state
-    # (the seed's own PUBLIC warning is legitimately visible; the compartmented
-    # one derived above is not)
+    # The seed's own public warning stays visible; only the restricted one is gone.
     view_b = MissionProjection(ctx.store, CTX_B)
     assert view_b.get("analytic_forecast", forecast_id) is None
     assert view_b.get("hypothesis", hyp_id) is None
@@ -146,32 +140,29 @@ def test_no_command_declassifies_a_special_subject(mission):
 
 
 def test_most_restrictive_never_downgrades():
-    """The join must be viewable only by a context that can view EVERY input;
-    a differing-authority org-locked join has no safe single-marking form and
-    fails closed rather than declassifying."""
+    """A joined marking is viewable only by someone who could view every input, and
+    two org-locked authorities have no safe join at all."""
     ctx_a = AccessContext("c", "u", "HUMAN", ("ANALYST",),
                           compartments=("X",), releasability=("PUBLIC",))
     a = Marking("mission", ("X",), ("PUBLIC",))
     b = Marking("mission", (), ("PUBLIC",))
     join = most_restrictive([a, b])
-    # a context that can view the join can view both inputs
     for probe in (ctx_a, AccessContext("c2", "u2", "HUMAN", ("ANALYST",),
                                         releasability=("PUBLIC",))):
         if can_view(join, probe):
             assert can_view(a, probe) and can_view(b, probe)
-    # differing owning authorities, both org-locked -> no safe join
+    # Two different owning authorities have no single marking that covers both.
     with pytest.raises(ValueError):
         most_restrictive([Marking("auth-a", (), ()), Marking("auth-b", (), ())])
-    # compartment union: needs BOTH compartments
     both = most_restrictive([Marking("m", ("X",), ("PUBLIC",)),
                              Marking("m", ("Y",), ("PUBLIC",))])
     assert set(both.compartments) == {"X", "Y"}
-    assert not can_view(both, ctx_a)  # ctx_a lacks Y
+    assert not can_view(both, ctx_a)  # ctx_a does not hold Y
 
 
 def test_decide_recommendation_gated_and_marked(mission):
-    """H6: a recommendation the actor cannot see is neither decidable nor an
-    existence oracle."""
+    """A recommendation the actor cannot see cannot be decided, and the refusal does
+    not reveal that it exists."""
     ctx, seeded, cc = mission
     from curunir_operational.workflow import WorkflowEngine
     engine = WorkflowEngine(ctx.store)
@@ -189,7 +180,7 @@ def test_decide_recommendation_gated_and_marked(mission):
 
 
 def test_discriminator_reappend_preserves_marking(mission):
-    """C1 intrinsic: update_discriminator never re-classifies."""
+    """Updating a discriminator keeps its existing marking."""
     ctx, seeded, cc = mission
     from curunir_semantic.contracts import DiscriminatingObservation
     from curunir_semantic.hypotheses import update_discriminator
@@ -203,7 +194,7 @@ def test_discriminator_reappend_preserves_marking(mission):
     ctx.store.append("DISCRIMINATOR_RECORDED", disc,
                      recorded_time=disc.recorded_time, actor="analyst-a")
     current = ctx.store.latest_by_id("discriminator", "discriminator_id")["disc-secret"]
-    # a PUBLIC-marked caller updating it must NOT declassify it
+    # The caller passes a public marking, which must not win.
     update_discriminator(ctx.store, current, {"status": "SATISFIED"},
                          now=ctx.now_fn(), actor="analyst-a", marking=MARK)
     after = ctx.store.latest_by_id("discriminator", "discriminator_id")["disc-secret"]
@@ -211,8 +202,8 @@ def test_discriminator_reappend_preserves_marking(mission):
 
 
 def test_annotation_anchor_marking_inherited(mission):
-    """H3: anchoring to a SPECIAL record compartments the annotation even
-    when the target is PUBLIC."""
+    """Anchoring a note to a restricted record hides the note, even on a public
+    target."""
     ctx, seeded, cc = mission
     note = commands.annotate(
         cc(CTX_A), target_kind="analytic_forecast",
@@ -224,7 +215,7 @@ def test_annotation_anchor_marking_inherited(mission):
 
 
 def test_own_visible_content_not_false_rejected(mission):
-    """H5: citing your own report's sentence id is allowed."""
+    """Citing an id from your own report is not mistaken for a leak."""
     ctx, seeded, cc = mission
     report = commands.create_report(
         cc(CTX_A), title="own content", question="?",
@@ -232,7 +223,6 @@ def test_own_visible_content_not_false_rejected(mission):
             {"text": "Acme holds an ISSUED registration.", "status": "SUPPORTED",
              "basis_refs": [seeded["status_claim"]["claim_id"]]}]}])
     sid = report["sections"][0]["sentences"][0]["sentence_id"]
-    # a note that cites the caller's own sentence id must not be refused
     made = commands.annotate(cc(CTX_A), target_kind="workbench_report",
                              target_id=report["report_id"], kind="NOTE",
                              text=f"see {sid} for the key judgment")
@@ -240,7 +230,7 @@ def test_own_visible_content_not_false_rejected(mission):
 
 
 def test_truncated_hidden_id_is_scrubbed(mission):
-    """M1: a persisted truncated hidden id does not survive the scrub."""
+    """A truncated hidden id is scrubbed like the full one."""
     ctx, seeded, cc = mission
     secret = seeded["secret_object_id"]
     item = ReviewItem(
@@ -256,7 +246,7 @@ def test_truncated_hidden_id_is_scrubbed(mission):
 
 
 def test_cluster_partial_hiding_is_surfaced(mission):
-    """M5: the partially-hidden cluster caveat reaches the entity list."""
+    """The entity list says when a cluster has members the reader cannot see."""
     ctx, seeded, cc = mission
     from curunir_operational.contracts import (ObjectVersion, ProvenanceSummary,
                                                RelationshipVersion)

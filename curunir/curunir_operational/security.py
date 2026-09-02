@@ -1,8 +1,7 @@
-"""Typed information-flow policy for the integrated Curunír record graph.
+"""Typed information-flow policy for the whole record graph.
 
-The policy is deliberately data-oriented: domain packages keep their public
-APIs, while one registry says which fields carry material in-store references.
-Both marking admission and authoritative control walks consume this registry.
+The policy is data, not code: one registry says which fields carry material
+references to other records. Marking admission and control walks both read it.
 """
 from __future__ import annotations
 
@@ -12,9 +11,9 @@ from typing import Any, Iterable, Mapping
 from .access import Marking, inherited_marking, marking_from_record
 
 
-# Record identity is explicit.  Actor, model, rule, and connector identifiers
-# remain authority/provenance labels; inference and proposal records are
-# included because downstream records can embed their retained outputs.
+# Record identity is explicit. Actor, model, rule and connector ids stay
+# provenance labels; inference and proposal records are here because a
+# downstream record can embed their retained output.
 PRIMARY_ID_FIELDS: dict[str, str] = {
     "external_ref": "external_id",
     "evidence_ref": "assertion_id",
@@ -114,8 +113,8 @@ KIND_ALIASES = {
 }
 
 
-# A field can name more than one compatible family where the historic schemas
-# reused a generic name.  Resolution includes every matching current record.
+# A generic field name can belong to more than one family; resolution then
+# includes every matching record.
 FIELD_KINDS: dict[str, tuple[str, ...]] = {
     "source_id": ("source",),
     "ingestion_id": ("ingestion",),
@@ -242,11 +241,9 @@ PER_RECORD_EXCLUSIONS = {
     ("analytic_forecast", "indicator_ids"),
 }
 
-# Identifier-shaped fields that are deliberately authority, provenance,
-# schema, external-namespace, or nested-component labels rather than material
-# in-store object references.  Keeping this explicit makes a newly introduced
-# ``*_id(s)``/``*_ref(s)`` field fail the policy-completeness test until it is
-# classified as material or deliberately non-material.
+# Identifier-shaped fields that are labels, not references to other records.
+# Listing them explicitly makes any new `*_id`/`*_ref` field fail the
+# policy-completeness test until someone classifies it.
 NON_MATERIAL_REFERENCE_FIELDS = frozenset({
     "actor_id", "case_id", "connector_id", "dependence_group_id",
     "dependence_group_ids", "external_id", "implementation_id",
@@ -291,7 +288,7 @@ def _strings(value: Any) -> Iterable[str]:
 
 
 def material_references(record: Mapping[str, Any]) -> tuple[MaterialReference, ...]:
-    """Return all typed material dependencies, including nested carriers."""
+    """Every typed reference the record carries, however deeply nested."""
     record_type = str(record.get("record_type", ""))
     found: set[MaterialReference] = set()
 
@@ -350,6 +347,15 @@ def _report_contains(record: Mapping[str, Any], record_id: str) -> bool:
     return False
 
 
+def _by_id(store: Any, record_type: str, id_field: str, base_id: str) -> list[dict]:
+    """Records of one family carrying one id, in log order."""
+    index = getattr(store, "_records_by_id", None)
+    if index is not None and PRIMARY_ID_FIELDS.get(record_type) == id_field:
+        return index.get(record_type, {}).get(base_id, [])
+    return [record for record in store.records_of(record_type)
+            if record.get(id_field) == base_id]
+
+
 def _latest(store: Any, record_type: str, id_field: str, record_id: str) -> dict | None:
     version: int | None = None
     base_id = record_id
@@ -359,9 +365,8 @@ def _latest(store: Any, record_type: str, id_field: str, record_id: str) -> dict
             base_id = candidate
             version = int(suffix)
     matches = [
-        record for record in store.records_of(record_type)
-        if record.get(id_field) == base_id
-        and (version is None or record.get("version") == version)
+        record for record in _by_id(store, record_type, id_field, base_id)
+        if version is None or record.get("version") == version
     ]
     if not matches and record_type == "workbench_report":
         matches = [
@@ -428,7 +433,8 @@ def previous_version(store: Any, record: Mapping[str, Any]) -> dict | None:
 
 
 def admit_marking(store: Any, record: Mapping[str, Any]) -> dict[str, Any]:
-    """Return a copy whose marking covers prior state and material refs."""
+    """Return a copy whose marking covers the prior version and every record
+    it references."""
     data = dict(record)
     raw_marking = data.get("marking")
     if not isinstance(raw_marking, Mapping):

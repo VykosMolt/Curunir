@@ -1,9 +1,6 @@
-"""Regression pins for the confirmatory review's two V6.6-blocking findings:
-the world-model entity integration carried a compartmented version's
-attributes/labels forward into a lower-marked version, and the in-line
-cross-scheme identity call (sibling of the sweep round 6 fixed) leaked the
-equivalence review item. Both on the launch_route path, in ordinary use.
-"""
+"""Marking inheritance in the world model: a hidden version's state must not
+resurface in a lower-marked one, and every derived record inherits the marking
+of what it describes."""
 from __future__ import annotations
 
 import hashlib
@@ -58,44 +55,40 @@ def _plant(pipeline, *, marking, body: bytes, native_id: str, source_id="gleif")
 
 
 def test_entity_merge_does_not_declassify_carried_forward_state(tmp_path):
-    """Finding 1: a compartmented entity version's other-name/attributes are
-    not re-materialized into a PUBLIC version by a later ordinary run."""
+    """A hidden entity version's names and attributes do not reappear in a later
+    PUBLIC version."""
     pipeline, ctx = make_workbench(tmp_path)
-    # step 1: a COMPARTMENTED acquisition creates the entity with a codeword
+    # A restricted acquisition creates the entity, carrying a codeword name.
     _plant(pipeline, marking=RESTRICTED_MARK,
            body=_gleif("NIGHTFALL Holding SPV", "Kompartmentgrad",
                        other="NIGHTFALL Holding SPV"),
            native_id=f"lei/{LEI}/special")
     pipeline.process_new_evidence()
-    # step 2: an ORDINARY PUBLIC acquisition updates the same entity
+    # An ordinary public acquisition then updates the same entity.
     _plant(pipeline, marking=MARK,
            body=_gleif("Public Registry Name", "Oslo"),
            native_id=f"lei/{LEI}/public")
     pipeline.process_new_evidence()
 
     view_b = MissionProjection(ctx.store, CTX_B)
-    # the merged-forward compartmented other-name never reaches the uncleared
-    # analyst — via the entity, its dossier, the entity list, or search
     blob = json.dumps([o for o in view_b.visible_objects()]) \
         + json.dumps(view_b.family("semantic_claim"))
     assert "NIGHTFALL" not in blob and "Kompartmentgrad" not in blob
-    # the entity object itself (current version) is not visible to B
     object_id = next((o["object_id"] for o in
                       MissionProjection(ctx.store, CTX_A).visible_objects()
                       if "NIGHTFALL" in json.dumps(o)), None)
-    assert object_id is not None  # A sees it
-    assert view_b.object_current(object_id) is None  # B does not
+    assert object_id is not None
+    assert view_b.object_current(object_id) is None
 
 
 def test_inline_identity_ambiguity_inherits_endpoint_markings(tmp_path):
-    """Finding 2: the in-line cross-scheme identity path marks its review item
-    with the join of both endpoints — an ordinary public route naming a
-    compartmented object's identifier does not leak the equivalence."""
+    """A cross-scheme identity match marks its review item with both endpoints, so
+    a public route naming a hidden object's identifier does not expose the match."""
     from curunir_operational.contracts import (ExternalRef, ObjectVersion,
                                                ProvenanceSummary)
     pipeline, ctx = make_workbench(tmp_path)
     now = ctx.now_fn
-    # a compartmented world object already carries the LEI as an external ref
+    # A hidden world object already carries the LEI as an external ref.
     from curunir_semantic.worldmodel import world_object_id
     special_id = world_object_id(f"LEI:{LEI}")
     ctx.store.append("OBJECT_VERSION_APPENDED", ObjectVersion(
@@ -109,9 +102,8 @@ def test_inline_identity_ambiguity_inherits_endpoint_markings(tmp_path):
         epistemic_state="REPORTED", marking=RESTRICTED_MARK,
         provenance=ProvenanceSummary(mode="OPERATIONAL")),
         recorded_time=now(), actor="t")
-    # an ordinary PUBLIC WIKIDATA page states the same LEI (P1278) for a
-    # DIFFERENT (QID) subject — this creates a distinct object and fires the
-    # IN-LINE cross-scheme identity match against the compartmented LEI object
+    # A public Wikidata page gives the same LEI for a different subject, which
+    # makes a second object and triggers the identity match against the hidden one.
     body = (b'{"entities": {"Q999": {"id": "Q999", '
             b'"labels": {"en": {"value": "Public Co"}}, '
             b'"claims": {"P1278": [{"mainsnak": {"datavalue": '
@@ -146,15 +138,14 @@ def _special_claim(ctx):
 
 
 def test_fa_claim_conflict_inherits_claim_marking(tmp_path):
-    """Confirmatory F-A: the DISPUTED state and CONTRADICTED review item about
-    a compartmented claim inherit the claim's marking, even when the
-    conflicting observation arrives on a PUBLIC integration pass."""
+    """A DISPUTED state and CONTRADICTED item about a hidden claim inherit that
+    claim's marking, even when the conflicting observation arrives publicly."""
     pipeline, ctx = make_workbench(tmp_path)
     from curunir_semantic.worldmodel import _record_claim_conflict
     claim = _special_claim(ctx)
     public_obs = {"observation_id": "obs-public", "source_id": "live-web",
                   "value": "Ola Public"}
-    _record_claim_conflict(pipeline.context(), claim, public_obs, {})  # PUBLIC ctx
+    _record_claim_conflict(pipeline.context(), claim, public_obs, {})  # public context
     view_b = MissionProjection(ctx.store, CTX_B)
     blob = json.dumps(view_b.family("review_item")) \
         + json.dumps(view_b.family("semantic_claim_state"))
@@ -163,21 +154,19 @@ def test_fa_claim_conflict_inherits_claim_marking(tmp_path):
 
 
 def test_fb_claim_standing_inherits_claim_marking(tmp_path):
-    """Confirmatory F-B: the standing reset/review record about a compartmented
-    claim inherits the claim's marking on a PUBLIC pass."""
+    """A standing reset about a hidden claim inherits that claim's marking."""
     pipeline, ctx = make_workbench(tmp_path)
     from curunir_semantic.contracts import ClaimStateRecord, SemanticClaim
     from curunir_semantic.worldmodel import _ensure_claim_standing
     claim = _special_claim(ctx)
-    # the compartmented conflict recorded a SPECIAL standing
+    # The earlier conflict recorded a restricted standing.
     ctx.store.append("SEMANTIC_CLAIM_STATE_RECORDED", ClaimStateRecord(
         state_id="cs-1", claim_id=claim["claim_id"], state="SUPERSEDED",
         reason="prior", caused_by="", superseded_by="", actor_id="t",
         actor_kind="SERVICE", recorded_time=ctx.now_fn(), marking=RESTRICTED_MARK),
         recorded_time=ctx.now_fn(), actor="t")
-    # REACHABLE-PATH REPRODUCTION: an ordinary public advance already appended a
-    # PUBLIC v2 of the claim, so current_claims() is PUBLIC — the fix must key
-    # off the prior STATE record's marking, not the claim version's
+    # A public pass has already appended a PUBLIC v2, so the marking has to come
+    # from the earlier state record, not from the current claim version.
     raw = ctx.store.current_claims()[claim["claim_id"]]
     ctx.store.append("SEMANTIC_CLAIM_RECORDED", SemanticClaim(**{
         **{k: v for k, v in raw.items() if k != "record_type"},
@@ -188,7 +177,6 @@ def test_fb_claim_standing_inherits_claim_marking(tmp_path):
     _ensure_claim_standing(pipeline.context(), claim["claim_id"], version=2,
                            new_value="Nils Publicsen", observation_id="obs-fresh")
     view_b = MissionProjection(ctx.store, CTX_B)
-    # the reset/standing record naming the compartmented standing is not visible
     assert not any(s["claim_id"] == claim["claim_id"]
                    for s in view_b.family("semantic_claim_state"))
     assert not [r for r in view_b.family("review_item")
@@ -196,9 +184,8 @@ def test_fb_claim_standing_inherits_claim_marking(tmp_path):
 
 
 def test_f2_stale_basis_inherits_claim_state_marking(tmp_path):
-    """Confirmatory F-2: a stale-basis item on a PUBLIC hypothesis whose
-    degraded claim has a SPECIAL standing inherits the state's marking — it
-    names that compartmented standing in its detail."""
+    """A stale-basis item names the standing that caused it, so it inherits that
+    standing's marking even when the hypothesis is public."""
     pipeline, ctx = make_workbench(tmp_path)
     from curunir_semantic.contracts import ClaimStateRecord
     from curunir_semantic.hypotheses import _queue_stale_basis

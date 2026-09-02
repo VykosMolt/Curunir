@@ -1,5 +1,5 @@
-"""Machine-readable answers to the fifteen mission questions, computed from
-system outputs (never hand-written narrative)."""
+"""Answers to the fifteen mission questions, computed from system outputs
+rather than written by hand."""
 from __future__ import annotations
 
 from typing import Any

@@ -1,4 +1,6 @@
-"""Regression locks for the second-round adversarial findings (N1–N14)."""
+"""More defects held shut: a model acceptance is bound to one object and spent
+once, a re-call cannot smuggle extra claims in, every merge and subtheme is
+recorded, and an imported event cannot overwrite a local version."""
 from __future__ import annotations
 
 import pytest
@@ -21,21 +23,13 @@ from curunir_semantic.contracts import ClaimStateRecord
 from curunir_semantic.worldmodel import world_object_id
 
 from analytic_support import (GLEIF_ACME, MARK, T0, make_analytic, plant_page,
-                              statement_page)
+                              seed_acme, statement_page)
 from semantic_support import plant_manifestation
 
 pytestmark = pytest.mark.no_db
 
 ACME_OBJECT = world_object_id("LEI:ACMELEI000000000001")
 NOW = "2026-08-17T12:00:00+00:00"
-
-
-def _seed(pipeline, ctx):
-    plant_manifestation(pipeline, source_id="gleif", native_id="lei/ACMELEI000000000001",
-                        body=GLEIF_ACME, media_type="application/json", retrieval_time=T0)
-    pipeline.process_new_evidence()
-    return {c["predicate"]: c["claim_id"] for c in ctx.store.current_claims().values()
-            if c["subject_ref"] == "LEI:ACMELEI000000000001"}
 
 
 def _accepted_theme_proposal(ctx, claim_id, title="Registry standing risk"):
@@ -54,7 +48,7 @@ def _accepted_theme_proposal(ctx, claim_id, title="Registry standing risk"):
 
 def test_n1_fold_path_is_not_a_model_side_door(tmp_path):
     pipeline, ctx = make_analytic(tmp_path)
-    by_predicate = _seed(pipeline, ctx)
+    by_predicate = seed_acme(pipeline, ctx)
     theme = create_theme(ctx, title="Acme standing",
                          supporting_claim_ids=[by_predicate["entity_status"]],
                          provenance_kind="ANALYST")
@@ -63,13 +57,13 @@ def test_n1_fold_path_is_not_a_model_side_door(tmp_path):
                      supporting_claim_ids=[by_predicate["legal_name"]],
                      provenance_kind="MODEL", inference_id="inf-fabricated",
                      proposal_id="")
-    # an analyst fold works and its provenance is on record
+    # An analyst may fold a claim in, and the record says who did.
     folded = create_theme(ctx, title="Acme standing",
                           supporting_claim_ids=[by_predicate["legal_name"]],
                           provenance_kind="ANALYST")
     assert by_predicate["legal_name"] in folded["basis"]["supporting_claim_ids"]
     assert "provenance ANALYST" in folded["change_reason"]
-    # narrative and assessment fold paths carry the same gate
+    # The narrative path is gated the same way.
     plant_page(pipeline, url="https://n.example.no/a",
                body=statement_page("Acme Industri plans to close its Oslo plant"),
                retrieval_time="2026-08-17T13:00:00+00:00")
@@ -86,32 +80,30 @@ def test_n1_fold_path_is_not_a_model_side_door(tmp_path):
 
 def test_n7_acceptance_is_bound_and_consumed(tmp_path):
     pipeline, ctx = make_analytic(tmp_path)
-    by_predicate = _seed(pipeline, ctx)
+    by_predicate = seed_acme(pipeline, ctx)
     resolved = _accepted_theme_proposal(ctx, by_predicate["entity_status"])
-    # (a) a different title than accepted is refused
+    # A different title than the one accepted.
     with pytest.raises(ValueError, match="differs from what the human accepted"):
         create_theme(ctx, title="An entirely different theme nobody accepted",
                      supporting_claim_ids=[by_predicate["entity_status"]],
                      provenance_kind="MODEL",
                      inference_id=resolved["inference_id"],
                      proposal_id=resolved["proposal_id"])
-    # (b) a different kind than accepted is refused
+    # A different kind of object than the one accepted.
     with pytest.raises(ValueError, match="not transferable across kinds"):
         create_narrative(ctx, statement="Registry standing risk statement here",
                          supporting_claim_ids=[by_predicate["entity_status"]],
                          provenance_kind="MODEL",
                          inference_id=resolved["inference_id"],
                          proposal_id=resolved["proposal_id"])
-    # (c) the faithful materialization works once…
+    # Exactly what was accepted goes through.
     theme = create_theme(ctx, title="Registry standing risk",
                          supporting_claim_ids=resolved["content"]["supporting_claim_ids"],
                          provenance_kind="MODEL",
                          inference_id=resolved["inference_id"],
                          proposal_id=resolved["proposal_id"])
     assert theme["authority"] == "SUPPORTED_INFERENCE"
-    # (d) an acceptance cannot be spent twice on different objects: two
-    # distinct impact paths (different edge sets, same bound fields) — the
-    # second is refused by consumption
+    # One acceptance cannot build two different paths.
     objective = create_objective(ctx, mission_context="m1", statement="o",
                                  depends_on=(("object", ACME_OBJECT),))
 
@@ -135,7 +127,6 @@ def test_n7_acceptance_is_bound_and_consumed(tmp_path):
                               input_refs=())
     resolved_2 = resolve_candidate(ctx, proposed["proposal"]["proposal_id"],
                                    accept=True, actor_id="jan", actor_kind="HUMAN")
-    # edges beyond the accepted chain are refused by the mandatory binding
     with pytest.raises(ValueError, match="differs from what the human accepted"):
         build_path(ctx, objective_id=objective["objective_id"],
                    summary="exposure via dependency",
@@ -149,8 +140,7 @@ def test_n7_acceptance_is_bound_and_consumed(tmp_path):
                       provenance_kind="MODEL",
                       inference_id=resolved_2["inference_id"],
                       proposal_id=resolved_2["proposal_id"])
-    # a faithful re-call completes the same object (crash recovery), and with
-    # every load-bearing field bound, no OTHER object can spend this acceptance
+    # Repeating the same call after a crash completes the same object.
     again = build_path(ctx, objective_id=objective["objective_id"],
                        summary="exposure via dependency",
                        edges=(accepted_edge,),
@@ -189,12 +179,12 @@ def test_n2_variant_recall_cannot_smuggle_claims(tmp_path):
                   provenance_kind="ANALYST")
     add_variant(ctx, narrative["narrative_id"], **kwargs)
     before = ctx.store.current_narratives()[narrative["narrative_id"]]
-    # a re-call with a smuggled claim set is refused, not folded
+    # An extra claim slipped into the repeat call is refused, not folded in.
     with pytest.raises(ValueError, match="different claim_ids"):
         add_variant(ctx, narrative["narrative_id"],
                     **{**kwargs, "claim_ids": (softer["claim_id"],
                                                unrelated["claim_id"])})
-    # a contract-invalid re-call is refused (validation always runs)
+    # The contract is checked on a repeat call too.
     with pytest.raises(ValueError, match="manifestations"):
         add_variant(ctx, narrative["narrative_id"],
                     **{**kwargs, "manifestation_ids": ()})
@@ -202,13 +192,12 @@ def test_n2_variant_recall_cannot_smuggle_claims(tmp_path):
     assert after["basis"]["supporting_claim_ids"] \
         == before["basis"]["supporting_claim_ids"]
     assert unrelated["claim_id"] not in after["basis"]["supporting_claim_ids"]
-    # a faithful re-call reconciles quietly
     add_variant(ctx, narrative["narrative_id"], **kwargs)
 
 
 def test_n3_n4_subthemes_and_merges_each_recorded(tmp_path):
     pipeline, ctx = make_analytic(tmp_path)
-    by_predicate = _seed(pipeline, ctx)
+    by_predicate = seed_acme(pipeline, ctx)
     parent = create_theme(ctx, title="Acme affairs",
                           supporting_claim_ids=[by_predicate["entity_status"]],
                           provenance_kind="RULE")
@@ -220,7 +209,7 @@ def test_n3_n4_subthemes_and_merges_each_recorded(tmp_path):
     subthemes = [t for t in ctx.store.transitions_for(parent["theme_id"])
                  if t["transition_type"] == "SUBTHEME_EMERGED"]
     assert len(subthemes) == 2, "every subtheme's emergence is recorded"
-    # two distinct merges into one survivor: both transitions recorded
+    # Two merges into the same survivor must leave two records, not one.
     a = create_theme(ctx, title="A", supporting_claim_ids=[by_predicate["entity_status"]],
                      provenance_kind="RULE")
     b = create_theme(ctx, title="B", supporting_claim_ids=[by_predicate["legal_name"]],
@@ -242,7 +231,7 @@ def test_n5_unrelated_change_does_not_refire_stale_finding(tmp_path):
     from curunir_semantic.changes import interpret_change
     from curunir_semantic.worldmodel import IntegrationContext
     pipeline, ctx = make_analytic(tmp_path)
-    by_predicate = _seed(pipeline, ctx)
+    by_predicate = seed_acme(pipeline, ctx)
     objective = create_objective(ctx, mission_context="m1", statement="o",
                                  depends_on=(("claim", by_predicate["entity_status"]),))
     edge = ImpactEdge(edge_id="e1", from_kind="claim",
@@ -263,7 +252,7 @@ def test_n5_unrelated_change_does_not_refire_stale_finding(tmp_path):
     stale_before = [t for t in ctx.store.transitions_for(path["path_id"])
                     if t["transition_type"] == "STALE"]
     alerts_before = len([a for a in ctx.store.records_of("alert")])
-    # an unrelated change (different attribute) arrives and propagation runs
+    # A change to a different attribute arrives, and propagation runs again.
     v1 = next(m for m in ctx.store.records_of("fabric_manifestation"))
     v2 = plant_manifestation(
         pipeline, source_id="gleif", native_id="lei/ACMELEI000000000001",
@@ -302,7 +291,7 @@ def test_n9_influence_basis_degradation_is_recorded(tmp_path):
     from curunir_semantic.changes import interpret_change
     from curunir_semantic.worldmodel import IntegrationContext
     pipeline, ctx = make_analytic(tmp_path)
-    by_predicate = _seed(pipeline, ctx)
+    by_predicate = seed_acme(pipeline, ctx)
     influence = assert_influence(
         ctx, source_object_id=ACME_OBJECT,
         target_object_id=world_object_id("LEI:OTHERLEI00000000002"),
@@ -333,7 +322,7 @@ def test_n9_influence_basis_degradation_is_recorded(tmp_path):
 
 def test_n10_attribution_bypasses_closed(tmp_path):
     pipeline, ctx = make_analytic(tmp_path)
-    by_predicate = _seed(pipeline, ctx)
+    by_predicate = seed_acme(pipeline, ctx)
     plant_page(pipeline, url="https://tredjepart.example.org/kommentar",
                body=statement_page("Acme is ruining the market says a critic"),
                retrieval_time="2026-08-17T13:00:00+00:00")
@@ -345,13 +334,13 @@ def test_n10_attribution_bypasses_closed(tmp_path):
         statement="Acme is ruining the market", stance="UNRESOLVED",
         authority="OBSERVED", claim_ids=(critic_claim,), relationship_ids=(),
         valid_from=None, valid_to=None, superseded=False, note="")
-    # (a) creation is not a bypass: the same guard runs on provided positions
+    # Creating an assessment with the position is checked like adding one.
     with pytest.raises(ValueError, match="attributable"):
         create_assessment(ctx, entity_object_id=ACME_OBJECT, context_kind="ISSUE",
                           context_id="market", role_in_context="party",
                           positions=(hostile,),
                           supporting_claim_ids=[by_predicate["entity_status"]])
-    # (b) a non-control relation (CONFLICTS_WITH) does not confer attribution
+    # Conflicting with a site does not make its words yours.
     from curunir_operational.contracts import (EvidenceRef, ProvenanceSummary,
                                                RelationshipVersion)
     site_object = world_object_id("URL:https://tredjepart.example.org/kommentar")
@@ -382,7 +371,7 @@ def test_n10_attribution_bypasses_closed(tmp_path):
         supporting_claim_ids=[by_predicate["entity_status"]])
     with pytest.raises(ValueError, match="attributable"):
         add_position(ctx, assessment["assessment_id"], hostile, caused_by="t")
-    # (c) a RETIRED control relation does not confer attribution
+    # Having once operated the site does not make its words yours now.
     operates_retired = RelationshipVersion(
         relationship_id="rel-op", version=1, relation_type="OPERATES",
         source_object_id=ACME_OBJECT, target_object_id=site_object,
@@ -403,8 +392,7 @@ def test_n10_attribution_bypasses_closed(tmp_path):
                      recorded_time=retired.recorded_time, actor="t")
     with pytest.raises(ValueError, match="attributable"):
         add_position(ctx, assessment["assessment_id"], hostile, caused_by="t")
-    # (e) padding an inferred interest's claims with a filler does not mint
-    # an observed public position
+    # Padding an inferred interest with an extra claim does not make it stated.
     interest = StakeholderPosition(
         position_id="int-1", kind="INFERRED_INTEREST", statement="interest",
         stance="UNRESOLVED", authority="SUPPORTED_INFERENCE",
@@ -423,7 +411,7 @@ def test_n10_attribution_bypasses_closed(tmp_path):
 
 def test_n11_second_discovered_role_is_kept(tmp_path):
     pipeline, ctx = make_analytic(tmp_path)
-    by_predicate = _seed(pipeline, ctx)
+    by_predicate = seed_acme(pipeline, ctx)
 
     def _role(position_id, statement, claim):
         return StakeholderPosition(
@@ -442,7 +430,6 @@ def test_n11_second_discovered_role_is_kept(tmp_path):
         positions=(_role("role-2", "operates Y", "legal_name"),))
     ids = {p["position_id"] for p in second["positions"]}
     assert ids == {"role-1", "role-2"}, "a second discovered role is folded, not dropped"
-    # and a phantom evidence id can found no position at all
     with pytest.raises(ValueError, match="phantom"):
         create_assessment(
             ctx, entity_object_id=ACME_OBJECT, context_kind="MISSION",
@@ -468,11 +455,11 @@ def test_n12_pre_extension_basis_replays(tmp_path):
 
 def test_n13_import_cannot_shadow_versions(tmp_path):
     pipeline, ctx = make_analytic(tmp_path)
-    by_predicate = _seed(pipeline, ctx)
+    by_predicate = seed_acme(pipeline, ctx)
     theme = create_theme(ctx, title="Acme standing",
                          supporting_claim_ids=[by_predicate["entity_status"]],
                          provenance_kind="RULE")
-    # forge an imported event carrying the SAME version as local current
+    # Forge an incoming event that reuses the version already held locally.
     head = ctx.store.head()
     from curunir_operational.store import _entry_hash
     record = {**ctx.store.current_themes()[theme["theme_id"]]}
@@ -491,7 +478,7 @@ def test_n13_import_cannot_shadow_versions(tmp_path):
 
 def test_n14_claim_endpoints_are_indexed(tmp_path):
     pipeline, ctx = make_analytic(tmp_path)
-    by_predicate = _seed(pipeline, ctx)
+    by_predicate = seed_acme(pipeline, ctx)
     objective = create_objective(ctx, mission_context="m1", statement="o",
                                  depends_on=(("claim", by_predicate["entity_status"]),))
     edge = ImpactEdge(edge_id="e1", from_kind="claim",

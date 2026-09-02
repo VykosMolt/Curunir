@@ -1,16 +1,12 @@
-"""Collaborative annotations and dissent over canonical mission objects.
+"""Annotations and dissent attached to canonical mission records.
 
-An annotation binds to an existing record the author can see; dissent never
-overwrites the assessment it disagrees with, and resolution keeps the note.
-Strict next-version enforcement in the store surfaces concurrent edits as
-conflicts instead of losing an analyst's update.
+An annotation binds to a record its author can see. Dissent never overwrites
+what it disagrees with, and resolving it keeps the note.
 """
 from __future__ import annotations
 
 from argus.source_intelligence.models import digest_id
-from curunir_operational.access import Marking
-
-from curunir_operational.access import marking_from_record
+from curunir_operational.access import Marking, marking_from_record
 
 from .contracts import AnnotationRecord
 from .errors import NotFound
@@ -26,14 +22,12 @@ def create_annotation(store: WorkbenchStore, projection: MissionProjection, *,
                       actor: str, marking: Marking, now: str,
                       target_kind: str, target_id: str, kind: str, text: str,
                       reply_to: str = "", anchor_ref: str = "") -> dict:
-    """The target must exist and be visible to the author — annotating hidden
-    or imaginary state is refused (unknown and forbidden indistinguishable)."""
+    """Attach a note to a record the author can see; anything else is unknown."""
     if not _target_visible(projection, target_kind, target_id):
         raise NotFound(f"unknown target: {target_kind}/{target_id}")
     if reply_to and projection.get("workbench_annotation", reply_to) is None:
-        # gate on the AUTHOR's view: replying into a thread they cannot see is
-        # refused identically to a nonexistent parent (no existence oracle,
-        # no writing into a compartmented discussion)
+        # Judge by the author's view: a parent they cannot see is refused
+        # exactly like one that does not exist.
         raise NotFound(f"unknown parent annotation: {reply_to}")
     record = AnnotationRecord(
         annotation_id=digest_id("annotation", actor, target_kind, target_id, now, text[:64]),
@@ -59,10 +53,8 @@ def resolve_annotation(store: WorkbenchStore, annotation_id: str, *, actor: str,
     if status == "WITHDRAWN" and actor != current["author"]:
         raise PermissionError("only the author may withdraw an annotation")
     if current["kind"] == "DISSENT" and actor != current["author"]:
-        # dissent blocks approvals; letting the blocked party resolve it
-        # would let an approver clear their own path. Only the dissenting
-        # analyst closes their dissent — approvers carry it visibly instead
-        # (APPROVED_WITH_DISSENT).
+        # Dissent blocks approval, so only its author may close it; otherwise
+        # an approver could clear their own path. Approvers carry it visibly.
         raise PermissionError("only the dissenting author may resolve their "
                               "dissent; approve with acknowledge_dissent to "
                               "carry it visibly")
@@ -72,7 +64,7 @@ def resolve_annotation(store: WorkbenchStore, annotation_id: str, *, actor: str,
         kind=current["kind"], text=current["text"], status=status,
         resolution_note=note, reply_to=current.get("reply_to", ""),
         anchor_ref=current.get("anchor_ref", ""), recorded_time=now,
-        # a resolution never re-classifies the annotation
+        # Resolving never re-marks the annotation.
         marking=marking_from_record(current["marking"]),
         version=current["version"] + 1)
     try:
@@ -84,7 +76,7 @@ def resolve_annotation(store: WorkbenchStore, annotation_id: str, *, actor: str,
     return event["record"]
 
 
-# operational base-view families: target kind -> (view key, id field)
+# target kind -> (base-view key, id field)
 _BASE_VIEW_TARGETS = {
     "relationship": ("relationships", "relationship_id"),
     "alert": ("alerts", "alert_id"),
@@ -97,9 +89,9 @@ _BASE_VIEW_TARGETS = {
 
 def target_marking(projection: MissionProjection, target_kind: str,
                    target_id: str):
-    """The marking of the record an annotation binds to, or None when the
-    target family is unmarked (registry metadata) or unresolvable. Resolution
-    is by the target's declared KIND, never by an id search across families."""
+    """The marking of the annotated record, or None if it carries none or is
+    unresolvable. The declared kind decides where to look; ids are never
+    searched across families."""
     if target_kind == "object":
         record = projection.object_current(target_id)
         return record.get("marking") if record else None
@@ -116,8 +108,8 @@ def target_marking(projection: MissionProjection, target_kind: str,
                     return report.get("marking")
         return None
     if target_kind == "evidence_anchor":
-        # an anchor is embedded in an observation; it inherits the marking of
-        # the manifestation it addresses (target_id is that manifestation id)
+        # An anchor lives inside an observation and takes the marking of the
+        # manifestation it points at, which is what target_id names.
         manifestation = projection.get("fabric_manifestation", target_id)
         return manifestation.get("marking") if manifestation else None
     try:
@@ -152,8 +144,8 @@ def _target_visible(projection: MissionProjection, target_kind: str,
                     return True
         return False
     if target_kind == "evidence_anchor":
-        # an anchor is addressed by the manifestation it belongs to; visible
-        # iff a visible observation carries an anchor into that manifestation
+        # An anchor is visible when a visible observation points into that
+        # manifestation.
         return any(a.get("manifestation_id") == target_id
                    for o in projection.family("semantic_observation")
                    for a in o.get("anchors", ()))

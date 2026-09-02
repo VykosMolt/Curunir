@@ -1,4 +1,6 @@
-"""Historical V6.7 egress/resource exploits, grouped by invariant class."""
+"""Egress and resource limits: nothing restricted leaves through a provider,
+the transport only reaches addresses it has already checked, and a source error
+is never mistaken for an empty answer."""
 from __future__ import annotations
 
 import hashlib

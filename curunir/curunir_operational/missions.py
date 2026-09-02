@@ -1,17 +1,15 @@
 """Information requirements, evidence requests and analyst tasks.
 
-The auditable mission workflow: Alert → Information Requirement → Analyst Task
-or Evidence Request → New Evidence or Explicit Failure → Requirement Closure or
-Continued Unknown. Guards enforced here: only a HUMAN actor can move a
-requirement to ANSWERED or CLOSED_UNANSWERED (a model-generated answer cannot
-close a requirement), answering requires evidence references, explicit failure
-requires a stated reason, and every transition is a recorded event.
+An alert raises a requirement, which produces a task or an evidence request,
+which ends in new evidence, a stated failure, or a continued unknown. Only a
+human can answer or close a requirement, answering needs evidence references,
+a failure needs a reason, and every transition is a recorded event.
 """
 from __future__ import annotations
 
 from typing import Any, Mapping
 
-from .access import AccessContext, Marking, marking_from_record
+from .access import Marking, marking_from_record
 from .canonical import digest_id
 from .contracts import (REQUIREMENT_PRIORITIES, AnalystTask, EvidenceRequest,
                         InformationRequirement, WorkflowTransition)
@@ -43,20 +41,16 @@ class MissionWorkflow:
         self.store = store
 
     def _status_of(self, subject_kind: str, subject_id: str) -> tuple[str, Mapping[str, Any]]:
-        key = {"requirement": ("information_requirement", "requirement_id"),
-               "analyst_task": ("analyst_task", "task_id"),
-               "evidence_request": ("evidence_request", "request_id")}[subject_kind]
-        record = None
-        for row in self.store.records_of(key[0]):
-            if row[key[1]] == subject_id:
-                record = row
+        record_type, id_field = {"requirement": ("information_requirement", "requirement_id"),
+                                 "analyst_task": ("analyst_task", "task_id"),
+                                 "evidence_request": ("evidence_request", "request_id")}[subject_kind]
+        record = next((row for row in reversed(self.store.records_of(record_type))
+                       if row[id_field] == subject_id), None)
         if record is None:
             raise MissionWorkflowError(f"unknown {subject_kind}: {subject_id}")
-        status = record["status"]
-        for transition in self.store.records_of("workflow_transition"):
-            if transition["subject_kind"] == subject_kind and transition["subject_id"] == subject_id:
-                status = transition["to_status"]
-        return status, record
+        latest = next((t for t in reversed(self.store.records_of("workflow_transition"))
+                       if t["subject_kind"] == subject_kind and t["subject_id"] == subject_id), None)
+        return (latest["to_status"] if latest else record["status"]), record
 
     def open_requirement(self, *, mission_context: str, question: str, affected_ids: tuple[str, ...],
                          priority: str, rationale: str, required_evidence_type: str, owning_role: str,
@@ -75,9 +69,8 @@ class MissionWorkflow:
             if existing["requirement_id"] == requirement.requirement_id:
                 latest = existing
         if latest is not None:
-            # fold, don't discard: a later caller may escalate priority or
-            # widen the affected set — an existing requirement must not
-            # silently swallow that epistemic state
+            # Fold rather than discard: a later caller may raise the priority
+            # or widen the affected set, and that must not be swallowed.
             rank = {p: i for i, p in enumerate(REQUIREMENT_PRIORITIES)}
             merged_priority = latest["priority"] \
                 if rank[latest["priority"]] >= rank[priority] else priority
@@ -90,8 +83,8 @@ class MissionWorkflow:
                 **{**{k: v for k, v in latest.items() if k != "record_type"},
                    "priority": merged_priority, "affected_ids": merged_affected,
                    "version": latest.get("version", 1) + 1,
-                   # a fold escalates priority / widens scope; it never
-                   # re-classifies: the record keeps its own marking
+                   # Carry the existing marking forward; admit_marking then
+                   # lifts it to cover any newly named id.
                    "marking": marking_from_record(latest["marking"])})
             event = self.store.append("REQUIREMENT_RECORDED", updated,
                                       recorded_time=recorded_time, actor=actor)
@@ -104,7 +97,7 @@ class MissionWorkflow:
     def request_evidence(self, requirement_id: str, *, request_kind: str, detail: str,
                          affected_ids: tuple[str, ...], due_time: str | None,
                          recorded_time: str, marking: Marking, actor: str) -> dict[str, Any]:
-        self._status_of("requirement", requirement_id)  # must exist
+        self._status_of("requirement", requirement_id)  # refuse an unknown requirement
         request = EvidenceRequest(
             request_id=digest_id("evreq", requirement_id, request_kind, detail),
             requirement_id=requirement_id, request_kind=request_kind, detail=detail,
@@ -159,9 +152,18 @@ class MissionWorkflow:
             actor_id=actor_id, actor_kind=actor_kind, evidence_refs=tuple(evidence_refs), note=note,
             recorded_time=recorded_time, marking=marking,
         )
+
+        def _still_at(store: MissionDataStore) -> None:
+            # Another writer may have moved the subject since _status_of read it.
+            latest, _ = MissionWorkflow(store)._status_of(subject_kind, subject_id)
+            if latest != current:
+                raise MissionWorkflowError(
+                    f"{subject_kind} {subject_id} moved to {latest} while this "
+                    f"transition to {to_status} was being prepared")
+
         event = self.store.append(
             "WORKFLOW_TRANSITIONED", transition,
-            recorded_time=recorded_time, actor=actor_id)
+            recorded_time=recorded_time, actor=actor_id, condition=_still_at)
         return event["record"]
 
     def audit_trail(self, subject_kind: str, subject_id: str) -> list[dict[str, Any]]:

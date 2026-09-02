@@ -1,9 +1,6 @@
-"""V6.7 historical cryptographic-identity HTTP exploit corpus.
-
-Challenge → sign → authenticate → sign a load-bearing action → apply, all over
-HTTP. The client only proves possession of its key; the server resolves the
-actor's authority itself. A forged signature is refused.
-"""
+"""Cryptographic identity over HTTP: challenge, sign, authenticate, then sign a
+real action and apply it. The client only proves it holds the key; the server
+works out what that actor may do. Malformed input never becomes a 500."""
 from __future__ import annotations
 
 import hashlib
@@ -88,7 +85,7 @@ def _build(tmp_path):
          "basis_refs": [claim["claim_id"]]}]}]
     report = commands.create_report(ctx, title="R", question="?", sections=sections)
     submitted = commands.submit_report(ctx, report["report_id"], expected_version=1)
-    # enroll analyst-b's key (deployment/admin op, not an HTTP action)
+    # Enrol analyst-b's key directly; enrolment is an admin step, not an action.
     pem_b, pub_b = generate_keypair()
     KeyRegistry(store, marking=MARK, now_fn=clock.now).enroll(
         actor_id="analyst-b", actor_kind="HUMAN", public_key_hex=pub_b)
@@ -100,10 +97,10 @@ def test_http_challenge_authenticate_and_signed_approval(tmp_path):
     app = create_app(root, actors_path, now_fn=clock.now)
     client = TestClient(app)
 
-    # 1. challenge
+    # Ask for a challenge.
     ch = client.post("/api/auth/challenge", json={"actor_id": "analyst-b"}, headers={"Authorization": "Bearer tok-b"}).json()
     assert ch["nonce"]
-    # 2. the client signs the challenge with its private key
+    # Sign it with the private key.
     from curunir_identity.sessions import SessionManager
     challenge_payload = SessionManager.challenge_payload("analyst-b", ch["nonce"])
     auth = client.post("/api/auth/authenticate", json={
@@ -112,7 +109,7 @@ def test_http_challenge_authenticate_and_signed_approval(tmp_path):
     assert auth.status_code == 200, auth.text
     session_id = auth.json()["session_id"]
 
-    # 3. the client signs the approval, bound to the report version, and applies
+    # Sign the approval, bound to this report version, and apply it.
     signed = sign_action(pem_b, actor_id="analyst-b", actor_kind="HUMAN",
                          action_type="approve_report", target_kind="workbench_report",
                          target_id=report_id,
@@ -121,13 +118,11 @@ def test_http_challenge_authenticate_and_signed_approval(tmp_path):
                          command={"disposition": "APPROVED", "note": "sound"})
     resp = client.post(f"/api/commands/reports/{report_id}/approve-signed", json={
         "session_id": session_id, "payload": signed["payload"],
-        # This compatibility field is deliberately wrong and unsigned.  The
-        # server derives authority only from the signed target_version_token.
+        # Deliberately wrong and unsigned: only the signed token counts.
         "signature": signed["signature"], "expected_version": version + 99})
     assert resp.status_code == 200, resp.text
     assert resp.json()["status"] == "APPROVED"
 
-    # a forged signature is refused (401)
     ch2 = client.post("/api/auth/challenge", json={"actor_id": "analyst-b"}, headers={"Authorization": "Bearer tok-b"}).json()
     forged = client.post("/api/auth/authenticate", json={
         "actor_id": "analyst-b", "nonce": ch2["nonce"], "signature": "00" * 64})
@@ -144,41 +139,38 @@ def _challenge_auth(client, actor_id, pem, token):
 
 
 def test_enroll_refuses_cross_actor_key_hijack(tmp_path):
-    # review F1 (CRITICAL): a bearer holder must NOT be able to enrol / hijack a
-    # key already owned by another actor by resubmitting that actor's PUBLIC key.
+    """Re-submitting someone else's public key does not take their key over."""
     root, actors_path, clock, report_id, version, pem_b = _build(tmp_path)
     client = TestClient(create_app(root, actors_path, now_fn=clock.now))
     reg = KeyRegistry(WorkbenchStore(root / "store"))
     pub_b = reg.active_keys_for("analyst-b")[0]["public_key"]
     key_id_b = reg.active_keys_for("analyst-b")[0]["key_id"]
 
-    # analyst-a submits analyst-b's public key → refused, no cross-actor effect
     r = client.post("/api/auth/enroll", json={"public_key_hex": pub_b},
                     headers={"Authorization": "Bearer tok-a"})
     assert r.status_code == 409, r.text
 
     reg2 = KeyRegistry(WorkbenchStore(root / "store"))
-    assert reg2.current(key_id_b)["actor_id"] == "analyst-b"      # still owned by b
-    assert reg2.current(key_id_b)["status"] == "ACTIVE"           # not retired
-    assert _challenge_auth(client, "analyst-b", pem_b, "tok-b").status_code == 200  # b still signs
+    assert reg2.current(key_id_b)["actor_id"] == "analyst-b"
+    assert reg2.current(key_id_b)["status"] == "ACTIVE"
+    assert _challenge_auth(client, "analyst-b", pem_b, "tok-b").status_code == 200
 
 
 def test_two_device_keys_for_one_actor_both_authenticate(tmp_path):
-    # review F2 (MAJOR): a second enrolled device must not brick the first.
+    """Enrolling a second device does not lock out the first."""
     root, actors_path, clock, report_id, version, pem_b = _build(tmp_path)
     client = TestClient(create_app(root, actors_path, now_fn=clock.now))
     pem2, pub2 = generate_keypair()
     r = client.post("/api/auth/enroll", json={"public_key_hex": pub2},
                     headers={"Authorization": "Bearer tok-b"})
     assert r.status_code == 200, r.text
-    # both device keys authenticate; neither locks the other out
     assert _challenge_auth(client, "analyst-b", pem_b, "tok-b").status_code == 200
     assert _challenge_auth(client, "analyst-b", pem2, "tok-b").status_code == 200
-    assert _challenge_auth(client, "analyst-b", pem_b, "tok-b").status_code == 200  # first still live
+    assert _challenge_auth(client, "analyst-b", pem_b, "tok-b").status_code == 200
 
 
 def test_challenge_requires_a_bearer(tmp_path):
-    # review F5: the challenge endpoint is no longer an anonymous, unbounded path
+    """The challenge endpoint is not an anonymous, unbounded path."""
     root, actors_path, clock, report_id, version, pem_b = _build(tmp_path)
     client = TestClient(create_app(root, actors_path, now_fn=clock.now))
     assert client.post("/api/auth/challenge", json={"actor_id": "analyst-b"}).status_code == 401
@@ -186,55 +178,53 @@ def test_challenge_requires_a_bearer(tmp_path):
 
 
 def test_ascii_escaped_surrogate_body_yields_422_not_500(tmp_path):
-    # review NEW-1: the JSON-body vector is NOT shut at the transport (the earlier
-    # F-W1 premise was wrong). JSON "\uD800" is PURE ASCII on the wire — a
-    # browser's well-formed JSON.stringify emits exactly this — json.loads
-    # restores the lone surrogate, and FastAPI's default 422 handler would echo it
-    # into a response whose UTF-8 render 500s. Unauthenticated, on every POST.
-    # The custom validation handler must scrub it to an honest 422, never a 500.
+    """A body whose escaped \\ud800 decodes to a lone surrogate is a 422.
+
+    The escape is plain ASCII on the wire, so nothing rejects it earlier; the
+    validation handler has to scrub it before it reaches the response.
+    """
     root, actors_path, clock, report_id, version, pem_b = _build(tmp_path)
     client = TestClient(create_app(root, actors_path, now_fn=clock.now),
                         raise_server_exceptions=False)
-    for path in ("/api/auth/challenge", "/api/auth/authenticate"):   # required-field models
-        r = client.post(path, content=b'{"z":"\\ud800"}',           # 14 ASCII bytes, NO auth
+    for path in ("/api/auth/challenge", "/api/auth/authenticate"):
+        r = client.post(path, content=b'{"z":"\\ud800"}',  # ASCII bytes, no auth
                         headers={"Content-Type": "application/json"})
-        assert r.status_code == 422, f"{path} -> {r.status_code}: surrogate echo 500?"
+        assert r.status_code == 422, f"{path} -> {r.status_code}"
 
 
 def test_render_safe_neutralizes_a_surrogate_reaching_the_response(tmp_path):
-    # review F-W1 (defense in depth): should a lone surrogate reach a render
-    # string from STORED data or a non-body channel, render_safe replaces it so
-    # building the HTTP response cannot 500 at Starlette's UTF-8 encode. Exercise
-    # the ACTUAL server helper, and prove its output survives a real UTF-8 encode.
+    """render_safe replaces a lone surrogate, so encoding the response cannot
+    fail however the surrogate reached the string."""
     from curunir_workbench.server import render_safe
     out = render_safe("unknown target ghost\ud800 tail")
     assert "\ud800" not in out
-    assert out.encode("utf-8") == out.encode("utf-8", "strict")  # no longer raises
-    assert render_safe(ValueError("bad id \udfff")).encode("utf-8")  # error path too
+    assert out.encode("utf-8") == out.encode("utf-8", "strict")
+    assert render_safe(ValueError("bad id \udfff")).encode("utf-8")
 
 
 def test_non_ascii_bearer_token_fails_closed_not_typeerror(tmp_path):
-    # review NEW-4 (fix site): Starlette decodes the Authorization header as
-    # latin-1, so a bearer token can carry a byte >= 0x80; secrets.compare_digest
-    # RAISES TypeError on a non-ASCII str. context_for must fail closed with an
-    # AuthError (-> 401), never let a TypeError escape to an unauthenticated 500.
+    """A bearer token with a non-ASCII character raises AuthError.
+
+    Headers arrive decoded as latin-1, and compare_digest raises TypeError on a
+    non-ASCII string, so the check has to refuse before it gets there.
+    """
     from curunir_workbench.auth import AuthError
     actors = tmp_path / "actors.json"
     write_registry(actors, [{"token": "tok-a", "actor_id": "a", "roles": ["ANALYST"],
                              "releasability": ["PUBLIC"], "organisation": "m"}])
     reg = ActorRegistry(actors)
-    assert reg.context_for("tok-a").actor_id == "a"           # ascii control still works
-    for bad in ("caf\xe9", "\xff", "tok\x80abc"):             # latin-1 header bytes >= 0x80
+    assert reg.context_for("tok-a").actor_id == "a"  # an ASCII token still works
+    for bad in ("caf\xe9", "\xff", "tok\x80abc"):
         with pytest.raises(AuthError):
             reg.context_for(bad)
 
 
 def test_non_ascii_bearer_over_http_is_401_not_500(tmp_path):
-    # review NEW-4 (end to end): the same over the wire, unauthenticated, must be
-    # a clean 401, never a 500 + per-request stack trace on the whole API surface.
-    # httpx (the TestClient's client) refuses to ENCODE a non-ASCII header, so
-    # drive the ASGI app directly with the raw latin-1 header bytes uvicorn would
-    # hand Starlette in production (the reviewer's exact repro).
+    """The same token over the wire is a clean 401.
+
+    The test client refuses to encode a non-ASCII header, so the app is driven
+    directly with the raw bytes a server would hand it.
+    """
     import asyncio
     root, actors_path, clock, report_id, version, pem_b = _build(tmp_path)
     app = create_app(root, actors_path, now_fn=clock.now)
@@ -252,27 +242,24 @@ def test_non_ascii_bearer_over_http_is_401_not_500(tmp_path):
 
 
 def test_non_utf8_and_nan_bodies_yield_422_not_500(tmp_path):
-    # review NEW-A / NEW-B: the validation-error echo must not 500 the whole POST
-    # surface, unauthenticated, on a non-UTF-8 body (jsonable_encoder's bytes
-    # decode raised first) or a NaN/Infinity float (Starlette renders allow_nan=
-    # False). Both must be honest 422s.
+    """A body that is not UTF-8, and one holding NaN, are both plain 422s."""
     root, actors_path, clock, report_id, version, pem_b = _build(tmp_path)
     client = TestClient(create_app(root, actors_path, now_fn=clock.now),
                         raise_server_exceptions=False)
     for path in ("/api/auth/challenge", "/api/auth/authenticate"):
-        a = client.post(path, content=b"\xff",                       # NEW-A: non-UTF-8, no auth
+        a = client.post(path, content=b"\xff",  # not UTF-8, and unauthenticated
                         headers={"Content-Type": "text/plain"})
-        assert a.status_code == 422, f"NEW-A {path} -> {a.status_code}"
-        b = client.post(path, content=b'{"zz":NaN}',                 # NEW-B: non-finite, no auth
+        assert a.status_code == 422, f"{path} -> {a.status_code}"
+        b = client.post(path, content=b'{"zz":NaN}',  # a non-finite float
                         headers={"Content-Type": "application/json"})
-        assert b.status_code == 422, f"NEW-B {path} -> {b.status_code}"
+        assert b.status_code == 422, f"{path} -> {b.status_code}"
 
 
 def test_non_finite_float_saved_view_is_refused_not_committed(tmp_path):
-    # review NEW-C (store sink): a non-finite float would serialize to a bare
-    # non-RFC-8259 NaN token and poison the append-only log. canonical_line now
-    # REFUSES it, so an authenticated ANALYST gets an honest 400 and NOTHING is
-    # committed (no poisoned projection, no non-standard JSON in the chain).
+    """A NaN in a saved view is a 400 and nothing reaches the log.
+
+    A bare NaN token is not valid JSON, so it must never enter the chain.
+    """
     root, actors_path, clock, report_id, version, pem_b = _build(tmp_path)
     client = TestClient(create_app(root, actors_path, now_fn=clock.now),
                         raise_server_exceptions=False)
@@ -282,16 +269,16 @@ def test_non_finite_float_saved_view_is_refused_not_committed(tmp_path):
                             b'"definition":{"zoom":NaN},"compartments":[]}',
                     headers={"Authorization": "Bearer tok-a",
                              "Content-Type": "application/json"})
-    assert r.status_code == 400, r.text                              # honest rejection, not 500
-    assert WorkbenchStore(root / "store").head()["head_hash"] == head_before  # nothing written
+    assert r.status_code == 400, r.text
+    assert WorkbenchStore(root / "store").head()["head_hash"] == head_before
 
 
 def test_signed_payload_with_non_finite_is_refused_not_recorded(tmp_path):
-    # review NEW-C (signing sink): a signed_payload carrying a non-finite float
-    # must not become a non-repudiation record. The server canonicalizes the
-    # received payload to verify the signature; canonical_line now raises on the
-    # NaN, verify() catches it as a bad signature -> 401. No non-RFC-8259 bytes
-    # can enter a SIGNED_ACTION_RECORDED event.
+    """A signed payload holding a NaN cannot become a signed-action record.
+
+    Canonicalizing it to check the signature raises, which reads as an
+    unverifiable signature.
+    """
     import json as _json
     from curunir_identity.sessions import SessionManager
     root, actors_path, clock, report_id, version, pem_b = _build(tmp_path)
@@ -312,26 +299,25 @@ def test_signed_payload_with_non_finite_is_refused_not_recorded(tmp_path):
                                 version, MISSION, clock.now())).encode()
     r = client.post(f"/api/commands/reports/{report_id}/approve-signed",
                     content=body, headers={"Content-Type": "application/json"})
-    assert r.status_code == 401, r.text                              # unverifiable, never a poisoned 200
+    assert r.status_code == 401, r.text
     store = WorkbenchStore(root / "store")
     signed = [e for e in store.records_of("signed_action")] if "signed_action" in store.EVENT_TYPES.values() else []
-    assert all("NaN" not in _json.dumps(e) for e in signed)         # no non-finite in any signed record
+    assert all("NaN" not in _json.dumps(e) for e in signed)
 
 
 def test_malformed_report_section_is_400_not_500(tmp_path):
-    # review MINOR-2: report `sections` is free-form list[dict[str,Any]]; a wrong
-    # scalar type must be an honest 400 for an authenticated ANALYST, not a 500
-    # from a later .strip()/.replace()/list() on the wrong type.
+    """Report sections are free-form, so a wrong field type is a 400 rather than
+    an error later on, deeper in the code."""
     root, actors_path, clock, report_id, version, pem_b = _build(tmp_path)
     client = TestClient(create_app(root, actors_path, now_fn=clock.now),
                         raise_server_exceptions=False)
     bad = [
-        [{"kind": "key_judgments", "title": 5, "sentences": []}],                       # numeric title
-        [{"kind": "key_judgments", "title": "T", "sentences": 7}],                       # sentences not a list
+        [{"kind": "key_judgments", "title": 5, "sentences": []}],  # a numeric title
+        [{"kind": "key_judgments", "title": "T", "sentences": 7}],  # sentences is not a list
         [{"kind": "key_judgments", "title": "T",
-          "sentences": [{"text": "x", "status": "SUPPORTED", "basis_refs": "no"}]}],     # basis_refs not a list
+          "sentences": [{"text": "x", "status": "SUPPORTED", "basis_refs": "no"}]}],  # basis_refs is not a list
         [{"kind": "key_judgments", "title": "T",
-          "sentences": [{"text": 9, "status": "SUPPORTED"}]}],                           # numeric text
+          "sentences": [{"text": 9, "status": "SUPPORTED"}]}],  # numeric sentence text
     ]
     for sections in bad:
         r = client.post("/api/commands/reports",
@@ -341,9 +327,8 @@ def test_malformed_report_section_is_400_not_500(tmp_path):
 
 
 def test_report_edit_with_surrogate_is_400_not_409(tmp_path):
-    # review MINOR-1: reports.py _next_version caught bare ValueError -> 409; a
-    # malformed-CONTENT error (a lone surrogate canonical_line refuses) must be a
-    # 400, not mislabelled a version conflict the client can never win by retrying.
+    """Bad content is a 400, not a version conflict the client can never win by
+    retrying."""
     root, actors_path, clock, report_id, version, pem_b = _build(tmp_path)
     client = TestClient(create_app(root, actors_path, now_fn=clock.now),
                         raise_server_exceptions=False)
@@ -357,17 +342,14 @@ def test_report_edit_with_surrogate_is_400_not_409(tmp_path):
     bad = [{"kind": "key_judgments", "title": "T",
             "sentences": [{"text": "bad \ud800 tail", "status": "SUPPORTED", "basis_refs": []}]}]
     body = json.dumps({"expected_version": 1, "change_note": "x", "sections": bad},
-                      ensure_ascii=True).encode()          # \ud800 -> ASCII escape; server restores it
+                      ensure_ascii=True).encode()  # sent as an ASCII escape
     r = client.post(f"/api/commands/reports/{rid}/edit", content=body,
                     headers={"Authorization": "Bearer tok-a", "Content-Type": "application/json"})
-    assert r.status_code == 400, f"{r.status_code}: {r.text}"        # 400, not 409
+    assert r.status_code == 400, f"{r.status_code}: {r.text}"
 
 
 def test_signed_command_wrong_shape_is_400_not_500(tmp_path):
-    # self-review of round 18: a signed command that is not an object, or whose
-    # acknowledge_dissent is not a list, must be an honest 400 — not an
-    # authenticated 500 from the apply lambda's .get()/tuple() (wrong-type class
-    # of MINOR-2, on the signed path).
+    """A signed command with a wrongly typed field is a 400."""
     from curunir_identity.sessions import SessionManager
     root, actors_path, clock, report_id, version, pem_b = _build(tmp_path)
     client = TestClient(create_app(root, actors_path, now_fn=clock.now),
@@ -393,9 +375,7 @@ def test_signed_command_wrong_shape_is_400_not_500(tmp_path):
 
 
 def test_report_sentence_id_wrong_type_is_400_not_500(tmp_path):
-    # self-review of round 18: sentence_id / section_id were the 12th/13th field
-    # positions the MINOR-2 shape guard initially missed — a non-string id must be
-    # a 400, not a 500.
+    """A section id or sentence id that is not a string is a 400."""
     root, actors_path, clock, report_id, version, pem_b = _build(tmp_path)
     client = TestClient(create_app(root, actors_path, now_fn=clock.now),
                         raise_server_exceptions=False)
@@ -412,9 +392,8 @@ def test_report_sentence_id_wrong_type_is_400_not_500(tmp_path):
 
 
 def test_signed_timestamp_non_string_is_401_not_500(tmp_path):
-    # review N-2: a non-str timestamp in a signed payload has no .replace() in
-    # parse_time (AttributeError) — it must be an honest 401 (unparseable
-    # timestamp), never an authenticated 500.
+    """A signed payload whose timestamp is not a string reads as unparseable, so
+    the request is refused."""
     from curunir_identity.sessions import SessionManager
     root, actors_path, clock, report_id, version, pem_b = _build(tmp_path)
     client = TestClient(create_app(root, actors_path, now_fn=clock.now),
@@ -429,7 +408,7 @@ def test_signed_timestamp_non_string_is_401_not_500(tmp_path):
                          action_type="approve_report", target_kind="workbench_report",
                          target_id=report_id,
                          target_version_token=f"workbench_report:{report_id}@v{version}",
-                         mission_id=MISSION, nonce="ts-n1", timestamp=12345,   # int, not str
+                         mission_id=MISSION, nonce="ts-n1", timestamp=12345,  # an int, not a string
                          command={"disposition": "APPROVED"})
     r = client.post(f"/api/commands/reports/{report_id}/approve-signed", json={
         "session_id": sid, "payload": signed["payload"],

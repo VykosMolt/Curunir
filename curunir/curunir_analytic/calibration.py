@@ -1,24 +1,14 @@
-"""Calibration and resolution scoring: pure functions over the replayed log.
+"""Calibration scoring: pure functions over the replayed log, writing nothing.
 
-Nothing here writes state. A score is computed from what the record shows —
-the probability that actually stood before resolution — never from a number
-supplied at scoring time. Two honesty rules are load-bearing:
-
-  * hindsight leakage raises: the probability scored is the last version
-    recorded strictly BEFORE the resolution; if the resolution append itself
-    smuggled a different number in, scoring refuses rather than flattering
-    the author with a probability the record shows was never held;
-  * coverage is part of the answer: every scoreboard reports what it could
-    NOT score (open, void, withdrawn) alongside what it did — a Brier mean
-    over a cherry-picked subset is not calibration.
-
-VOID and WITHDRAWN forecasts are excluded from scoring but never from the
-report: a question that dissolved is not a question answered well.
+A score uses the probability the record shows actually stood before resolution,
+never one supplied at scoring time; a resolution carrying a different number
+raises rather than flattering the author. Coverage is part of the answer, so
+every scoreboard reports what it could not score alongside what it did.
 """
 from __future__ import annotations
 
 import math
-from typing import Any, Callable, Iterable, Mapping
+from typing import Any, Iterable, Mapping
 
 from curunir_operational.canonical import parse_time
 
@@ -29,14 +19,14 @@ SCORED_STATUSES = ("RESOLVED_TRUE", "RESOLVED_FALSE")
 
 def standing_probability(versions: list[Mapping[str, Any]],
                          horizon_time: str = "") -> float:
-    """The probability that stood ON the question: the last version at or
-    before the HORIZON when one is given (a number moved after the horizon —
-    when the outcome may already be visible — is not a forecast of it), else
-    the last version before the resolving version. Ordered by VERSION — the
-    store's authoritative monotone — never by timestamp alone, which any
-    coarse clock can tie and thereby fail (or falsely accuse) an honest
-    record. Raises on hindsight leakage — a resolution append carrying a
-    probability the pre-resolution record never held."""
+    """The probability that stood on the question.
+
+    The last version at or before the horizon when one is given — a number
+    moved afterwards, with the outcome possibly visible, is not a forecast of
+    it — else the last version before the resolving one. Ordered by version,
+    since a coarse clock can tie timestamps. Raises when the resolution carries
+    a probability the record never held.
+    """
     terminal = [v for v in versions if v.get("status") in SCORED_STATUSES]
     if not terminal:
         raise ValueError(
@@ -62,17 +52,16 @@ def standing_probability(versions: list[Mapping[str, Any]],
                    and parse_time(v["recorded_time"]) <= parse_time(horizon_time)]
         if in_time:
             return max(in_time, key=lambda v: v.get("version", 1))["probability"]
-        # a forecast authored entirely after its horizon: score its opening
-        # number — the only one not moved with the outcome in sight
+        # authored entirely after its horizon: score the opening number, the
+        # only one not moved with the outcome in sight
         return min(prior, key=lambda v: v.get("version", 1))["probability"]
     return last_prior["probability"]
 
 
 def post_horizon_update_count(versions: list[Mapping[str, Any]],
                               horizon_time: str) -> int:
-    """How many probability MOVES landed after the horizon and before
-    resolution — surfaced on every scoring row so a well-scored forecast
-    whose number chased the visible outcome cannot hide it."""
+    """How many probability moves landed after the horizon and before
+    resolution, so a number that chased a visible outcome shows on its row."""
     terminal_versions = [v.get("version", 1) for v in versions
                          if v.get("status") in SCORED_STATUSES]
     resolving = min(terminal_versions) if terminal_versions else None
@@ -93,8 +82,7 @@ def brier(probability: float, outcome_true: bool) -> float:
 
 
 def log_score(probability: float, outcome_true: bool) -> float:
-    """Negative log likelihood (lower is better). Probabilities are strictly
-    inside (0,1) by contract, so this is always finite."""
+    """Negative log likelihood, lower is better. Always finite: p is inside (0,1)."""
     p = probability if outcome_true else 1.0 - probability
     return -math.log(p)
 
@@ -110,21 +98,19 @@ def horizon_band(created_time: str, horizon_time: str) -> str:
 
 
 def _opening(versions: list[Mapping[str, Any]]) -> Mapping[str, Any]:
-    """Version 1 by the version field — the store's authoritative monotone —
-    not by list position."""
+    """The first version, by the version field rather than by list position."""
     return min(versions, key=lambda v: v.get("version", 1))
 
 
 def _claim_answer_entry_time(store: AnalyticStore, claim_id: str,
                              at_time: str = "") -> str:
-    """When THIS answer entered the record: the earliest recorded_time of
-    the trailing run of claim versions sharing the value standing at
-    `at_time` (the resolution instant — NEVER the value standing now: a
-    replayed calibration surface must not change because the claim moved
-    on after the question settled). A same-value corroboration re-version
-    after authoring must not un-flag a row whose answer was already
-    standing; an honest flip TO the value after authoring must not be
-    flagged."""
+    """When this answer entered the record.
+
+    The earliest recorded time of the trailing run of versions sharing the
+    value standing at `at_time` — the resolution instant, never the value
+    standing now, so a replayed scoreboard does not change when the claim moves
+    on afterwards.
+    """
     versions = sorted((r for r in store.records_of("semantic_claim")
                        if r["claim_id"] == claim_id),
                       key=lambda v: v.get("version", 1))
@@ -146,12 +132,10 @@ def _claim_answer_entry_time(store: AnalyticStore, claim_id: str,
 
 def _evidence_recorded_time(store: AnalyticStore, ref: str,
                             at_time: str = "") -> str:
-    """When the referenced resolution evidence entered the record. Unknown
-    refs return '' — provably-prior is the only thing that excludes a row.
-    Covers every kind this stack ordinarily cites as evidence: claims (the
-    time this ANSWER entered, anchored at the resolution instant),
-    observations, executions, activities, manifestations, documents,
-    relationships."""
+    """When the referenced resolution evidence entered the record.
+
+    An unknown ref returns "": only provably-prior evidence excludes a row.
+    """
     if store.current_claims().get(ref) is not None:
         return _claim_answer_entry_time(store, ref, at_time)
     for observation in store.records_of("semantic_observation"):
@@ -179,20 +163,13 @@ def _evidence_recorded_time(store: AnalyticStore, ref: str,
 def resolved_by_prior_evidence(store: AnalyticStore,
                                current: Mapping[str, Any],
                                versions: list[Mapping[str, Any]]) -> bool:
-    """Was the answer already ON THE RECORD when the number was authored?
-    Post-horizon authoring is one way to have the answer in hand; authoring
-    against already-recorded resolving evidence is another. TRUE iff every
-    resolution-evidence record whose time is known predates the first
-    version — such a row is a statement about a visible answer, not a
-    forecast.
+    """Was the answer already on the record when the number was authored?
 
-    Scope: RESOLVED_TRUE rows, and RESOLVED_FALSE rows settled BEFORE the
-    horizon. A FALSE settled at or after the horizon was determined by the
-    window closing, not by anything already on the record — flagging those
-    would systematically drop honest negative forecasts, a selection effect
-    on the very quantity being measured. But a FALSE called before the
-    horizon closed nothing: if its evidence predates authoring, the answer
-    was in hand."""
+    True when every resolution-evidence record whose time is known predates the
+    first version. Scope is RESOLVED_TRUE rows and RESOLVED_FALSE rows settled
+    before the horizon: a FALSE settled at or after it was decided by the window
+    closing, and flagging those would drop honest negative forecasts.
+    """
     status = current.get("status")
     if status == "RESOLVED_FALSE":
         resolved = current.get("resolved_time", "")
@@ -216,8 +193,8 @@ def resolved_by_prior_evidence(store: AnalyticStore,
 
 
 def scored_forecasts(store: AnalyticStore) -> list[dict[str, Any]]:
-    """One scoring row per RESOLVED_TRUE/FALSE forecast: the standing
-    probability, the outcome, both proper scores, and grouping keys."""
+    """One row per resolved forecast: standing probability, outcome, both
+    scores, and the grouping keys."""
     rows = []
     for forecast_id, current in sorted(store.current_forecasts().items()):
         if current["status"] not in SCORED_STATUSES:
@@ -228,9 +205,8 @@ def scored_forecasts(store: AnalyticStore) -> list[dict[str, Any]]:
         rows.append({
             "forecast_id": forecast_id,
             "question": current["question"],
-            # a forecast whose FIRST version postdates its own horizon was
-            # written with the answer available: its row is visible but it
-            # is never aggregated as calibration
+            # a first version postdating the horizon was written with the
+            # answer available: the row shows but never feeds an aggregate
             "authored_after_horizon": bool(
                 _opening(versions).get("recorded_time"))
             and parse_time(_opening(versions)["recorded_time"])
@@ -243,7 +219,7 @@ def scored_forecasts(store: AnalyticStore) -> list[dict[str, Any]]:
             "log_score": log_score(probability, outcome_true),
             "author": current["author"],
             "domain": current["domain"],
-            "horizon_band": horizon_band(versions[0]["recorded_time"],
+            "horizon_band": horizon_band(_opening(versions)["recorded_time"],
                                          current["horizon_time"]),
             "resolver_kind": current["resolver_kind"],
             "update_count": sum(
@@ -258,9 +234,8 @@ def scored_forecasts(store: AnalyticStore) -> list[dict[str, Any]]:
 
 def calibration_buckets(rows: Iterable[Mapping[str, Any]],
                         bucket_count: int = 10) -> list[dict[str, Any]]:
-    """Reliability table: forecasts bucketed by stated probability, with the
-    observed frequency per bucket. Empty buckets are reported empty, not
-    dropped — where nobody ever forecast is part of the picture."""
+    """Reliability table: rows bucketed by stated probability with the observed
+    frequency in each. Empty buckets are reported, not dropped."""
     buckets = [{"low": i / bucket_count, "high": (i + 1) / bucket_count,
                 "count": 0, "probability_sum": 0.0, "true_count": 0}
                for i in range(bucket_count)]
@@ -316,15 +291,11 @@ def _grouped(rows: list[Mapping[str, Any]], key: str) -> dict[str, dict]:
 
 
 def scoreboard(store: AnalyticStore) -> dict[str, Any]:
-    """The full calibration picture: overall proper scores, reliability
-    buckets, ECE, per-author/domain/horizon breakdowns — and, with equal
-    weight, everything that could not be scored."""
+    """The whole calibration picture: scores, buckets, ECE, breakdowns, and
+    everything that could not be scored."""
     rows = scored_forecasts(store)
-    # a forecast whose answer was in hand when the number was written — by
-    # postdating its own horizon, or by resting on resolution evidence that
-    # was already on the record at authoring — is a statement about a
-    # visible outcome, not a forecast: its row stays on the record, but it
-    # feeds no mean, no bucket, no ECE, no author's reputation
+    # a forecast written with the answer in hand is a statement about a visible
+    # outcome: the row stays, but it feeds no mean, bucket, ECE or reputation
     honest = [r for r in rows if not r["authored_after_horizon"]
               and not r["resolved_by_prior_evidence"]]
     forecasts = store.current_forecasts()

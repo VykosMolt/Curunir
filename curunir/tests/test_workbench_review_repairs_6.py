@@ -1,9 +1,6 @@
-"""Regression pins for the sixth adversarial review — the SEVEN V6.6-blocking
-findings: ordinary-operation paths where a cleared analyst caused compartmented
-state to reach an uncleared analyst. Each is closed either by inheriting the
-reference high-water-mark on a NEW record, or by refusing a re-append/fold/
-transition that would cite state more restricted than its own fixed marking.
-"""
+"""Ordinary paths where a cleared analyst could push restricted state to an
+uncleared one. A new record inherits the most restricted thing it cites; an
+existing record refuses to start citing something above its own marking."""
 from __future__ import annotations
 
 import json
@@ -45,9 +42,8 @@ def _special_forecast(cc, seeded):
 
 
 def test_f1_identity_sweep_inherits_endpoint_markings(mission):
-    """F1: the cross-scheme equivalence proposal AND its review item are
-    marked with the join of the two objects' markings — an uncleared analyst
-    never learns a compartmented object is equivalent to a public one."""
+    """A proposed equivalence between a public and a restricted object, and the
+    review item for it, are both restricted."""
     pipeline, ctx, seeded, cc = mission
     from curunir_semantic.worldmodel import propose_cross_scheme_associations
     ref = ExternalRef(system="LEI", external_id="SHAREDLEI0000000001",
@@ -62,10 +58,9 @@ def test_f1_identity_sweep_inherits_endpoint_markings(mission):
             geometry=None, attributes={}, quality={}, epistemic_state="REPORTED",
             marking=marking, provenance=ProvenanceSummary(mode="OPERATIONAL")),
             recorded_time=now(), actor="t")
-    # a PUBLIC pipeline pass (an ordinary route launch) runs the sweep
+    # An ordinary public pipeline pass runs the sweep.
     propose_cross_scheme_associations(pipeline.context())
     view_b = MissionProjection(ctx.store, CTX_B)
-    # the identity-ambiguity review item is not visible to the uncleared analyst
     identity_items = [r for r in view_b.family("review_item")
                       if r["kind"] == "IDENTITY_AMBIGUITY"]
     for item in identity_items:
@@ -75,7 +70,7 @@ def test_f1_identity_sweep_inherits_endpoint_markings(mission):
 
 
 def test_f2_author_forecast_inherits_reference_marking(mission):
-    """F2: a forecast citing a SPECIAL assumption/proposition is SPECIAL."""
+    """A forecast citing a restricted assumption is restricted."""
     pipeline, ctx, seeded, cc = mission
     forecast = commands.author_forecast(
         cc(CTX_A), question="will the compartmented dependency hold?",
@@ -90,11 +85,8 @@ def test_f2_author_forecast_inherits_reference_marking(mission):
 
 
 def test_f3_link_special_claim_to_public_hypothesis_refused(mission):
-    """F3: linking a SPECIAL claim to a PUBLIC hypothesis is refused (the
-    hypothesis keeps its marking and must not cite state above it)."""
+    """A public hypothesis cannot be linked to a restricted claim."""
     pipeline, ctx, seeded, cc = mission
-    # build a SPECIAL claim by authoring a SPECIAL forecast is not a claim;
-    # append a SPECIAL semantic_claim directly
     from curunir_semantic.contracts import SemanticClaim
     claim = SemanticClaim(
         claim_id="claim-special-1", version=1, statement="compartmented claim",
@@ -114,8 +106,7 @@ def test_f3_link_special_claim_to_public_hypothesis_refused(mission):
 
 
 def test_f4_saved_view_resave_refuses_more_restricted_ref(mission):
-    """F4: re-saving a PUBLIC view under the same title with a SPECIAL ref is
-    refused (the re-save keeps the view's marking)."""
+    """Re-saving a public view with a restricted reference is refused."""
     pipeline, ctx, seeded, cc = mission
     commands.save_view(cc(CTX_A), title="My graph", view_kind="graph",
                        definition={"focus": seeded["status_claim"]["subject_object_id"]})
@@ -125,7 +116,7 @@ def test_f4_saved_view_resave_refuses_more_restricted_ref(mission):
 
 
 def test_f5_requirement_fold_refuses_more_restricted_ref(mission):
-    """F5: folding a SPECIAL affected id into a PUBLIC requirement is refused."""
+    """Folding a restricted id into a public requirement is refused."""
     pipeline, ctx, seeded, cc = mission
     commands.open_requirement(cc(CTX_A), question="dup q?", priority="MEDIUM",
                               mission_context="m", rationale="r")
@@ -136,7 +127,7 @@ def test_f5_requirement_fold_refuses_more_restricted_ref(mission):
 
 
 def test_f6_watch_on_compartmented_target_is_special(mission):
-    """F6: a watch whose target resolves to a compartmented object is SPECIAL."""
+    """A watch aimed at a restricted object is restricted."""
     pipeline, ctx, seeded, cc = mission
     watch = commands.create_watch(
         cc(CTX_A), need_id="n", target_kind="NATIVE_OBJECT",
@@ -148,11 +139,10 @@ def test_f6_watch_on_compartmented_target_is_special(mission):
 
 
 def test_f7_transition_and_move_refuse_more_restricted_evidence(mission):
-    """F7: a transition/movement on a PUBLIC subject cannot cite SPECIAL
+    """A transition or forecast move on a public subject cannot cite restricted
     evidence."""
     pipeline, ctx, seeded, cc = mission
     from curunir_operational.missions import MissionWorkflow
-    # a PUBLIC requirement
     req = MissionWorkflow(ctx.store).open_requirement(
         mission_context="m", question="pub q?", affected_ids=(), priority="MEDIUM",
         rationale="r", required_evidence_type="OPEN_SOURCE", owning_role="ANALYST",
@@ -163,7 +153,6 @@ def test_f7_transition_and_move_refuse_more_restricted_evidence(mission):
             cc(CTX_A), subject_kind="requirement",
             subject_id=req["requirement_id"], to_status="EVIDENCE_PENDING",
             evidence_refs=(seeded["secret_assumption_id"],), note="cites special")
-    # move a PUBLIC forecast citing SPECIAL evidence
     with pytest.raises(CommandError):
         commands.move_forecast(
             cc(CTX_A), seeded["forecast"]["forecast_id"], expected_version=1,

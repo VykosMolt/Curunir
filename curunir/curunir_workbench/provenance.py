@@ -1,17 +1,17 @@
-"""Provenance descent and ascent as first-class projections.
+"""Trace a conclusion down to its evidence, or evidence up to what rests on it.
 
-Descent:  warning → forecast → impact/assumption → claim → observation →
-          exact anchor → manifestation → source.
-Ascent:   source → manifestations → observations → claims → analytical
-          objects → mission consequences.
-
-Every hop resolves only records the context can view; a chain never narrates
-hidden state, and a link into a hidden record terminates with an explicit
-INACCESSIBLE node rather than pretending the chain ends there naturally.
+Down: warning, forecast, assumption, claim, observation, anchor, manifestation,
+source. Up: source, manifestations, observations, claims, analytical objects.
+Every hop reads the filtered view, and a link into a hidden record ends in a
+node that says so rather than in a chain that looks complete.
 """
 from __future__ import annotations
 
+import hashlib
+from pathlib import Path
 from typing import Any
+
+from curunir_operational.store import StoreError
 
 from .projections import MissionProjection, _base_id
 
@@ -68,11 +68,10 @@ def claim_descent(projection: MissionProjection, claim_id: str) -> dict[str, Any
 
 
 def descend(projection: MissionProjection, kind: str, record_id: str) -> dict[str, Any] | None:
-    """Full descent from any analytical object to source evidence.
+    """Trace any analytical object down to the evidence under it.
 
-    Returns a chain of layers; each layer states what it is (projection,
-    authored judgment, proposition, extraction fact, exact anchor, custody,
-    source) so inference is never rendered as observation."""
+    Each layer of the returned chain says what kind of thing it is, so a reader
+    never mistakes a judgment for an observation."""
     chain: list[dict[str, Any]] = []
     claim_ids: list[str] = []
 
@@ -152,8 +151,7 @@ def descend(projection: MissionProjection, kind: str, record_id: str) -> dict[st
 
 
 def ascend(projection: MissionProjection, kind: str, record_id: str) -> dict[str, Any] | None:
-    """From evidence upward: which observations, claims and analytical
-    objects rest on this source/manifestation/claim."""
+    """Which observations, claims and analytical objects rest on this record."""
     manifestation_ids: set[str] = set()
     if kind == "fabric_source_descriptor":
         source = projection.get("fabric_source_descriptor", record_id)
@@ -198,7 +196,7 @@ def ascend(projection: MissionProjection, kind: str, record_id: str) -> dict[str
 
 
 def _analytic_dependents(projection: MissionProjection, claim_ids: set[str]) -> list[dict]:
-    """Analytical objects whose basis intersects the given claims."""
+    """Analytical objects that rest on any of these claims."""
     dependents = []
 
     def _basis_claims(record: dict) -> set[str]:
@@ -233,8 +231,8 @@ def _analytic_dependents(projection: MissionProjection, claim_ids: set[str]) -> 
 
 
 def evidence_view(projection: MissionProjection, manifestation_id: str) -> dict[str, Any] | None:
-    """The evidence inspector: custody metadata, native/normalized payloads,
-    every anchor into this manifestation, and what depends on it."""
+    """Everything about one manifestation: custody, payloads, anchors and what
+    depends on it."""
     manifestation = projection.get("fabric_manifestation", manifestation_id)
     if manifestation is None:
         return None
@@ -250,25 +248,20 @@ def evidence_view(projection: MissionProjection, manifestation_id: str) -> dict[
     upward = ascend(projection, "fabric_manifestation", manifestation_id) or {}
 
     def _load_verified(sha: str, custody_path: str = "") -> dict:
-        """Payload bytes, served ONLY when their sha256 matches the recorded
-        custody hash — a moved or tampered file renders as unavailable, never
-        as evidence. Custody-path fallback is confined to the mission root."""
-        import hashlib
-        from pathlib import Path
-        from curunir_operational.store import StoreError
+        """Payload bytes, returned only if their sha256 matches the recorded
+        hash; a moved or altered file reads as unavailable, never as evidence."""
         mission_root = Path(projection.store.root).resolve().parent
         candidates = []
         try:
             candidates.append(projection.store.get_payload(sha))
         except (KeyError, FileNotFoundError, OSError, StoreError):
-            # A corrupt store slot is never served.  This view may still use a
-            # separate custody copy, but only after independently hashing it
-            # against the recorded content address below.
+            # A damaged store slot is never served; a custody copy may still
+            # be tried, but only through the hash check below.
             pass
-        # canonical content-addressed custody location under the mission
-        # root; the recorded path is a last resort, and only when it resolves
-        # INSIDE the mission root as an ordinary bounded-size file — a fifo,
-        # device node or symlink out of the root never blocks the request
+        # Prefer the custody copy filed under the hash. Fall back to the path
+        # in the record only when it stays inside the mission root and is an
+        # ordinary file of sane size, so a fifo, device node or symlink out of
+        # the root cannot make the server hang or read someone else's data.
         MAX_PAYLOAD = 64 * 1024 * 1024
         canonical = mission_root / "custody" / "sha256" / sha[:2] / sha[2:4] / sha
         recorded = None
@@ -288,9 +281,8 @@ def evidence_view(projection: MissionProjection, manifestation_id: str) -> dict[
                 candidates.append(path.read_bytes())
             except OSError:
                 continue
-        # the hash gate is the actual boundary: only bytes whose sha256
-        # equals the recorded custody hash are ever served, so no probe of
-        # any path can disclose foreign content
+        # This is the real boundary: only bytes that hash to the recorded value
+        # are served, so probing paths cannot leak anything else.
         raw = next((c for c in candidates
                     if hashlib.sha256(c).hexdigest() == sha), None)
         if raw is None:
@@ -305,8 +297,8 @@ def evidence_view(projection: MissionProjection, manifestation_id: str) -> dict[
     if content_sha:
         payload = _load_verified(content_sha,
                                  manifestation.get("content_store_path", ""))
-    # anchors' offsets are exact only within the payload named by their
-    # normalized_sha256 — group them so highlights never land on other bytes
+    # An anchor's offsets only mean anything inside the payload it names, so
+    # group them by that hash and highlights cannot land on other bytes.
     normalized_payloads = []
     by_sha: dict[str, list] = {}
     for a in anchors:

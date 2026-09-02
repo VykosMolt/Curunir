@@ -1,5 +1,5 @@
-"""Command layer: attributable acts through canonical plane functions,
-human-only guards, conflict semantics, no authority laundering."""
+"""Workbench commands: every act is attributed, some are human-only, and stale
+writers are refused."""
 from __future__ import annotations
 
 import pytest
@@ -52,7 +52,6 @@ def test_annotation_cannot_target_hidden_object(mission):
         commands.annotate(cc(CTX_B), target_kind="object",
                           target_id=seeded["secret_object_id"],
                           kind="NOTE", text="I should not see this")
-    # and B cannot annotate the hidden assumption either
     with pytest.raises(LookupError):
         commands.annotate(cc(CTX_B), target_kind="analytic_assumption",
                           target_id=seeded["secret_assumption_id"],
@@ -109,7 +108,6 @@ def test_hypothesis_assessment_recorded_not_overwritten(mission):
         commands.assess_hypothesis(cc(SERVICE_CTX), hypothesis_id,
                                    expected_version=assessed["version"],
                                    status="SUPPORTED", rationale="model opinion")
-    # disagreement: B records dissent, never overwrites A silently
     dissent = commands.annotate(cc(CTX_B), target_kind="hypothesis",
                                 target_id=hypothesis_id, kind="DISSENT",
                                 text="registry basis is stronger than stated")
@@ -154,7 +152,6 @@ def test_watch_create_pause_resume(mission):
     assert paused["active"] is False
     resumed = commands.set_watch_active(cc(CTX_B), watch["watch_id"], active=True,
                                         expected_active=False)
-    # authorship survives state changes; the act itself is on the event log
     assert resumed["active"] is True and resumed["created_by"] == "analyst-a"
     with pytest.raises(Conflict):
         commands.set_watch_active(cc(CTX_A), watch["watch_id"], active=False,

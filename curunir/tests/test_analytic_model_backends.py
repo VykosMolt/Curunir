@@ -1,10 +1,8 @@
-"""The governed model-proposal seam, end to end, with no network.
+"""The model-proposal seam, end to end, with no network.
 
-What must hold: the response schema is generated from the same table the human
-review path enforces; a provider may only cite identifiers it was shown; a
-provider failure is retained as evidence rather than becoming analytical
-content; and nothing a provider emits becomes state without a human.
-"""
+The response schema comes from the same table the review path enforces, a
+provider may only cite identifiers it was shown, its failures are kept as
+evidence, and nothing it emits becomes state until a person accepts it."""
 from __future__ import annotations
 
 import json
@@ -21,13 +19,12 @@ from curunir_analytic.model_backends import (BackendUnavailable, DeterministicBa
 from curunir_analytic.providers import AnalyticalAssist
 from curunir_analytic.substrate import CANDIDATE_BINDING_KEYS, resolve_candidate
 
-from analytic_support import GLEIF_ACME, make_analytic
-from semantic_support import T0, plant_manifestation
+from analytic_support import make_analytic, seed_acme
 
 pytestmark = pytest.mark.no_db
 
 
-# ---- schema is generated from the enforced table, not restated -------------
+# ---- the schema follows the binding table ----------------------------------
 
 def test_every_proposable_kind_has_a_schema_over_exactly_its_binding_keys():
     for kind in proposable_kinds():
@@ -38,7 +35,7 @@ def test_every_proposable_kind_has_a_schema_over_exactly_its_binding_keys():
 
 
 def test_a_new_binding_key_reaches_the_schema_without_editing_it():
-    """The drift lock: schema follows the table, so it cannot fall behind."""
+    """A new binding key reaches the schema with no edit to the schema."""
     from curunir_analytic import candidate_schema as CS
     original = dict(CS.CANDIDATE_BINDING_KEYS)
     try:
@@ -152,17 +149,11 @@ def test_an_uninstalled_sdk_raises_backend_unavailable_not_import_error():
             build_backend(ProviderSpec(provider="anthropic"))
 
 
-# ---- the whole seam, over real world-model state ---------------------------
+# ---- the whole seam, over real state ---------------------------------------
 
 def _seed(tmp_path):
     pipeline, ctx = make_analytic(tmp_path)
-    plant_manifestation(pipeline, source_id="gleif",
-                        native_id="lei/ACMELEI000000000001", body=GLEIF_ACME,
-                        media_type="application/json", retrieval_time=T0)
-    pipeline.process_new_evidence()
-    claim = next(c["claim_id"] for c in ctx.store.current_claims().values()
-                 if c["predicate"] == "entity_status")
-    return ctx, claim
+    return ctx, seed_acme(pipeline, ctx)["entity_status"]
 
 
 def test_a_backend_proposal_becomes_a_candidate_only_a_human_can_accept(tmp_path):
@@ -177,18 +168,16 @@ def test_a_backend_proposal_becomes_a_candidate_only_a_human_can_accept(tmp_path
                             inputs={"claims": [claim]}, input_refs=(claim,))
     assert result["status"] == "PROPOSED"
 
-    # the complete outcome is retained, and it cites the real claim
     inference = next(r for r in ctx.store.records_of("inference")
                      if r["inference_id"] == result["inference_id"])
     assert inference["validation"] == "VALID"
     assert inference["output"]["supporting_claim_ids"] == [claim]
     assert inference["model_id"] == backend.package().model_id
 
-    # it is not analytical state
+    # A proposal is not analytical state yet.
     proposal_id = result["proposal"]["proposal_id"]
     assert proposal_id not in ctx.store.current_themes()
 
-    # only a human can accept
     with pytest.raises(ValueError):
         resolve_candidate(ctx, proposal_id, accept=True,
                           actor_id="svc", actor_kind="SERVICE")
@@ -217,13 +206,11 @@ def test_a_backend_failure_is_retained_as_an_invalid_inference(tmp_path):
     assert inference["validation"] == "INVALID"
     assert inference["output"] == {}
     assert any("provider exploded" in e for e in inference["errors"])
-    # nothing was proposed
     assert not [p for p in ctx.store.records_of("analytical_proposal")]
 
 
 def test_the_backend_receives_the_target_kind_the_legacy_callable_cannot(tmp_path):
-    """Why `backend` exists at all: InferFn has no way to carry target_kind,
-    and without it a provider cannot be constrained to the right schema."""
+    """The backend is told which kind it is proposing, so the schema can bind it."""
     ctx, claim = _seed(tmp_path)
     seen = {}
 
@@ -252,7 +239,7 @@ def test_the_legacy_infer_fn_path_is_unchanged(tmp_path):
 
 
 def test_egress_refusal_still_precedes_any_provider_call(tmp_path):
-    """The marking gate must run before the backend is touched at all."""
+    """The marking gate runs before the provider is called at all."""
     ctx, claim = _seed(tmp_path)
 
     class _MustNotRun(ModelBackend):
@@ -270,7 +257,7 @@ def test_egress_refusal_still_precedes_any_provider_call(tmp_path):
     assert result["status"] == "EGRESS_REFUSED"
 
 
-# ---- the command layer cannot be used to read around the lattice -----------
+# ---- the command layer cannot read around the lattice ----------------------
 
 def _command_context(ctx, root, context):
     from curunir_workbench.commands import CommandContext
@@ -281,8 +268,7 @@ def _command_context(ctx, root, context):
 
 def test_a_proposal_request_cannot_show_a_provider_what_the_actor_cannot_see(
         tmp_path, monkeypatch):
-    """A restricted record the requester cannot view is reported as unknown,
-    and never reaches the provider payload."""
+    """A record the requester cannot view is unknown to them and never sent out."""
     from curunir_workbench import commands
     from curunir_workbench.errors import NotFound
     from workbench_support import CTX_A, CTX_B, make_workbench, seed_mission
@@ -304,8 +290,7 @@ def test_a_proposal_request_cannot_show_a_provider_what_the_actor_cannot_see(
         commands, "assist_from_environment",
         lambda: AnalyticalAssist(package=backend.package(), backend=backend))
 
-    # CTX_B holds no SPECIAL compartment: the record is simply unknown to it,
-    # and the provider is never reached.
+    # CTX_B is not in the compartment, so the record is simply unknown to it.
     with pytest.raises(NotFound):
         commands.request_model_proposal(
             _command_context(ctx, tmp_path, CTX_B),
@@ -323,8 +308,8 @@ def test_a_proposal_request_cannot_show_a_provider_what_the_actor_cannot_see(
 
 def test_a_restricted_input_is_refused_egress_under_the_default_ceiling(
         tmp_path, monkeypatch):
-    """The shipped default is public-releasable-only: compartmented evidence
-    does not leave the deployment just because a cleared analyst asked."""
+    """The default ceiling is public-only: hidden evidence never leaves, even
+    when a cleared analyst asks."""
     from curunir_workbench import commands
     from workbench_support import CTX_A, make_workbench, seed_mission
 

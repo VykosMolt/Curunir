@@ -1,9 +1,6 @@
-"""Browser E2E: real Chromium against a real workbench server over a real
-seeded WorkbenchStore. Operator journeys: sign-in, COP, warning → evidence
-descent, hypothesis assessment, annotation, dossier flow, access contexts."""
+"""Browser end-to-end tests: Chromium driving a running workbench server."""
 from __future__ import annotations
 
-import socket
 import threading
 
 import pytest
@@ -18,16 +15,10 @@ from curunir_workbench.auth import write_registry
 from curunir_workbench.server import create_app
 
 from semantic_support import clock
-from workbench_support import make_workbench, seed_mission
+from workbench_support import free_port, make_workbench, seed_mission
 
 pytestmark = [pytest.mark.no_db,
               pytest.mark.skipif(not HAVE_PLAYWRIGHT, reason="playwright not installed")]
-
-
-def _free_port() -> int:
-    with socket.socket() as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
 
 
 @pytest.fixture(scope="module")
@@ -46,7 +37,7 @@ def mission_server(tmp_path_factory):
          "organisation": "workbench-test"},
     ])
     app = create_app(tmp_path, actors, now_fn=clock(start_minute=600))
-    port = _free_port()
+    port = free_port()
     config = uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning")
     server = uvicorn.Server(config)
     thread = threading.Thread(target=server.run, daemon=True)
@@ -97,7 +88,6 @@ def test_warning_descends_to_source_evidence(browser_ctx, mission_server):
     expect(page.locator("main")).to_contain_text("Provenance descent")
     expect(page.locator("main")).to_contain_text("EXACT ANCHOR")
     expect(page.locator("main")).to_contain_text("source gleif")
-    # pivot into the manifestation (evidence viewer)
     page.locator("main a", has_text="manifestation").first.click()
     expect(page.locator("main h1")).to_contain_text("Evidence:")
     expect(page.locator("main")).to_contain_text("content sha256")
@@ -144,7 +134,6 @@ def test_dossier_flow_in_browser(browser_ctx, mission_server):
     page.get_by_role("button", name="Create draft").click()
     page.wait_for_url("**/#/reports/*")
     expect(page.locator("main h1")).to_contain_text("Browser dossier")
-    # edit: add a supported sentence bound to the real claim
     page.get_by_role("button", name="Edit").click()
     page.get_by_role("button", name="+ sentence").click()
     sentence = page.locator(".sentence").first
@@ -157,7 +146,7 @@ def test_dossier_flow_in_browser(browser_ctx, mission_server):
     expect(page.locator("main h1")).to_contain_text("IN_REVIEW")
     report_url = page.url
     page.close()
-    # separation of duties: a second analyst performs the approval
+    # Approval has to come from a different analyst.
     reviewer = browser_ctx.new_page()
     _login(reviewer, base, "token-b")
     reviewer.goto(report_url)
@@ -172,11 +161,9 @@ def test_restricted_analyst_sees_filtered_mission(browser_ctx, mission_server):
     page = browser_ctx.new_page()
     _login(page, base, "token-b")
     expect(page.locator("#actor-badge")).to_contain_text("analyst-b")
-    # search for the compartmented object yields nothing
     page.fill("#quick-search", "Sensitive Partner")
     page.press("#quick-search", "Enter")
     expect(page.locator("main")).to_contain_text("0 results")
-    # entity list lacks the hidden object
     page.goto(f"{base}/#/entities")
     expect(page.locator("main")).not_to_contain_text("Sensitive Partner")
     content = page.content()

@@ -1,9 +1,9 @@
-"""RSS / Atom feed retrieval — the polling/change-feed acquisition shape."""
+"""RSS and Atom feeds."""
 from __future__ import annotations
 
 import email.utils
 import xml.etree.ElementTree as ElementTree
-from datetime import timezone
+from datetime import datetime, timezone
 
 from curunir_operational.xml_safety import reject_dtd
 
@@ -23,7 +23,6 @@ def _rfc822_to_iso(value: str) -> str | None:
 
 
 def _iso_or_none(value: str) -> str | None:
-    from datetime import datetime
     try:
         parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
     except ValueError:

@@ -1,5 +1,5 @@
-"""Calibration locks: scores are computed from what stood on the record,
-hindsight raises, coverage is reported with equal weight, scoring is pure."""
+"""Calibration: a forecast is scored on the probability that stood when it
+resolved, hindsight is refused, coverage is reported, and scoring never writes."""
 from __future__ import annotations
 
 import math
@@ -15,24 +15,13 @@ from curunir_analytic.forecasts import (create_forecast, resolve_forecast_human,
                                         try_machine_resolution,
                                         update_probability, withdraw_forecast)
 
-from analytic_support import (GLEIF_ACME, GLEIF_ACME_SUSPENDED, MARK, T0,
-                              make_analytic)
+from analytic_support import GLEIF_ACME_SUSPENDED, make_analytic, seed_acme
 from semantic_support import plant_manifestation
 
 pytestmark = pytest.mark.no_db
 
 HORIZON = "2026-08-17T18:00:00+00:00"
 ACME = "LEI:ACMELEI000000000001"
-
-
-def _seed(pipeline, ctx):
-    plant_manifestation(pipeline, source_id="gleif",
-                        native_id="lei/ACMELEI000000000001",
-                        body=GLEIF_ACME, media_type="application/json",
-                        retrieval_time=T0)
-    pipeline.process_new_evidence()
-    return {c["predicate"]: c["claim_id"] for c in ctx.store.current_claims().values()
-            if c["subject_ref"] == ACME}
 
 
 def _forecast(ctx, by_predicate, *, question, probability, author="jan",
@@ -94,9 +83,7 @@ def test_hindsight_leakage_raises():
 
 
 def test_scoring_survives_a_frozen_clock():
-    """version order, not timestamps, decides what stood: a coarse clock
-    that stamps every append identically must neither crash the scoreboard
-    nor accuse an honest analyst of hindsight."""
+    """A clock that stamps every version alike still scores, and reads no hindsight."""
     same = "2026-08-17T12:00:00+00:00"
     versions = [
         {"forecast_id": "f1", "version": 1, "probability": 0.35,
@@ -114,7 +101,7 @@ def test_scoring_survives_a_frozen_clock():
 
 def test_scoring_uses_the_standing_probability_and_reports_coverage(tmp_path):
     pipeline, ctx = make_analytic(tmp_path)
-    by_predicate = _seed(pipeline, ctx)
+    by_predicate = seed_acme(pipeline, ctx)
     resolved = _forecast(ctx, by_predicate,
                          question=f"Will {ACME} be suspended by {HORIZON}?",
                          probability=0.35)
@@ -124,11 +111,10 @@ def test_scoring_uses_the_standing_probability_and_reports_coverage(tmp_path):
     voided = _forecast(ctx, by_predicate,
                        question=f"Will {ACME} merge by {HORIZON}?",
                        probability=0.20, author="ola")
-    # the analyst moves the first forecast before resolution
     update_probability(ctx, resolved["forecast_id"], probability=0.62,
                        reason="filing trouble reported", actor_id="jan",
                        actor_kind="HUMAN")
-    # evidence arrives; the CLAIM_PREDICATE rule resolves TRUE
+    # Evidence that makes the resolution rule read TRUE.
     plant_manifestation(pipeline, source_id="gleif",
                         native_id="lei/ACMELEI000000000001",
                         body=GLEIF_ACME_SUSPENDED, media_type="application/json",
@@ -161,7 +147,7 @@ def test_scoring_uses_the_standing_probability_and_reports_coverage(tmp_path):
 
 def test_scoring_is_pure_and_appends_nothing(tmp_path):
     pipeline, ctx = make_analytic(tmp_path)
-    by_predicate = _seed(pipeline, ctx)
+    by_predicate = seed_acme(pipeline, ctx)
     _forecast(ctx, by_predicate,
               question=f"Will {ACME} be suspended by {HORIZON}?",
               probability=0.35)

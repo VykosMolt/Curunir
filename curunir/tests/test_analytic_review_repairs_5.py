@@ -1,10 +1,7 @@
-"""Round-1 forecasting-review exploit locks (FR1–FR12): each test replays a
-reviewer-demonstrated exploit against the repaired code and pins the refusal.
-The recurring class: authorization checked but not SCOPED (an indicator as a
-bearer token, coverage satisfied by unrelated noise, an acceptance re-spent
-across versions), and completion paths that skip the law the main path
-enforces (folds into settled forecasts, interrupted firings, archival
-backfill)."""
+"""Exploits against the forecasting plane, each now refused. Two patterns run
+through them: an authorization that was checked but not scoped — a firing used
+on another forecast, unrelated searches passed off as coverage, one acceptance
+spent twice — and recovery paths that skipped a rule the main path enforces."""
 from __future__ import annotations
 
 import pytest
@@ -26,25 +23,15 @@ from curunir_analytic.warning import TIER_RULE_V1
 from curunir_fabric.contracts import ExecutionRecord, ManifestationRecord
 from curunir_semantic.contracts import ClaimStateRecord
 
-from analytic_support import (GLEIF_ACME, GLEIF_ACME_SUSPENDED, MARK, T0,
-                              make_analytic)
-from semantic_support import plant_manifestation
+from analytic_support import (GLEIF_ACME_SUSPENDED, MARK, T0, make_analytic,
+                              seed_acme)
+from semantic_support import advance_clock_past, plant_manifestation
 
 pytestmark = pytest.mark.no_db
 
 HORIZON = "2026-08-17T18:00:00+00:00"
 FAR_HORIZON = "2026-09-10T12:00:00+00:00"
 ACME = "LEI:ACMELEI000000000001"
-
-
-def _seed(pipeline, ctx):
-    plant_manifestation(pipeline, source_id="gleif",
-                        native_id="lei/ACMELEI000000000001",
-                        body=GLEIF_ACME, media_type="application/json",
-                        retrieval_time=T0)
-    pipeline.process_new_evidence()
-    return {c["predicate"]: c["claim_id"] for c in ctx.store.current_claims().values()
-            if c["subject_ref"] == ACME}
 
 
 def _rule(expected="INACTIVE"):
@@ -106,12 +93,12 @@ def _accepted_reforecast(ctx, forecast, probability):
                              accept=True, actor_id="jan", actor_kind="HUMAN")
 
 
-# ---- FR1: a fired indicator authorizes exactly its named forecasts ---------
+# ---- a firing authorizes its own forecasts, once ---------------------------
 
 
 def test_fired_indicator_is_not_a_bearer_token_for_other_forecasts(tmp_path):
     pipeline, ctx = make_analytic(tmp_path)
-    by_predicate = _seed(pipeline, ctx)
+    by_predicate = seed_acme(pipeline, ctx)
     named = _forecast(ctx, by_predicate, question_tag="named",
                       probability=0.35)
     unrelated = _forecast(ctx, by_predicate, question_tag="unrelated",
@@ -134,7 +121,7 @@ def test_fired_indicator_is_not_a_bearer_token_for_other_forecasts(tmp_path):
 
 def test_fired_indicator_is_one_shot_not_forever_redeemable(tmp_path):
     pipeline, ctx = make_analytic(tmp_path)
-    by_predicate = _seed(pipeline, ctx)
+    by_predicate = seed_acme(pipeline, ctx)
     forecast = _forecast(ctx, by_predicate, probability=0.35)
     indicator = _armed_apply_indicator(ctx, forecast)
     _flip_to_suspended(pipeline, ctx)
@@ -155,7 +142,7 @@ def test_fired_indicator_is_one_shot_not_forever_redeemable(tmp_path):
     assert sum(1 for v in versions if v["probability"] == 0.62) == 1
 
 
-# ---- FR2/FR3: absence coverage names its sources and counts only them ------
+# ---- absence must name where it looked, and only that counts ---------------
 
 
 def test_machine_resolvable_rule_must_name_its_coverage_sources():
@@ -174,7 +161,7 @@ def test_machine_resolvable_rule_must_name_its_coverage_sources():
 
 def test_unrelated_searches_are_noise_not_coverage(tmp_path):
     pipeline, ctx = make_analytic(tmp_path)
-    _seed(pipeline, ctx)
+    seed_acme(pipeline, ctx)
     store = ctx.store
     execution = ExecutionRecord(
         execution_id="exec-unrelated", plan_id="", query_id="q-other",
@@ -192,7 +179,7 @@ def test_unrelated_searches_are_noise_not_coverage(tmp_path):
                 "absence_min_successful_sources": 1}, T0)
     assert not satisfied and "gleif" in explanation, \
         "a search of an unrelated source proves nothing about this question"
-    # and a legacy/hand-built rule dict naming nothing is never satisfied
+    # A rule that names no source can never be satisfied.
     satisfied, _, explanation = _absence_coverage_satisfied(
         store, {"absence_required_source_ids": (),
                 "absence_min_successful_sources": 1}, T0)
@@ -201,7 +188,7 @@ def test_unrelated_searches_are_noise_not_coverage(tmp_path):
 
 def test_absence_indicator_must_name_its_coverage_sources(tmp_path):
     pipeline, ctx = make_analytic(tmp_path)
-    by_predicate = _seed(pipeline, ctx)
+    by_predicate = seed_acme(pipeline, ctx)
     forecast = _forecast(ctx, by_predicate)
     with pytest.raises(ValueError, match="NAME the sources"):
         arm_indicator(ctx, description="no lapse appears anywhere",
@@ -216,7 +203,7 @@ def test_absence_indicator_must_name_its_coverage_sources(tmp_path):
 
 def test_unconstrained_presence_indicator_is_unconstructible(tmp_path):
     pipeline, ctx = make_analytic(tmp_path)
-    by_predicate = _seed(pipeline, ctx)
+    by_predicate = seed_acme(pipeline, ctx)
     forecast = _forecast(ctx, by_predicate)
     with pytest.raises(ValueError, match="unconstrained pattern"):
         arm_indicator(ctx, description="anything happens",
@@ -225,12 +212,12 @@ def test_unconstrained_presence_indicator_is_unconstructible(tmp_path):
                       effect=IndicatorEffect(mode="REVIEW_ONLY"))
 
 
-# ---- FR4: an acceptance is consumed once, across ALL versions --------------
+# ---- an acceptance is spent once, across every version ---------------------
 
 
 def test_acceptance_cannot_be_respent_after_a_later_version_frees_it(tmp_path):
     pipeline, ctx = make_analytic(tmp_path)
-    by_predicate = _seed(pipeline, ctx)
+    by_predicate = seed_acme(pipeline, ctx)
     forecast = _forecast(ctx, by_predicate, probability=0.35)
     first = _accepted_reforecast(ctx, forecast, 0.70)
     second = _accepted_reforecast(ctx, forecast, 0.20)
@@ -244,8 +231,8 @@ def test_acceptance_cannot_be_respent_after_a_later_version_frees_it(tmp_path):
                        actor_kind="SERVICE", provenance_kind="MODEL",
                        inference_id=second["inference_id"],
                        proposal_id=second["proposal_id"])
-    # the current version no longer carries first's proposal_id — but the
-    # spend is a fact about the log, not about current state
+    # The current version no longer names the first proposal, but the log
+    # still records that it was spent.
     with pytest.raises(ValueError, match="already[\\s\\S]*materialized"):
         update_probability(ctx, forecast["forecast_id"], probability=0.70,
                            reason="re-spending the freed acceptance",
@@ -257,7 +244,7 @@ def test_acceptance_cannot_be_respent_after_a_later_version_frees_it(tmp_path):
 
 def test_analyst_version_does_not_wear_a_model_trail(tmp_path):
     pipeline, ctx = make_analytic(tmp_path)
-    by_predicate = _seed(pipeline, ctx)
+    by_predicate = seed_acme(pipeline, ctx)
     forecast = _forecast(ctx, by_predicate, probability=0.35)
     accepted = _accepted_reforecast(ctx, forecast, 0.70)
     update_probability(ctx, forecast["forecast_id"], probability=0.70,
@@ -277,12 +264,12 @@ def test_analyst_version_does_not_wear_a_model_trail(tmp_path):
     assert model_version["inference_id"], "the model version keeps its trail"
 
 
-# ---- FR5: settled forecasts are history ------------------------------------
+# ---- a settled forecast is history -----------------------------------------
 
 
 def test_recreation_folds_nothing_into_a_settled_forecast(tmp_path):
     pipeline, ctx = make_analytic(tmp_path)
-    by_predicate = _seed(pipeline, ctx)
+    by_predicate = seed_acme(pipeline, ctx)
     forecast = _forecast(ctx, by_predicate, probability=0.35)
     _flip_to_suspended(pipeline, ctx)
     resolved = try_machine_resolution(ctx, forecast["forecast_id"])
@@ -304,15 +291,15 @@ def test_recreation_folds_nothing_into_a_settled_forecast(tmp_path):
         "the evidentiary basis of a settled judgment is never rewritten"
 
 
-# ---- FR6: archival backfill is history arriving late, not news -------------
+# ---- an old page arriving late is not the event happening ------------------
 
 
 def test_presence_does_not_fire_on_archival_backfill(tmp_path):
     pipeline, ctx = make_analytic(tmp_path)
-    by_predicate = _seed(pipeline, ctx)
+    by_predicate = seed_acme(pipeline, ctx)
     forecast = _forecast(ctx, by_predicate, probability=0.30)
     indicator = _armed_apply_indicator(ctx, forecast)
-    # a HISTORICAL capture about the pre-arming world, ingested after arming
+    # An archived capture of the older world, ingested after arming.
     plant_manifestation(pipeline, source_id="gleif",
                         native_id="lei/ACMELEI000000000001",
                         body=GLEIF_ACME_SUSPENDED,
@@ -328,12 +315,12 @@ def test_presence_does_not_fire_on_archival_backfill(tmp_path):
         forecast["forecast_id"]]["probability"] == 0.30
 
 
-# ---- FR7: a machine act never clears the review flag -----------------------
+# ---- a machine act never clears a flag raised for a person -----------------
 
 
 def test_indicator_firing_preserves_update_required(tmp_path):
     pipeline, ctx = make_analytic(tmp_path)
-    by_predicate = _seed(pipeline, ctx)
+    by_predicate = seed_acme(pipeline, ctx)
     forecast = _forecast(ctx, by_predicate, probability=0.35)
     indicator = _armed_apply_indicator(ctx, forecast)
     state = ClaimStateRecord(
@@ -353,12 +340,12 @@ def test_indicator_firing_preserves_update_required(tmp_path):
         "the flag was raised for a human; only a human clears it"
 
 
-# ---- FR8: the coverage-gap loop closes under normal propagation ------------
+# ---- coverage arriving closes the gap on the next ordinary pass ------------
 
 
 def test_coverage_arriving_resolves_the_blocked_forecast_via_propagation(tmp_path):
     pipeline, ctx = make_analytic(tmp_path)
-    by_predicate = _seed(pipeline, ctx)
+    by_predicate = seed_acme(pipeline, ctx)
     forecast = _forecast(ctx, by_predicate, probability=0.20,
                          expected="NEVER_SO",
                          horizon="2026-08-17T12:04:00+00:00")
@@ -388,12 +375,12 @@ def test_coverage_arriving_resolves_the_blocked_forecast_via_propagation(tmp_pat
     assert ctx.store.head()["event_count"] == before
 
 
-# ---- FR9: an interrupted firing completes ----------------------------------
+# ---- an interrupted firing finishes on the next pass -----------------------
 
 
 def test_interrupted_firing_completes_on_the_next_pass(tmp_path):
     pipeline, ctx = make_analytic(tmp_path)
-    by_predicate = _seed(pipeline, ctx)
+    by_predicate = seed_acme(pipeline, ctx)
     forecast = _forecast(ctx, by_predicate, probability=0.30)
     indicator = _armed_apply_indicator(ctx, forecast)
     _flip_to_suspended(pipeline, ctx)
@@ -422,7 +409,6 @@ def test_interrupted_firing_completes_on_the_next_pass(tmp_path):
     assert ctx.store.current_forecasts()[
         forecast["forecast_id"]]["probability"] == 0.62, \
         "the recovery pass completes the human's pre-authorized judgment"
-    # and completion is convergent
     before = ctx.store.head()["event_count"]
     check_indicators(ctx)
     check_indicators(ctx)
@@ -431,7 +417,7 @@ def test_interrupted_firing_completes_on_the_next_pass(tmp_path):
 
 def test_completed_firing_never_restomps_a_later_human_move(tmp_path):
     pipeline, ctx = make_analytic(tmp_path)
-    by_predicate = _seed(pipeline, ctx)
+    by_predicate = seed_acme(pipeline, ctx)
     forecast = _forecast(ctx, by_predicate, probability=0.30)
     _armed_apply_indicator(ctx, forecast)
     _flip_to_suspended(pipeline, ctx)
@@ -446,8 +432,7 @@ def test_completed_firing_never_restomps_a_later_human_move(tmp_path):
         "a recovery pass never re-stomps a human's later judgment"
 
 
-# ---- FR10: scoring is version-ordered (frozen-clock test lives in
-# test_analytic_calibration.py) — here: one bad record cannot be hidden ------
+# ---- scoring reads version order, not timestamps ---------------------------
 
 
 def test_hindsight_check_uses_versions_not_timestamps():
@@ -462,7 +447,7 @@ def test_hindsight_check_uses_versions_not_timestamps():
         standing_probability(versions)
 
 
-# ---- FR11: a tier the named rule does not yield is unconstructible ---------
+# ---- a tier the named rule does not yield cannot be built ------------------
 
 
 def test_tier_must_be_what_the_named_rule_yields():
@@ -482,12 +467,12 @@ def test_tier_must_be_what_the_named_rule_yields():
     assert WarningRecord(**{**base, "tier": "ROUTINE"}).tier == "ROUTINE"
 
 
-# ---- FR12: a revived blocked ABSENCE indicator fires late but honestly -----
+# ---- a blocked absence indicator fires when coverage finally arrives -------
 
 
 def test_blocked_absence_indicator_fires_once_coverage_arrives(tmp_path):
     pipeline, ctx = make_analytic(tmp_path)
-    by_predicate = _seed(pipeline, ctx)
+    by_predicate = seed_acme(pipeline, ctx)
     forecast = _forecast(ctx, by_predicate, probability=0.35,
                          horizon=FAR_HORIZON)
     indicator = arm_indicator(
@@ -501,8 +486,7 @@ def test_blocked_absence_indicator_fires_once_coverage_arrives(tmp_path):
         deadline="2026-08-17T12:08:00+00:00",
         coverage_min_successful_sources=1,
         coverage_required_source_ids=("gleif",))
-    while ctx.now_fn() <= "2026-08-17T12:08:00+00:00":
-        pass
+    advance_clock_past(ctx.now_fn, "2026-08-17T12:08:00+00:00")
     check_indicators(ctx)
     assert ctx.store.current_indicators()[indicator["indicator_id"]]["status"] \
         == "COVERAGE_BLOCKED"

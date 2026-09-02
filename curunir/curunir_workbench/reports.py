@@ -1,43 +1,33 @@
-"""Report / decision-dossier engine.
+"""Writing, checking, approving and exporting reports.
 
-A report is a versioned structured projection of the analytical record, not
-generated prose. The invariants:
-
-  * every sentence is SUPPORTED, EXPLICITLY_INFERENTIAL or UNRESOLVED;
-  * SUPPORTED requires basis references that resolve — for the approving
-    actor — to observation-backed propositions; inference laundered through
-    a SUPPORTED label is a validation rejection, not a style issue;
-  * a forecast probability quoted in a sentence must equal the actual
-    authored forecast record;
-  * historical state rendered as current, contested state rendered as
-    settled, and independence asserted over a single origin family are all
-    rejections;
-  * approval is a recorded human disposition over one immutable version;
-    open dissent blocks plain approval — it is either resolved or carried
-    visibly as APPROVED_WITH_DISSENT;
-  * later revision is a new version; the approved version stays in the log
-    exactly as approved.
+A report is a versioned structure over the analytical record, not generated
+prose. Validation refuses a sentence that presents inference as observation,
+stale or contested support as settled, historical state as current, a forecast
+probability the forecast never carried, or independence a single source cannot
+give. Approving is a human act on one fixed version, open dissent either
+resolved or carried visibly, and a revision is a new version that leaves the
+approved one in the log as it was.
 """
 from __future__ import annotations
 
+import html
 import re
 from typing import Any, Iterable, Mapping
 
 from argus.source_intelligence.models import digest_id
-from curunir_operational.access import Marking
+from curunir_operational.access import Marking, marking_from_record
 from curunir_operational.canonical import parse_time, sha256
 
-from curunir_operational.access import marking_from_record
-
+from .authority import authoritative_approval_state
 from .contracts import (HUMAN_ONLY_DISPOSITIONS, ReportDisposition, ReportRecord,
                         ReportSection, ReportSentence)
 from .errors import NotFound
-from .authority import authoritative_approval_state
 from .projections import MissionProjection, REDACTED
+from .provenance import claim_descent
 from .store import WorkbenchStore
 
-# basis families a SUPPORTED sentence may rest on (observation-backed record
-# families); anything else is inference wearing a supported label
+# The families a SUPPORTED sentence may rest on. Anything else is inference
+# wearing a supported label.
 _OBSERVATIONAL_BASIS = ("semantic_claim", "semantic_observation",
                         "fabric_manifestation")
 _INFERENTIAL_STATES = ("INFERRED", "PREDICTED", "PLANNED")
@@ -132,14 +122,13 @@ def _next_version(store: WorkbenchStore, current: Mapping[str, Any], *,
         report_id=current["report_id"], version=current["version"] + 1,
         title=title if title is not None else current["title"],
         question=question if question is not None else current["question"],
-        # content edits carry the editing analyst as author; status
-        # transitions keep the drafting author — the acting party is on the
-        # event log and the disposition
+        # An edit makes the editor the author; a status change keeps the
+        # original one. Either way the event log names who acted.
         author=content_author if content_author is not None else current["author"],
         sections=kept_sections, status=status,
         based_on_state_token=state_token or current["based_on_state_token"],
         recorded_time=now,
-        # a re-append NEVER re-classifies: the record keeps its own marking
+        # A re-append never re-classifies; the record keeps its own marking.
         marking=marking_from_record(current["marking"]),
         change_note=change_note)
     try:
@@ -147,7 +136,7 @@ def _next_version(store: WorkbenchStore, current: Mapping[str, Any], *,
             "WORKBENCH_REPORT_RECORDED", record,
             recorded_time=now, actor=actor)
     except ValueError as error:
-        # the store's strict next-version enforcement caught a concurrent writer
+        # The store's version check caught another writer.
         raise ReportConflict(str(error)) from error
     return event["record"]
 
@@ -162,8 +151,8 @@ def edit_report(store: WorkbenchStore, report_id: str, *, actor: str,
     current = _current(store, report_id)
     was_approved = current["status"] in ("APPROVED", "APPROVED_WITH_DISSENT")
     if was_approved:
-        # editing an approved output opens a NEW draft version; the approved
-        # version stays immutable history and its supersession is recorded
+        # Editing an approved report opens a new draft; the approved version
+        # stays in the log and its supersession is recorded.
         change_note = change_note or f"revision of approved v{current['version']}"
     elif current["status"] in ("REJECTED", "WITHDRAWN"):
         change_note = (change_note + " " if change_note else "") + \
@@ -185,11 +174,11 @@ def edit_report(store: WorkbenchStore, report_id: str, *, actor: str,
     return record
 
 
-# ---- validation --------------------------------------------------------------
+# ---- validation ----
 
 def validate_report(projection: MissionProjection, report: Mapping[str, Any]) -> dict:
-    """Structural validation against the approving actor's own authorized
-    projection: support that the approver cannot see does not count."""
+    """Check a report against the approver's own view; support they cannot see
+    does not count."""
     findings: list[dict] = []
 
     def finding(code: str, sentence: Mapping[str, Any], detail: str, *,
@@ -244,7 +233,7 @@ def validate_report(projection: MissionProjection, report: Mapping[str, Any]) ->
                                 f"claim {record['claim_id']} is "
                                 f"{record['epistemic_state']}; the sentence must "
                                 "be EXPLICITLY_INFERENTIAL")
-                # contested/disputed basis rendered as settled
+                # Contested support presented as settled.
                 for family, record in resolved:
                     if family != "semantic_claim":
                         continue
@@ -258,9 +247,9 @@ def validate_report(projection: MissionProjection, report: Mapping[str, Any]) ->
                         finding("CONTESTED_AS_SETTLED", sentence,
                                 f"claim {claim_id} is contested/under review; "
                                 "the sentence renders it settled")
-                # historical rendered as current — derived from the BASIS,
-                # not from an author-supplied flag: omitting temporal_scope
-                # does not opt out
+                # Historical support presented as current. This is read from
+                # the support itself, so leaving temporal_scope empty is not a
+                # way out of the check.
                 if sentence.get("temporal_scope") != "HISTORICAL":
                     claims = [r for f, r in resolved if f == "semantic_claim"]
                     expired = [c for c in claims if c.get("valid_to")
@@ -279,7 +268,7 @@ def validate_report(projection: MissionProjection, report: Mapping[str, Any]) ->
                         finding("PARTIALLY_HISTORICAL_BASIS", sentence,
                                 f"{len(expired)}/{len(claims)} supporting claims "
                                 "have ended validity", blocking=False)
-                # independence honesty
+                # Independence claimed over support that cannot give it.
                 if sentence.get("asserts_independent"):
                     claims = [r for f, r in resolved if f == "semantic_claim"]
                     best = max((c.get("independent_basis_count", 0) for c in claims),
@@ -288,11 +277,10 @@ def validate_report(projection: MissionProjection, report: Mapping[str, Any]) ->
                         finding("INDEPENDENCE_MISREPRESENTED", sentence,
                                 f"independent basis count is {best}; the sentence "
                                 "asserts independent corroboration")
-            # forecast probability fidelity (any status): EVERY quoted
-            # numeric probability must equal some AUTHORED version of one of
-            # the forecasts the sentence references (union across refs, so an
-            # honest comparative sentence validates) — word-form
-            # probabilities ("three in four") are a stated limitation
+            # Every number a sentence quotes must match some authored version
+            # of a forecast it references, taken together so that an honest
+            # comparison passes. Probabilities written out in words are not
+            # checked.
             sentence_forecasts = [r for f, r in resolved if f == "analytic_forecast"]
             if len(sentence_forecasts) > 1:
                 finding("MULTI_FORECAST_NUMERIC_AMBIGUITY", sentence,
@@ -341,7 +329,7 @@ def validate_report(projection: MissionProjection, report: Mapping[str, Any]) ->
             "ok": not any(f["blocking"] for f in findings)}
 
 
-# ---- workflow ----------------------------------------------------------------
+# ---- workflow ----
 
 def _disposition(store: WorkbenchStore, report: Mapping[str, Any], *,
                  disposition: str, actor: str, actor_kind: str, now: str,
@@ -379,9 +367,9 @@ def submit_report(store: WorkbenchStore, report_id: str, *, actor: str,
 
 
 def open_dissent(projection: MissionProjection, report_id: str) -> list[dict]:
-    """Open dissent on the report OR any of its sentences/sections, across
-    EVERY version — dissent anchored below report level must not dodge the
-    approval gate, and rewording a sentence must not detach it."""
+    """Open dissent on the report or any of its sections and sentences, in every
+    version, so dissent cannot slip the approval gate by being anchored deep or
+    by having its sentence reworded."""
     part_ids = {report_id}
     for version in projection.versions("workbench_report", report_id):
         for section in version["sections"]:
@@ -396,10 +384,10 @@ def approve_report(store: WorkbenchStore, projection: MissionProjection,
                    report_id: str, *, actor: str, actor_kind: str,
                    marking: Marking, now: str, expected_version: int,
                    note: str = "", acknowledge_dissent: tuple[str, ...] = ()) -> dict:
-    """Approval: human-only, validation-gated, dissent-aware.
+    """Approve a report: human only, after validation, with dissent accounted for.
 
-    `projection` must be the approving actor's own authorized view — support
-    the approver cannot see blocks approval instead of silently counting."""
+    The projection must be the approver's own view, so support they cannot see
+    blocks the approval rather than quietly counting towards it."""
     if actor_kind != "HUMAN":
         raise PermissionError("report approval is a human act")
     current = _current(store, report_id)
@@ -483,7 +471,7 @@ def reject_report(store: WorkbenchStore, report_id: str, *, actor: str,
     return record
 
 
-# ---- role projections --------------------------------------------------------
+# ---- role projections ----
 
 _EXECUTIVE_KINDS = ("executive_summary", "key_judgments", "warnings", "forecasts",
                     "decision_options", "unresolved_risks", "information_gaps",
@@ -494,8 +482,8 @@ _OPERATOR_KINDS = ("decision_options", "collection_status", "information_gaps",
 
 def role_view(projection: MissionProjection, report: Mapping[str, Any],
               role: str) -> dict[str, Any]:
-    """Role-specific transformations of ONE report state — never independent
-    summaries. Sentence status labels survive every projection."""
+    """One report seen through one role's lens; never a separate summary, and
+    every sentence keeps its status label."""
     base = {"report_id": report["report_id"], "version": report["version"],
             "title": report["title"], "question": report["question"],
             "status": report["status"], "author": report["author"],
@@ -516,7 +504,6 @@ def role_view(projection: MissionProjection, report: Mapping[str, Any],
             for sentence in section["sentences"]:
                 lineage = []
                 for ref in sentence.get("basis_refs", ()):
-                    from .provenance import claim_descent
                     descent = claim_descent(projection, ref)
                     if descent is not None:
                         lineage.append(descent)
@@ -551,13 +538,12 @@ def _uncertainty_note(report: Mapping[str, Any]) -> dict[str, int]:
     return counts
 
 
-# ---- export ------------------------------------------------------------------
+# ---- export ----
 
 def export_package(projection: MissionProjection, store: WorkbenchStore,
                    report_id: str) -> dict[str, Any] | None:
-    """Structured machine-readable export: report versions, dispositions,
-    expanded basis references — everything the receiving side needs to check
-    lineage, restricted to the exporting context's authorized view."""
+    """Everything a receiver needs to check the report's lineage: its versions,
+    dispositions and expanded basis, limited to what the exporter can see."""
     current = projection.get("workbench_report", report_id)
     if current is None:
         return None
@@ -570,7 +556,6 @@ def export_package(projection: MissionProjection, store: WorkbenchStore,
             for ref in sentence.get("basis_refs", ()):
                 if ref in basis or ref == REDACTED:
                     continue
-                from .provenance import claim_descent
                 basis[ref] = claim_descent(projection, ref) \
                     or projection.get("semantic_observation", ref) \
                     or projection.get("fabric_manifestation", ref) \
@@ -593,28 +578,27 @@ def export_package(projection: MissionProjection, store: WorkbenchStore,
 
 
 def export_html(projection: MissionProjection, report: Mapping[str, Any]) -> str:
-    """Deterministic self-contained human-readable report. Every sentence
-    shows its epistemic status; nothing renders as bare unqualified fact."""
-    import html as _html
-    parts = [f"<h1>{_html.escape(report['title'])}</h1>",
-             f"<p class='meta'>version {report['version']} · {_html.escape(report['status'])} · "
-             f"author {_html.escape(report['author'])} · "
-             f"state {_html.escape(report['based_on_state_token'])}</p>",
-             f"<p class='question'>{_html.escape(report['question'])}</p>"]
+    """A standalone HTML report where every sentence shows its status, so
+    nothing reads as bare fact."""
+    parts = [f"<h1>{html.escape(report['title'])}</h1>",
+             f"<p class='meta'>version {report['version']} · {html.escape(report['status'])} · "
+             f"author {html.escape(report['author'])} · "
+             f"state {html.escape(report['based_on_state_token'])}</p>",
+             f"<p class='question'>{html.escape(report['question'])}</p>"]
     for section in report["sections"]:
-        parts.append(f"<h2>{_html.escape(section['title'])}</h2>")
+        parts.append(f"<h2>{html.escape(section['title'])}</h2>")
         for sentence in section["sentences"]:
             refs = ", ".join(sentence.get("basis_refs", ())[:6])
             status = sentence["status"]
             note = ""
             if status == "EXPLICITLY_INFERENTIAL":
-                note = f" — inference: {_html.escape(sentence.get('inference_note', ''))}"
+                note = f" — inference: {html.escape(sentence.get('inference_note', ''))}"
             if status == "UNRESOLVED":
-                note = f" — unresolved: {_html.escape(sentence.get('unresolved_reason', ''))}"
+                note = f" — unresolved: {html.escape(sentence.get('unresolved_reason', ''))}"
             parts.append(
-                f"<p class='sentence s-{status.lower()}'>{_html.escape(sentence['text'])} "
+                f"<p class='sentence s-{status.lower()}'>{html.escape(sentence['text'])} "
                 f"<span class='tag'>[{status}]</span>"
-                f"<span class='refs'>{_html.escape(refs)}{note}</span></p>")
+                f"<span class='refs'>{html.escape(refs)}{note}</span></p>")
     part_ids = {report["report_id"]}
     for section in report["sections"]:
         part_ids.add(section["section_id"])
@@ -629,8 +613,8 @@ def export_html(projection: MissionProjection, report: Mapping[str, Any]) -> str
                          "prior version — see the export package</p>")
         for a in dissent:
             parts.append(f"<p class='sentence s-unresolved'>"
-                         f"{_html.escape(a['author'])}: {_html.escape(a['text'])} "
-                         f"<span class='tag'>[DISSENT/{_html.escape(a['status'])}]</span></p>")
+                         f"{html.escape(a['author'])}: {html.escape(a['text'])} "
+                         f"<span class='tag'>[DISSENT/{html.escape(a['status'])}]</span></p>")
     body = "\n".join(parts)
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8">

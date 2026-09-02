@@ -1,4 +1,4 @@
-"""Replay-backed Ed25519 public-key ownership and lifecycle."""
+"""Which actor owns which public key, and whether that key is still valid."""
 from __future__ import annotations
 
 from typing import Any, Callable
@@ -26,7 +26,7 @@ class _NoAppend(Exception):
 
 
 class KeyRegistry:
-    """One-owner key families with atomic, bounded enrollment."""
+    """Key ownership and lifecycle, replayed from the store."""
 
     def __init__(self, store, *, actor: str = "identity-registry",
                  marking: Marking | None = None,
@@ -60,14 +60,15 @@ class KeyRegistry:
         return versions[-1] if versions else None
 
     def active_keys_for(self, actor_id: str) -> list[dict]:
-        key_ids = {
-            record["key_id"] for record in self.store.records_of("actor_key")
-            if record["actor_id"] == actor_id
-        }
+        latest: dict[str, dict] = {}
+        for record in self.store.records_of("actor_key"):
+            if record["actor_id"] != actor_id:
+                continue
+            known = latest.get(record["key_id"])
+            if known is None or record.get("version", 1) >= known.get("version", 1):
+                latest[record["key_id"]] = record
         return sorted(
-            (current for key_id in key_ids
-             if (current := self.current(key_id)) is not None
-             and current["status"] == "ACTIVE"),
+            (record for record in latest.values() if record["status"] == "ACTIVE"),
             key=lambda record: (record["enrolled_time"], record["key_id"]),
         )
 
@@ -132,7 +133,7 @@ class KeyRegistry:
 
     def enroll(self, *, actor_id: str, actor_kind: str, public_key_hex: str,
                now: str | None = None) -> dict[str, Any]:
-        """Add one device key without retiring any other device."""
+        """Add a key for an actor without retiring any other key."""
         return self._enroll(
             actor_id=actor_id,
             actor_kind=actor_kind,
@@ -198,10 +199,10 @@ class KeyRegistry:
 
     def rotate(self, *, actor_id: str, new_public_key_hex: str,
                now: str | None = None) -> dict[str, Any]:
-        """Enroll the replacement first, then retire its recorded predecessor.
+        """Enroll the new key, then retire the old one.
 
-        The order cannot brick the actor.  ``supersedes_key_id`` makes a retry
-        after a crash finish the retirement instead of leaving the old key live.
+        This order never leaves the actor without a key. The new key records which
+        key it replaces, so a retry after a crash still retires the old one.
         """
         timestamp = self._now(now)
         new_key_id = key_id_for(new_public_key_hex)

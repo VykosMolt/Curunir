@@ -1,10 +1,9 @@
-"""Curunir V6.8 terminal-validation harness.
+"""The V6.8 pilot harness.
 
-This is qualification tooling over the accepted V6 planes.  It does not add
-a product plane or an operator UI.  It prepares the frozen missions through
-existing production stores/connectors, serves the existing workbench with a
-small privacy-bounded audit middleware, packages retained mission evidence,
-and verifies custody/replay/measurement conditions.
+It prepares the frozen missions with the product's own stores and connectors,
+serves the workbench with a small audit middleware, packages the retained
+evidence, and verifies custody, replay and measurement. It adds nothing to the
+product itself.
 """
 from __future__ import annotations
 
@@ -24,20 +23,59 @@ import tempfile
 import time
 import unicodedata
 import xml.etree.ElementTree as ET
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Mapping
+from unittest import mock
 
+from fastapi import HTTPException
 from starlette.requests import Request as StarletteRequest
+from starlette.responses import JSONResponse
 
+from curunir_analytic.contracts import ImpactEdge
+from curunir_analytic.demo import MISSION, SUBJECT_LEI, SUBJECT_NAME, phase_1
+from curunir_analytic.impact import build_path, create_objective, record_assumption
+from curunir_analytic.narratives import create_narrative
+from curunir_analytic.providers import AnalyticalAssist
+from curunir_analytic.stakeholders import create_assessment
+from curunir_analytic.substrate import AnalyticContext
+from curunir_analytic.themes import create_theme, discover_theme_candidates
+from curunir_fabric import ABSENCE_SEMANTICS
+from curunir_fabric.catalog import seed_starter_catalog, starter_catalog
+from curunir_fabric.contracts import ChangeObservation, DiscoveryPlan, ExecutionRecord, ManifestationRecord, QuerySpec
+from curunir_fabric.mission_bridge import open_requirement_with_need
+from curunir_fabric.registry import load_registry, register_source
+from curunir_identity import GENUINE, verify_all
+from curunir_operational.access import AccessContext, Marking, can_view
+from curunir_operational.analytics import DeterministicRuleProvider
 from curunir_operational.canonical import canonical_line, digest_id, parse_json_strict, sha256
+from curunir_operational.contracts import SourceRecord
+from curunir_operational.missions import MissionWorkflow
+from curunir_operational.pipelines import PipelineExecutor, build_connector
+from curunir_operational.projection import Projection
+from curunir_operational.scenario import feeds
+from curunir_operational.scenario.config import MAPPINGS, PIPELINES, SCHEMAS, at
+from curunir_operational.schema_registry import SchemaRegistry
+from curunir_operational.security import PRIMARY_ID_FIELDS
+from curunir_operational.workflow import WorkflowEngine
+from curunir_semantic.collection import plan_collection_routes, requirement_for_discriminator
+from curunir_semantic.contracts import ClaimStateRecord
+from curunir_semantic.hypotheses import propose_discriminator
+from curunir_semantic.pipeline import SemanticPipeline
+from curunir_semantic.worldmodel import world_object_id
+from curunir_workbench.auth import ActorRegistry, write_registry
+from curunir_workbench.projections import ALL_FAMILIES, MissionProjection
+from curunir_workbench.provenance import evidence_view
+from curunir_workbench.reports import validate_report
+from curunir_workbench.server import create_app
+from curunir_workbench.store import WorkbenchStore
+from curunir_workbench.views import timeline
 
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = PACKAGE_ROOT.parent
-#: The external ARGUS kernel package.  Its *identity* (whole-tree hash and file
-#: count) is frozen in CURUNIR_V6_8_REPOSITORY_TRUTH.json; its *location* is
-#: the repository's kernel plane, overridable with CURUNIR_ARGUS_KERNEL.
+# The kernel's identity is frozen in CURUNIR_V6_8_REPOSITORY_TRUTH.json; only its location can vary.
 KERNEL_PACKAGE = Path(os.environ.get("CURUNIR_ARGUS_KERNEL", REPO_ROOT / "kernel" / "argus"))
 CONTRACT_PATH = PACKAGE_ROOT / "CURUNIR_V6_8_QUALIFICATION.json"
 MISSIONS_PATH = PACKAGE_ROOT / "CURUNIR_V6_8_MISSIONS.json"
@@ -57,12 +95,10 @@ APPROVER_ACTOR = "v68-human-approver"
 PUBLIC_ACTOR = "v68-public-observer"
 PREPARATION_ACTOR = "v68-preparation-service"
 
-# Existing workbench routes that expose operational objects, events, alerts,
-# and recommendations.  These names are not MissionProjection families.
+# Workbench routes that show operational objects, events, alerts and recommendations.
 M3_OPERATIONAL_REVIEW_PATHS = ("/api/overview", "/api/activity")
 
-# Remainder tokens allowed around an exact cited statement or asserted value.
-# Any other leftover token means the sentence asserts extra, unbound content.
+# Words allowed around a cited statement in a SUPPORTED sentence. Anything else is extra content.
 _BINDING_WRAPPER_TOKENS = frozenset({
     "a", "an", "and", "as", "at", "after", "affected", "before", "being",
     "be", "been", "by", "correction", "corrected", "current", "derivative",
@@ -152,7 +188,6 @@ def _require_new_root(root: Path) -> None:
 
 
 def _marking(authority: str, *, restricted: bool = False):
-    from curunir_operational.access import Marking
     return Marking(
         owning_authority=authority,
         compartments=("SPECIAL",) if restricted else (),
@@ -162,7 +197,7 @@ def _marking(authority: str, *, restricted: bool = False):
 
 
 class FixtureClock:
-    """Deterministic monotonic knowledge time for notional mission setup."""
+    """A fixed, always-increasing clock for mission setup."""
 
     def __init__(self, minute: int = 0):
         self.minute = minute
@@ -210,7 +245,6 @@ def _actor_entries() -> list[dict[str, Any]]:
 
 
 def _write_actors(root: Path) -> Path:
-    from curunir_workbench.auth import write_registry
     actors_path = root / "actors.json"
     write_registry(actors_path, _actor_entries())
     return actors_path
@@ -232,13 +266,11 @@ def _current_authority() -> dict[str, str]:
 
 
 def _accepted_authorities() -> list[dict[str, str]]:
-    """The authority sets a campaign root may carry.
+    """The authority hash sets a campaign root may carry.
 
-    The current byte identities of the five authority files come first.  A
-    superseded set is accepted only if the frozen qualification contract
-    ledgers it under ``authority_supersession`` with all five hashes: a
-    revision of the authority files is a change-control event recorded in the
-    contract, never an implicit pass."""
+    The current five hashes come first. An older set counts only if the frozen
+    contract lists it under authority_supersession with all five hashes.
+    """
     current = _current_authority()
     accepted = [current]
     for entry in _read_json(CONTRACT_PATH).get("authority_supersession", ()):
@@ -256,22 +288,11 @@ def _copy_mission_authority(root: Path, mission_id: str) -> None:
     ledger = _read_json(V7_LEDGER_PATH)
     ledger["mission_id"] = mission_id
     _write_json(root / "v7_follow_up.json", ledger)
-    _write_json(root / "qualification_authority.json", {
-        "contract": CONTRACT_PATH.name,
-        "contract_sha256": _sha256_file(CONTRACT_PATH),
-        "missions": MISSIONS_PATH.name,
-        "missions_sha256": _sha256_file(MISSIONS_PATH),
-        "repository_truth": TRUTH_PATH.name,
-        "repository_truth_sha256": _sha256_file(TRUTH_PATH),
-        "repair_contract": REPAIR_CONTRACT_PATH.name,
-        "repair_contract_sha256": _sha256_file(REPAIR_CONTRACT_PATH),
-        "pilot_protocol": PROTOCOL_PATH.name,
-        "pilot_protocol_sha256": _sha256_file(PROTOCOL_PATH),
-    })
+    _write_json(root / "qualification_authority.json", _current_authority())
 
 
 def _repository_identity(*, require_clean: bool) -> dict[str, Any]:
-    """Bind a prepared campaign to one exact, clean executable and kernel."""
+    """The exact commit and kernel a campaign was prepared with. Refuses a dirty tree when asked."""
     commit = subprocess.run(
         ["git", "-C", str(REPO_ROOT), "rev-parse", "HEAD"], check=True,
         capture_output=True, text=True).stdout.strip()
@@ -298,7 +319,6 @@ def _repository_identity(*, require_clean: bool) -> dict[str, Any]:
 
 
 def _open_fixture_need(store, *, mission_id: str, question: str, marking, now: str):
-    from curunir_fabric.mission_bridge import open_requirement_with_need
     return open_requirement_with_need(
         store,
         mission_context=mission_id,
@@ -328,14 +348,7 @@ def _plant_fixture_manifestation(
     source_time: str | None = None,
     archive_capture_time: str | None = None,
 ) -> dict[str, Any]:
-    """Admit a frozen scenario artifact with explicit fixture lineage.
-
-    This is deterministic scenario setup, not a simulated network result.  The
-    plan, manifestation, and execution all label that fact, while raw bytes use
-    the same content-addressed custody and semantic pipeline as live evidence.
-    """
-    from curunir_fabric import ABSENCE_SEMANTICS
-    from curunir_fabric.contracts import DiscoveryPlan, ExecutionRecord, ManifestationRecord, QuerySpec
+    """Record a frozen fixture as a manifestation, labelled as a fixture, not a retrieval."""
 
     digest = _sha256_bytes(body)
     custody = Path(pipeline.custody_root) / "sha256" / digest[:2] / digest[2:4] / digest
@@ -450,13 +463,6 @@ def _fixture_manifest(paths: Iterable[Path]) -> list[dict[str, Any]]:
 
 
 def _prepare_m2(root: Path) -> dict[str, Any]:
-    from dataclasses import replace
-    from curunir_fabric.catalog import seed_starter_catalog, starter_catalog
-    from curunir_fabric.contracts import ChangeObservation
-    from curunir_fabric.registry import register_source
-    from curunir_semantic.contracts import ClaimStateRecord
-    from curunir_semantic.pipeline import SemanticPipeline
-    from curunir_workbench.store import WorkbenchStore
 
     clock = FixtureClock()
     marking = _marking(M2_MARKING_AUTHORITY)
@@ -587,7 +593,6 @@ def _prepare_m2(root: Path) -> dict[str, Any]:
                  recorded_time=translation_state.recorded_time,
                  actor=PREPARATION_ACTOR)
 
-    from curunir_operational.missions import MissionWorkflow
     workflow = MissionWorkflow(store)
     requirement = workflow.open_requirement(
         mission_context="M2_REGULATORY_CORRECTION",
@@ -628,19 +633,6 @@ def _prepare_m2(root: Path) -> dict[str, Any]:
 
 
 def _prepare_m3(root: Path) -> dict[str, Any]:
-    from curunir_fabric.catalog import seed_starter_catalog
-    from curunir_operational.access import AccessContext
-    from curunir_operational.analytics import DeterministicRuleProvider
-    from curunir_operational.contracts import SourceRecord
-    from curunir_operational.missions import MissionWorkflow
-    from curunir_operational.pipelines import PipelineExecutor, build_connector
-    from curunir_operational.projection import Projection
-    from curunir_operational.schema_registry import SchemaRegistry
-    from curunir_operational.scenario import feeds
-    from curunir_operational.scenario.config import MAPPINGS, PIPELINES, SCHEMAS, at
-    from curunir_operational.workflow import WorkflowEngine
-    from curunir_semantic.pipeline import SemanticPipeline
-    from curunir_workbench.store import WorkbenchStore
 
     clock = FixtureClock()
     public = _marking(M3_MARKING_AUTHORITY)
@@ -791,20 +783,7 @@ def _prepare_m3(root: Path) -> dict[str, Any]:
 
 
 def _prepare_m1(root: Path) -> dict[str, Any]:
-    """Prepare the real-public capstone substrate without claiming a pilot."""
-    from curunir_analytic.contracts import ImpactEdge
-    from curunir_analytic.demo import MISSION, SUBJECT_LEI, SUBJECT_NAME, phase_1
-    from curunir_analytic.impact import build_path, create_objective, record_assumption
-    from curunir_analytic.narratives import create_narrative
-    from curunir_analytic.stakeholders import create_assessment
-    from curunir_analytic.substrate import AnalyticContext
-    from curunir_analytic.themes import create_theme, discover_theme_candidates
-    from curunir_fabric.registry import load_registry
-    from curunir_operational.access import Marking
-    from curunir_semantic.collection import plan_collection_routes, requirement_for_discriminator
-    from curunir_semantic.hypotheses import propose_discriminator
-    from curunir_semantic.worldmodel import world_object_id
-    from curunir_workbench.store import WorkbenchStore
+    """Prepare the live-source capstone mission. This is setup, not the pilot."""
 
     acquisition = phase_1(root)
     store = WorkbenchStore(root / "store")
@@ -894,7 +873,6 @@ def _prepare_m1(root: Path) -> dict[str, Any]:
         marking=marking)
     if not any(route["automatable"] and route["score"] > 0 for route in routes):
         raise V68Error("capstone has no viable post-baseline collection route")
-    from curunir_operational.missions import MissionWorkflow
     task = MissionWorkflow(store).assign_task(
         assigned_role="ANALYST", assigned_actor=PRIMARY_ACTOR,
         task_type="COLLECTION_FOLLOWUP",
@@ -944,7 +922,6 @@ def prepare_mission(mission_id: str, root: Path) -> dict[str, Any]:
             "preparation": result,
         }
         _write_json(root / "preparation.json", result)
-        from curunir_workbench.store import WorkbenchStore
         retained = WorkbenchStore(root / "store")
         manifestations = [{
             "manifestation_id": item["manifestation_id"],
@@ -997,12 +974,7 @@ def _pilot_entry_hash(entry: Mapping[str, Any]) -> str:
 
 
 def verify_pilot_log(path: Path) -> dict[str, Any]:
-    """Verify the independent instrumentation chain.
-
-    The log is deliberately outside the mission truth store: it measures how a
-    human used the existing surface and never becomes source evidence.  It is
-    nevertheless hash chained so a package cannot silently rewrite the pilot.
-    """
+    """Verify the pilot log's hash chain. The log lives outside the mission store."""
     if not path.exists():
         return {"valid": False, "event_count": 0, "head_hash": "", "error": "missing pilot log"}
     previous = "0" * 64
@@ -1101,7 +1073,7 @@ def _request_category(method: str, path: str) -> str:
 
 
 def _bounded_path(path: str) -> tuple[str, str]:
-    """Remove record identifiers from retained instrumentation paths."""
+    """Replace the record id in a path with {id}; return the path and the id's hash."""
     patterns = (
         r"^(/api/evidence/)([^/]+)$",
         r"^(/api/claims/)([^/]+)(/descent)$",
@@ -1119,10 +1091,7 @@ def _bounded_path(path: str) -> tuple[str, str]:
 
 
 def create_instrumented_app(root: Path):
-    """Wrap the shipped workbench; no routes or UI in the product are replaced."""
-    from fastapi import HTTPException
-    from curunir_workbench.server import create_app
-    from curunir_workbench.store import WorkbenchStore
+    """The shipped workbench plus pilot control routes and an audit middleware."""
 
     preparation = _read_json(root / "preparation.json")
     if preparation.get("status") != "READY_FOR_GENUINE_HUMAN_PILOT":
@@ -1194,8 +1163,7 @@ def create_instrumented_app(root: Path):
 
     @app.get("/v68/pilot/brief")
     def pilot_brief(request: StarletteRequest):
-        """Return only the caller-visible ids needed to use existing commands."""
-        from curunir_workbench.projections import MissionProjection
+        """The ids the caller may see, enough to drive the existing commands."""
         actor = principal(request)
         projection = MissionProjection(
             WorkbenchStore(root / "store"), actor)
@@ -1275,7 +1243,6 @@ def create_instrumented_app(root: Path):
         try:
             if actor_id == PUBLIC_ACTOR and request.method != "GET" \
                     and path not in ("/v68/pilot/start", "/v68/pilot/end"):
-                from starlette.responses import JSONResponse
                 response = JSONResponse(
                     status_code=403,
                     content={"detail": "public access-check actor is read-only"})
@@ -1319,7 +1286,6 @@ def _pilot_events(path: Path) -> list[dict[str, Any]]:
 
 
 def _access_contexts(root: Path, mission_id: str) -> list[tuple[str, Any]]:
-    from curunir_workbench.auth import ActorRegistry
     registry = ActorRegistry(root / "actors.json")
     names = [PRIMARY_ACTOR]
     if mission_id in ("M1_CORPORATE_REGISTRY_CAPSTONE", "M3_RELIEF_COLLABORATION"):
@@ -1330,7 +1296,6 @@ def _access_contexts(root: Path, mission_id: str) -> list[tuple[str, Any]]:
 
 
 def _semantic_projection(store, context) -> dict[str, Any]:
-    from curunir_workbench.projections import ALL_FAMILIES, MissionProjection
     projection = MissionProjection(store, context)
     overview = projection.overview()
     overview["meta"].pop("context_id", None)
@@ -1381,7 +1346,7 @@ def _normal_text(value: Any) -> str:
 
 
 def _licensed_wrapper_around(text: str, value: str) -> bool:
-    """True when text is exactly value, or value plus licensed connectives."""
+    """True when text is value plus, at most, allowed connective words."""
     if len(value) < 3 or value not in text:
         return False
     start = 0
@@ -1397,13 +1362,7 @@ def _licensed_wrapper_around(text: str, value: str) -> bool:
 
 
 def _supported_sentence_binding(projection, sentence: Mapping[str, Any]) -> dict[str, Any]:
-    """Bind settled prose to cited observational content without extra claims.
-
-    Citation shape is not enough.  The normalized sentence must be the cited
-    statement or asserted value, optionally wrapped only in licensed
-    connectives.  Additional content, including a true value appended to
-    unrelated prose, fails closed.
-    """
+    """Check that a SUPPORTED sentence is the cited statement or value, and nothing more."""
     text = _normal_text(sentence.get("text"))
     matches = []
     for ref in sentence.get("basis_refs", ()):
@@ -1430,14 +1389,6 @@ def _supported_sentence_binding(projection, sentence: Mapping[str, Any]) -> dict
 
 
 def verify_evidence_faithfulness(root: Path) -> dict[str, Any]:
-    from curunir_identity import verify_all
-    from curunir_operational.access import can_view
-    from curunir_operational.security import PRIMARY_ID_FIELDS
-    from curunir_workbench.auth import ActorRegistry
-    from curunir_workbench.projections import MissionProjection
-    from curunir_workbench.provenance import evidence_view
-    from curunir_workbench.reports import validate_report
-    from curunir_workbench.store import WorkbenchStore
 
     preparation = _read_json(root / "preparation.json")
     mission_id = preparation["mission_id"]
@@ -1658,7 +1609,6 @@ def verify_evidence_faithfulness(root: Path) -> dict[str, Any]:
 
 
 def _measurement(root: Path, faithfulness: Mapping[str, Any], replay: Mapping[str, Any]) -> dict[str, Any]:
-    from curunir_workbench.store import WorkbenchStore
     store = WorkbenchStore(root / "store")
     events = _pilot_events(root / PILOT_LOG)
     session_analysis = _session_analysis(events)
@@ -1744,15 +1694,10 @@ def _measurement(root: Path, faithfulness: Mapping[str, Any], replay: Mapping[st
 
 @contextlib.contextmanager
 def _offline_replay_guard():
-    """Deny replay-path egress.  This is not a kernel sandbox.
+    """Block network, subprocess and model-provider calls during replay.
 
-    Enforced boundaries: socket connect/connect_ex/create_connection,
-    subprocess spawn helpers, and AnalyticalAssist.propose.  A caller that
-    already holds a connected transport, or that reaches the kernel by
-    other means, is outside this guard.
+    This patches the Python entry points only; it is not a sandbox.
     """
-    from unittest import mock
-    from curunir_analytic.providers import AnalyticalAssist
 
     counters = {
         "network_attempts_blocked": 0, "network_calls_completed": 0,
@@ -1780,8 +1725,6 @@ def _offline_replay_guard():
 
 
 def replay_mission(root: Path, destination: Path) -> dict[str, Any]:
-    from curunir_identity import verify_all
-    from curunir_workbench.store import WorkbenchStore
 
     if destination.exists() or destination.is_symlink():
         raise V68Error(f"replay destination already exists: {destination}")
@@ -1844,7 +1787,7 @@ def replay_mission(root: Path, destination: Path) -> dict[str, Any]:
 
 
 def _session_analysis(events: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
-    """Pair ordered, non-overlapping sessions and bind HTTP work to them."""
+    """Pair session start and end events and attach HTTP actions to them."""
     open_sessions: dict[tuple[str, str], dict[str, Any]] = {}
     intervals: list[dict[str, Any]] = []
     findings: list[dict[str, Any]] = []
@@ -1922,7 +1865,7 @@ def _session_analysis(events: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
 def _session_bound_store_events(store_events: Iterable[Mapping[str, Any]],
                                 bounded_http: Iterable[Mapping[str, Any]]) \
         -> list[dict[str, Any]]:
-    """Return store events attributable to successful in-session requests."""
+    """Store events written by successful requests inside a session."""
     events = list(store_events)
     attributable: dict[int, dict[str, Any]] = {}
     for action in bounded_http:
@@ -1941,8 +1884,6 @@ def _session_bound_store_events(store_events: Iterable[Mapping[str, Any]],
 
 def assess_mission(root: Path, faithfulness: Mapping[str, Any],
                    replay: Mapping[str, Any]) -> dict[str, Any]:
-    from curunir_identity import GENUINE
-    from curunir_workbench.store import WorkbenchStore
 
     _validate_frozen_authority_files()
     mission_id = _read_json(root / "preparation.json")["mission_id"]
@@ -2322,12 +2263,7 @@ def _tree_manifest(root: Path, *, exclude: set[str] | None = None) -> list[dict[
 
 
 def _audit_state(root: Path) -> dict[str, Any]:
-    """Project the package index from the one authoritative retained store."""
-    from curunir_operational.security import PRIMARY_ID_FIELDS
-    from curunir_workbench.auth import ActorRegistry
-    from curunir_workbench.projections import MissionProjection
-    from curunir_workbench.store import WorkbenchStore
-    from curunir_workbench.views import timeline
+    """An audit view of the mission derived from the store alone."""
 
     store = WorkbenchStore(root / "store")
     context = ActorRegistry(root / "actors.json").context_for_actor(APPROVER_ACTOR)
@@ -2379,12 +2315,10 @@ def _audit_state(root: Path) -> dict[str, Any]:
 
 
 def finalize_mission(root: Path) -> dict[str, Any]:
-    """Freeze one append-only mission package after the genuine pilot.
+    """Freeze the mission package after the pilot. A failed assessment is kept as data.
 
-    A failed assessment is still preserved as data, but cannot become a pass.
-    The credential registry is intentionally excluded from the package.
+    The actor registry is left out because it holds credentials.
     """
-    from curunir_workbench.store import WorkbenchStore
 
     artifacts = root / "artifacts"
     if artifacts.exists() or artifacts.is_symlink():
@@ -2464,7 +2398,6 @@ def verify_package(root: Path) -> dict[str, Any]:
             or (artifacts / "actors.json").exists() \
             or package.get("actors_registry_packaged") is not False:
         findings.append({"code": "PACKAGE_CREDENTIAL_OR_WAIVER_VIOLATION"})
-    from curunir_workbench.store import WorkbenchStore
     chain = WorkbenchStore(root / "store").verify_chain()
     if chain["event_count"] != package.get("store_event_count") \
             or chain["head_hash"] != package.get("store_head_hash"):

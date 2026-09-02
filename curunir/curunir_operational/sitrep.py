@@ -1,10 +1,9 @@
-"""Evidence-bound operational situation reports (JSON, Markdown, plain text).
+"""Situation reports in JSON, Markdown and plain text.
 
-Reports are generated from a frozen access-filtered projection view, carry an
-integrity hash over their canonical content, and always distinguish observed /
-reported / extracted / inferred / disputed / unknown. Dependent publications
-are reported as one shared basis, never as independent corroboration. The
-plain-text form stays useful without maps, graphics or network access.
+A report is built from a frozen access-filtered view and carries an integrity
+hash over its content. It always says whether an item is observed, reported,
+extracted, inferred, disputed or unknown, and reports dependent publications
+as one shared basis rather than as corroboration.
 """
 from __future__ import annotations
 
@@ -51,10 +50,14 @@ def build_situation_report(store: MissionDataStore, projection: Projection, cont
                                  if r["epistemic_state"] == "DISPUTED" else ""))
                       for r in by_type.get("INFRASTRUCTURE", [])]
     exposure = _route_exposure(projection, context)
+    visible_ids = {record["object_id"] for record in objects}
     routes = []
     for record in by_type.get("ROUTE", []):
         if exposure and record["object_id"] in exposure.get("exposure", {}):
-            findings = exposure["exposure"][record["object_id"]]
+            # Never name an object this context cannot view, whatever the
+            # assessment happens to carry.
+            findings = [f for f in exposure["exposure"][record["object_id"]]
+                        if f["disruption_id"] in visible_ids]
             detail = "no known disruption" if not findings else \
                 f"{len(findings)} known disruption(s): " + "; ".join(
                     f"{f['disruption_id']} ({f['condition']})" for f in findings)

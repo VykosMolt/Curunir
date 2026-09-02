@@ -1,4 +1,5 @@
-"""Execution → custody → manifestation → coverage, offline via fake transports."""
+"""Running a plan, keeping the bytes, and reporting what was actually searched.
+Fake transports stand in for the network."""
 from __future__ import annotations
 
 import hashlib
@@ -27,8 +28,8 @@ MARK = Marking(owning_authority="test-fabric", releasability=("PUBLIC",))
 WIKIDATA_BODY = json.dumps({"search": [
     {"id": "Q4416184", "label": "Severstal", "description": "Russian steel company",
      "concepturi": "http://www.wikidata.org/entity/Q4416184"}]}).encode()
-# A genuine empty EDGAR success response retains its required hits container.
-# A container-less 200 is a source error, not evidence of absence.
+# A real empty EDGAR answer still carries its hits container; a 200 without one
+# is a source error, not a finding of nothing.
 EMPTY_SEARCH_BODY = json.dumps({"hits": {"hits": [], "total": {"value": 0}}}).encode()
 GLEIF_BODY = json.dumps({
     "meta": {"pagination": {"currentPage": 1, "lastPage": 1}},
@@ -108,7 +109,7 @@ def test_execution_outcomes_are_truthful_per_source(ctx):
         by_source.setdefault(outcome.execution.source_id, set()).add(outcome.execution.outcome)
     assert "EXECUTED_WITH_RESULTS" in by_source["wikidata"]
     assert "EXECUTED_WITH_RESULTS" in by_source["gleif"]
-    # edgar transport returns an empty result set — recorded as EMPTY, not absence of evidence
+    # EDGAR answered with nothing, which is a result, not a failure.
     assert by_source["sec-edgar"] == {"EXECUTED_EMPTY"}
 
 
@@ -235,10 +236,10 @@ def test_coverage_distinguishes_searched_failed_and_unsearched(ctx):
     flat = {source: state for state, sources in summary.items() for source in sources}
     assert flat["wikidata"] == "COVERED"
     assert flat["gleif"] == "COVERED"
-    assert flat["sec-edgar"] == "COVERED"          # searched-and-empty is still searched
-    assert flat["wayback"] == "NOT_SEARCHED"       # never queried: visible, not silent
+    assert flat["sec-edgar"] == "COVERED"          # searched, found nothing
+    assert flat["wayback"] == "NOT_SEARCHED"       # never asked, and it says so
     assert flat["live-web"] == "NOT_SEARCHED"
-    # searched-and-empty carries the absence caveat in its gaps
+    # Finding nothing is recorded with the caveat that it proves nothing.
     edgar = [r for r in ctx.store.records_of("fabric_coverage")
              if r["need_id"] == "need-1" and r["source_id"] == "sec-edgar"][-1]
     assert any("not evidence of nonexistence" in gap for gap in edgar["gaps"])
@@ -262,11 +263,11 @@ def test_time_window_outside_source_coverage_is_not_available(ctx):
                  time_bounds=("1970-01-01T00:00:00+00:00", "1980-01-01T00:00:00+00:00"))
     _record_need(ctx.store, need)
     plan = _plan(ctx, need)
-    # execute nothing: coverage must still classify from declared profiles
+    # Nothing is executed: coverage must judge from the declared profiles alone.
     assess_coverage(ctx.store, ctx.registry, "need-3", now=ctx.now_fn(), actor="t", marking=MARK)
     summary = coverage_summary(ctx.store, "need-3")
     flat = {source: state for state, sources in summary.items() for source in sources}
-    assert flat["sec-edgar"] == "NOT_AVAILABLE"    # EDGAR full text starts 2001
+    assert flat["sec-edgar"] == "NOT_AVAILABLE"    # its full text starts in 2001
     assert flat["wikidata"] == "NOT_SEARCHED"
 
 
@@ -277,6 +278,6 @@ def test_unsearched_families_lists_untouched_source_types(ctx):
     execute_plan(ctx, plan)
     assess_coverage(ctx.store, ctx.registry, "need-4", now=ctx.now_fn(), actor="t", marking=MARK)
     families = unsearched_families(ctx.store, ctx.registry, "need-4")
-    assert "PUBLIC_ARCHIVE" in families            # wayback family untouched
+    assert "PUBLIC_ARCHIVE" in families            # wayback was never asked
     assert "OFFICIAL_GAZETTE" in families
     assert "PUBLIC_DATASET" not in families        # wikidata was searched

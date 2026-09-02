@@ -1,10 +1,4 @@
-"""Fabric event store: the mission-data store plus fabric event types.
-
-One ``FabricStore`` root can therefore hold the complete lineage for a
-mission — requirements, alerts and decisions next to source registrations,
-discovery plans, executions, manifestations, coverage, pivots and watches —
-under a single hash chain, with the same export / import / replay guarantees.
-"""
+"""The mission store plus the fabric event types."""
 from __future__ import annotations
 
 from curunir_operational.store import EVENT_TYPES as MISSION_EVENT_TYPES
@@ -30,8 +24,7 @@ class FabricStore(MissionDataStore):
     EVENT_TYPES = {**MISSION_EVENT_TYPES, **FABRIC_EVENT_TYPES}
 
     def latest_by_id(self, record_type: str, id_field: str) -> dict[str, dict]:
-        """Latest-wins replay for records whose id re-appends supersede
-        (watch definitions, pivots, source descriptors)."""
+        """The last record appended for each id."""
         current: dict[str, dict] = {}
         for record in self.records_of(record_type):
             current[record[id_field]] = record

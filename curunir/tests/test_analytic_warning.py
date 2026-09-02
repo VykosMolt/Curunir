@@ -1,6 +1,6 @@
-"""Warning locks: the tier comes from the named rule and nowhere else,
-weak evidence caps escalation, projection is idempotent and append-only,
-and a settled forecast resolves its warning."""
+"""Warnings: the tier comes from one named table and nowhere else, weak evidence
+caps how far it can rise, re-projection only appends, and a settled forecast
+closes its warning."""
 from __future__ import annotations
 
 import pytest
@@ -15,24 +15,14 @@ from curunir_analytic.warning import (TIER_RULE_V1, derive_tier,
                                       time_pressure)
 from curunir_semantic.worldmodel import world_object_id
 
-from analytic_support import (GLEIF_ACME, GLEIF_ACME_SUSPENDED, MARK, T0,
-                              make_analytic)
+from analytic_support import (GLEIF_ACME_SUSPENDED, MARK, T0, make_analytic,
+                              seed_acme)
 from semantic_support import plant_manifestation
 
 pytestmark = pytest.mark.no_db
 
 HORIZON = "2026-08-17T18:00:00+00:00"
 ACME = "LEI:ACMELEI000000000001"
-
-
-def _seed(pipeline, ctx):
-    plant_manifestation(pipeline, source_id="gleif",
-                        native_id="lei/ACMELEI000000000001",
-                        body=GLEIF_ACME, media_type="application/json",
-                        retrieval_time=T0)
-    pipeline.process_new_evidence()
-    return {c["predicate"]: c["claim_id"] for c in ctx.store.current_claims().values()
-            if c["subject_ref"] == ACME}
 
 
 def _objective(ctx, priority="HIGH"):
@@ -129,7 +119,7 @@ def test_a_free_tier_is_unconstructible():
 
 def test_projection_binds_forecast_objective_and_paths(tmp_path):
     pipeline, ctx = make_analytic(tmp_path)
-    by_predicate = _seed(pipeline, ctx)
+    by_predicate = seed_acme(pipeline, ctx)
     objective = _objective(ctx, priority="HIGH")
     path = _path(ctx, by_predicate, objective)
     forecast = _forecast(ctx, by_predicate, probability=0.62)
@@ -140,7 +130,7 @@ def test_projection_binds_forecast_objective_and_paths(tmp_path):
     assert warning["impact_path_ids"] == [path["path_id"]] \
         or tuple(warning["impact_path_ids"]) == (path["path_id"],), \
         "the typed reason this forecast threatens this objective"
-    assert warning["evidence_confidence"] == "WEAK"  # one origin family
+    assert warning["evidence_confidence"] == "WEAK"  # only one source family
     basis_components = {component for component, _ in warning["component_basis"]}
     assert {"probability_band", "consequence", "time_pressure",
             "evidence_confidence", "tier_rule"} <= basis_components
@@ -148,15 +138,15 @@ def test_projection_binds_forecast_objective_and_paths(tmp_path):
 
 def test_reprojection_is_append_only_and_names_what_moved(tmp_path):
     pipeline, ctx = make_analytic(tmp_path)
-    by_predicate = _seed(pipeline, ctx)
+    by_predicate = seed_acme(pipeline, ctx)
     objective = _objective(ctx, priority="HIGH")
     _path(ctx, by_predicate, objective)
-    # a NEAR horizon: no imminence bump muddying the escalation
+    # A near, not imminent, horizon, so nothing bumps the tier on its own.
     forecast = _forecast(ctx, by_predicate, probability=0.35,
                          horizon="2026-09-10T12:00:00+00:00")
     warning = project_warning(ctx, forecast_id=forecast["forecast_id"],
                               objective_id=objective["objective_id"])
-    assert warning["tier"] == "ATTENTION"  # table[HIGH][POSSIBLE], NEAR, no bump
+    assert warning["tier"] == "ATTENTION"  # table[HIGH][POSSIBLE], no bump
     before = ctx.store.head()["event_count"]
     unchanged = refresh_warnings(ctx)
     assert ctx.store.head()["event_count"] == before, \
@@ -179,7 +169,7 @@ def test_reprojection_is_append_only_and_names_what_moved(tmp_path):
 
 def test_settled_forecast_resolves_its_warning(tmp_path):
     pipeline, ctx = make_analytic(tmp_path)
-    by_predicate = _seed(pipeline, ctx)
+    by_predicate = seed_acme(pipeline, ctx)
     objective = _objective(ctx)
     _path(ctx, by_predicate, objective)
     forecast = _forecast(ctx, by_predicate, probability=0.62)
@@ -194,7 +184,7 @@ def test_settled_forecast_resolves_its_warning(tmp_path):
         ctx, forecast["forecast_id"])["status"] == "RESOLVED_TRUE"
     resolved = refresh_warnings(ctx)[0]
     assert resolved["status"] == "RESOLVED"
-    # a further refresh is a no-op: resolved warnings are done
+    # A resolved warning is done; refreshing again must add nothing.
     before = ctx.store.head()["event_count"]
     refresh_warnings(ctx)
     assert ctx.store.head()["event_count"] == before
@@ -202,7 +192,7 @@ def test_settled_forecast_resolves_its_warning(tmp_path):
 
 def test_warning_cannot_be_raised_about_a_settled_question(tmp_path):
     pipeline, ctx = make_analytic(tmp_path)
-    by_predicate = _seed(pipeline, ctx)
+    by_predicate = seed_acme(pipeline, ctx)
     objective = _objective(ctx)
     forecast = _forecast(ctx, by_predicate, probability=0.62)
     plant_manifestation(pipeline, source_id="gleif",

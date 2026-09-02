@@ -1,17 +1,13 @@
-"""Active collection: uncertainty → requirement → ranked routes → execution.
+"""Turn an open question into ranked ways of answering it, then run them.
 
-The planner ranks candidate collection actions with a transparent
-deterministic factor model — discriminating power, coverage gap, independence
-gain, latency, cost, historical depth, access — and every route carries its
-explanation. Coverage states and dependence families genuinely move the
-ranking: a source family already covering the need scores below an unsearched
-one, and a source in the same origin family as the existing basis scores
-below an independent one. Automatable routes execute through the existing
-OSINT fabric (policy gate, custody, manifestation lineage); human-required
-routes become mission analyst tasks and are never silently completed.
+Candidates are scored on a fixed set of factors and each route carries the
+arithmetic that ranked it, so a source already covering the need or already in
+the basis scores lower. Routes the machine may run go through the fabric; the
+rest become analyst tasks and are never quietly marked done.
 """
 from __future__ import annotations
 
+import re
 from typing import Any, Mapping
 
 from argus.source_intelligence.custody import SourceCustodyStore
@@ -30,7 +26,7 @@ from .hypotheses import (discriminator_satisfied_by, existing_basis_groups,
                          refresh_hypotheses_for_claims, update_discriminator)
 from .pipeline import SemanticPipeline
 from .store import SemanticStore
-from .worldmodel import dependence_group_for, parse_subject
+from .worldmodel import dependence_group_for, parse_subject, world_object_id
 
 _LATENCY_SCORE = {"REALTIME": 1.0, "HOURLY": 0.9, "DAILY": 0.8, "WEEKLY": 0.6,
                   "MONTHLY": 0.4, "IRREGULAR": 0.4, "STATIC": 0.2, "UNKNOWN": 0.5}
@@ -39,7 +35,7 @@ _COVERAGE_SCORE = {"NOT_SEARCHED": 1.0, "UNKNOWN": 0.9, "SOURCE_FAILED": 0.7,
                    "PARTIALLY_COVERED": 0.45, "ACCESS_RESTRICTED": 0.2,
                    "NOT_APPLICABLE": 0.05, "NOT_AVAILABLE": 0.05, "COVERED": 0.15}
 
-# identifier scheme → (source_id, operation) route for a direct lookup
+# which source and operation looks up each identifier scheme directly
 _SCHEME_ROUTES = {
     "LEI": ("gleif", "LOOKUP"),
     "WIKIDATA_QID": ("wikidata", "LOOKUP"),
@@ -50,18 +46,16 @@ _SCHEME_ROUTES = {
 def requirement_for_discriminator(store: SemanticStore, discriminator: Mapping[str, Any], *,
                                   mission_context: str, need_id: str = "",
                                   now: str, actor: str, marking: Marking) -> dict[str, Any]:
-    """Open (or reuse) the mission information requirement for a discriminator."""
+    """Open, or reuse, the mission requirement for a discriminator."""
     workflow = MissionWorkflow(store)
-    # decide from the store's CURRENT record, never the caller's snapshot: a
-    # stale mapping must not regress a discriminator that has since been
-    # SATISFIED (or otherwise advanced) back to REQUESTED
+    # Work from the store's current record, not the caller's copy: a stale copy
+    # must not push a discriminator that has since advanced back to REQUESTED.
     current = store.latest_by_id("discriminator", "discriminator_id").get(
         discriminator["discriminator_id"], discriminator)
     requirement = workflow.open_requirement(
         mission_context=mission_context, question=current["question"],
-        # The requirement is derived from the discriminator itself.  Citing it
-        # makes store admission inherit the complete discriminator/source
-        # high-water mark instead of relying on the caller's current marking.
+        # Naming what the requirement came from lets the store work out its
+        # marking, instead of trusting the caller's.
         affected_ids=(current["discriminator_id"],)
         + tuple(current["hypothesis_ids"])
         + tuple(current["claim_ids"])
@@ -75,7 +69,7 @@ def requirement_for_discriminator(store: SemanticStore, discriminator: Mapping[s
     if current["requirement_id"] != requirement["requirement_id"]:
         updates["requirement_id"] = requirement["requirement_id"]
     if current["status"] == "OPEN":
-        updates["status"] = "REQUESTED"  # only OPEN advances; nothing regresses
+        updates["status"] = "REQUESTED"  # only an OPEN one advances
     if updates:
         current = update_discriminator(store, current, updates,
                                        now=now, actor=actor, marking=marking)
@@ -83,28 +77,27 @@ def requirement_for_discriminator(store: SemanticStore, discriminator: Mapping[s
 
 
 def _source_origin_family(source_id: str, query_value: str) -> str:
-    """The dependence family a retrieval from this source would join.
+    """Which publisher a retrieval from this source would count as.
 
-    Must compute the same family a real retrieval's manifestation would get:
-    for archive/web sources that is the target site, so a Wayback route over
-    a site already in the basis is correctly scored as dependent."""
+    It must match what a real retrieval would get, so that an archive route
+    over a site already in the basis is scored as dependent on it.
+    """
     manifestation_like = {"source_id": source_id, "native_id": query_value,
                           "request_url": query_value, "final_url": query_value}
     return dependence_group_for(manifestation_like)
 
 
 def _distinctive_name(name: str) -> str:
-    """European legal names quote the distinctive part («Северсталь», "Rix");
-    text engines match that core far better than the full legal form."""
-    import re
+    """Pull the quoted part out of a legal name, which searches match better.
+
+    European legal names quote the distinctive part: «Северсталь», "Rix".
+    """
     match = re.search(r'[«"“]([^»"”]{2,60})[»"”]', name)
     return match.group(1) if match else name
 
 
 def _subject_search_term(store: SemanticStore, subject_ref: str) -> str:
-    """The subject's best-known name from the world model — text engines
-    search names, not foreign identifiers."""
-    from .worldmodel import world_object_id
+    """The subject's best-known name, since search engines match names."""
     object_id = world_object_id(subject_ref)
     versions = [v for v in store.records_of("object_version") if v["object_id"] == object_id]
     if versions:
@@ -120,7 +113,7 @@ def _subject_search_term(store: SemanticStore, subject_ref: str) -> str:
 
 def _query_for(store: SemanticStore, discriminator: Mapping[str, Any], source_id: str,
                profile: Mapping[str, Any]) -> tuple[str, str] | None:
-    """(operation, value) this source would need to answer the discriminator."""
+    """The (operation, value) this source needs to answer the discriminator."""
     scheme, value = parse_subject(discriminator["desired_subject_ref"])
     route = _SCHEME_ROUTES.get(scheme)
     if route and route[0] == source_id:
@@ -141,7 +134,7 @@ def plan_collection_routes(store: SemanticStore, registry: RegistryView,
                            discriminator: Mapping[str, Any], *, requirement_id: str,
                            need_id: str = "", now: str, actor: str,
                            marking: Marking) -> list[dict[str, Any]]:
-    """Rank candidate collection actions with explained EIV factors."""
+    """Rank the ways this discriminator could be answered, with reasons."""
     coverage = coverage_summary(store, need_id) if need_id else {}
     coverage_by_source = {source: state for state, sources in coverage.items()
                           for source in sources}
@@ -183,9 +176,8 @@ def plan_collection_routes(store: SemanticStore, registry: RegistryView,
         if discriminator["independence_required"] and independence < 0.5:
             score = 0.0
         else:
-            # the question shapes the weights: an explicit source-family
-            # recheck values the hinted family; an independence question
-            # values a new origin family
+            # The question sets the weights: a recheck of a named source
+            # values that source, an independence question values a new one.
             if hints and not discriminator["independence_required"]:
                 weights = {"discriminating_power": 0.4, "coverage_gap": 0.15,
                            "independence_gain": 0.05, "latency": 0.05, "cost": 0.05,
@@ -218,8 +210,7 @@ def plan_collection_routes(store: SemanticStore, registry: RegistryView,
                              candidate["source_id"], candidate["operation"])
         known = existing_routes.get(route_id)
         if known is not None and known["status"] != "PROPOSED":
-            # re-planning never regresses a route that already progressed:
-            # its execution/task audit state stands
+            # re-planning never rewinds a route that already progressed
             routes.append(known)
             continue
         route = CollectionRoute(
@@ -245,8 +236,10 @@ def plan_collection_routes(store: SemanticStore, registry: RegistryView,
 def _queue_coverage_gap(store: SemanticStore, discriminator: Mapping[str, Any],
                         routes: list[Mapping[str, Any]], *, now: str, actor: str,
                         marking: Marking) -> None:
-    """No registered source family can independently answer the question:
-    the gap itself is a typed review signal, not a silent dead end."""
+    """Record that no registered source can independently answer the question.
+
+    The gap goes to review rather than being a silent dead end.
+    """
     item_id = digest_id("review-coverage", discriminator["discriminator_id"])
     if any(r["item_id"] == item_id for r in store.records_of("review_item")):
         return
@@ -257,7 +250,7 @@ def _queue_coverage_gap(store: SemanticStore, discriminator: Mapping[str, Any],
                f"{discriminator['question'][:200]} ({len(routes)} routes, all scored 0)",
         evidence_refs=tuple(r["route_id"] for r in routes[:5]),
         status="OPEN", resolution_note="", recorded_time=now,
-        # the gap is ABOUT the discriminator — inherit its marking
+        # the gap is about the discriminator, so it inherits its marking
         marking=marking_from_record(discriminator["marking"])
         if isinstance(discriminator.get("marking"), dict) else discriminator["marking"])
     store.append("REVIEW_ITEM_RECORDED", item, recorded_time=now, actor=actor)
@@ -266,9 +259,9 @@ def _queue_coverage_gap(store: SemanticStore, discriminator: Mapping[str, Any],
 def assign_human_route(store: SemanticStore, route: Mapping[str, Any], *,
                        assigned_actor: str, now: str, actor: str,
                        marking: Marking) -> dict[str, Any]:
-    """A non-automatable route becomes a mission analyst task, never faked."""
-    # the assignment and the spawned task inherit the ROUTE's marking: the
-    # task text embeds the route's query, and a re-append never re-classifies
+    """Turn a route the machine may not run into an analyst task."""
+    # The task text quotes the route's query, so it inherits the route's
+    # marking; a re-append never re-marks.
     route_marking = marking_from_record(route["marking"]) \
         if isinstance(route.get("marking"), dict) else route["marking"]
     workflow = MissionWorkflow(store)
@@ -291,16 +284,12 @@ def assign_human_route(store: SemanticStore, route: Mapping[str, Any], *,
 def execute_route(pipeline: SemanticPipeline, registry: RegistryView,
                   route: Mapping[str, Any], *, transports: Mapping[str, Any] | None = None
                   ) -> dict[str, Any]:
-    """Execute one automatable route through the OSINT fabric, then run the
-    acquired evidence through semantic understanding and refresh the
-    originating discriminator and hypotheses.
+    """Run one route through the fabric and account for what it brought back.
 
-    Re-run safe in both directions: a route already EXECUTED is NOT
-    re-acquired — only its accounting tail (satisfaction, uncertainty
-    signals, hypothesis refresh) is completed idempotently; and a failure
-    inside the tail records a durable PROCESSING_FAILED review item on the
-    route, so the gap is visible and repairable instead of silently
-    marooning the collection loop over already-integrated evidence.
+    Safe to re-run in both directions: a route already executed is never
+    collected again, only its bookkeeping is finished; and a failure in that
+    bookkeeping is recorded as a review item so the gap is visible and
+    repairable.
     """
     if not route["automatable"]:
         raise ValueError("a human-required route cannot be executed by the machine; "
@@ -308,12 +297,12 @@ def execute_route(pipeline: SemanticPipeline, registry: RegistryView,
     store = pipeline.store
     current_route = store.latest_by_id("collection_route", "route_id").get(
         route["route_id"], route)
-    # everything below operates on the STORE-CURRENT route: a caller's stale
-    # mapping must not resurrect pre-assignment or pre-execution state
+    # Work from the store's current route: a caller's stale copy must not
+    # bring back pre-assignment or pre-execution state.
     route = current_route
     if current_route["status"] == "EXECUTED" and current_route["execution_id"]:
-        # completion path: the acquisition already happened; re-running the
-        # query would be re-collection, not recovery
+        # The retrieval already happened. Running the query again would be
+        # fresh collection, not recovery.
         execution = next((e for e in store.records_of("fabric_execution")
                           if e["execution_id"] == current_route["execution_id"]), None)
         if execution is None:
@@ -348,7 +337,7 @@ def execute_route(pipeline: SemanticPipeline, registry: RegistryView,
             ("EXECUTED_WITH_RESULTS", "EXECUTED_EMPTY") else "FAILED",
             "execution_id": outcome.execution.execution_id,
             "recorded_time": now,
-            # a re-append never re-classifies the route
+            # a re-append never re-marks the route
             "marking": marking_from_record(route["marking"])
             if isinstance(route.get("marking"), dict) else route["marking"]})
         store.append("COLLECTION_ROUTE_RECORDED", updated, recorded_time=now,
@@ -360,8 +349,8 @@ def execute_route(pipeline: SemanticPipeline, registry: RegistryView,
         return _route_accounting(pipeline, route, execution_outcome,
                                  manifestation_ids)
     except Exception as error:
-        # the acquired evidence is preserved and (partially) integrated; the
-        # accounting gap must be durable state, not a swallowed exception
+        # The evidence is kept and partly integrated, so the gap in the
+        # bookkeeping is recorded rather than swallowed.
         item_id = digest_id("review-processing", "route", route["route_id"])
         latest = store.latest_by_id("review_item", "item_id").get(item_id)
         detail = (f"route accounting failed after execution: "
@@ -384,16 +373,18 @@ def execute_route(pipeline: SemanticPipeline, registry: RegistryView,
 def _route_accounting(pipeline: SemanticPipeline, route: Mapping[str, Any],
                       execution_outcome: str,
                       manifestation_ids: list[str]) -> dict[str, Any]:
-    """The idempotent tail: understand the evidence, account discriminator
-    satisfaction, record typed uncertainty, refresh hypotheses."""
+    """Understand the new evidence, then settle the discriminator and hypotheses.
+
+    Safe to re-run.
+    """
     store = pipeline.store
     processed = pipeline.process_new_evidence()
 
-    # a previously recorded accounting failure resolves on a completed pass
+    # a recorded failure resolves once a pass completes
     failure_id = digest_id("review-processing", "route", route["route_id"])
     open_failure = store.latest_by_id("review_item", "item_id").get(failure_id)
 
-    # discriminator satisfaction + evidence request + hypothesis refresh
+    # settle the discriminator, then refresh the hypotheses it touches
     discriminator = store.latest_by_id("discriminator", "discriminator_id").get(
         route["discriminator_id"])
     satisfied_by = discriminator_satisfied_by(store, discriminator) if discriminator else []
@@ -405,9 +396,8 @@ def _route_accounting(pipeline: SemanticPipeline, route: Mapping[str, Any],
             now=pipeline.now_fn(), actor=pipeline.actor, marking=pipeline.marking)
     elif discriminator and not satisfied_by \
             and execution_outcome == "EXECUTED_EMPTY":
-        # the search ran and the expected observation was not there: a typed
-        # uncertainty signal, never an inferred event — absence of results is
-        # not evidence of absence
+        # The search ran and found nothing. That is recorded as uncertainty:
+        # no results is not evidence of absence.
         item_id = digest_id("review-expected", discriminator["discriminator_id"],
                             route["route_id"])
         if not any(r["item_id"] == item_id for r in store.records_of("review_item")):
@@ -421,7 +411,7 @@ def _route_accounting(pipeline: SemanticPipeline, route: Mapping[str, Any],
                 evidence_refs=(route_execution_id or route["route_id"],),
                 status="OPEN", resolution_note="",
                 recorded_time=pipeline.now_fn(),
-                # the item is ABOUT the discriminator — inherit its marking
+                # the item is about the discriminator, so it inherits its marking
                 marking=marking_from_record(discriminator["marking"])
                 if isinstance(discriminator.get("marking"), dict)
                 else discriminator["marking"])
@@ -447,7 +437,7 @@ def _route_accounting(pipeline: SemanticPipeline, route: Mapping[str, Any],
             status="RESOLVED", resolution_note="route accounting completed",
             version=store.next_family_version("review_item", "item_id", failure_id),
             recorded_time=pipeline.now_fn(),
-            # a re-append never re-classifies: keep the failure item's marking
+            # a re-append never re-marks: keep the failure item's marking
             marking=marking_from_record(open_failure["marking"])
             if isinstance(open_failure.get("marking"), dict)
             else open_failure["marking"])

@@ -1,9 +1,8 @@
-"""Shared fixtures for the analyst workbench: a WorkbenchStore-backed mission
-with deterministic evidence, semantic and analytical state, plus two access
-contexts — one holding the SPECIAL compartment, one deliberately without it —
-for access-projection tests."""
+"""Shared workbench fixtures: one seeded mission, and two access contexts that
+differ only in whether they hold the SPECIAL compartment."""
 from __future__ import annotations
 
+import socket
 from pathlib import Path
 
 from curunir_analytic.contracts import ImpactEdge, ResolutionRule
@@ -34,6 +33,13 @@ ACME = "LEI:ACMELEI000000000001"
 HORIZON = "2026-08-30T18:00:00+00:00"
 
 
+def free_port() -> int:
+    """A port the operating system says is free right now."""
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
 def make_workbench(tmp_path: Path, *, seeded: bool = True, start_minute: int = 1
                    ) -> tuple[SemanticPipeline, AnalyticContext]:
     root = tmp_path / "store"
@@ -51,11 +57,10 @@ def make_workbench(tmp_path: Path, *, seeded: bool = True, start_minute: int = 1
 
 
 def seed_mission(pipeline: SemanticPipeline, ctx: AnalyticContext) -> dict:
-    """Deterministic mission: GLEIF registry evidence plus a statement page,
-    integrated through the real semantic pipeline; a hypothesis over the
-    claims; objective/assumption/impact; an authored forecast and its
-    projected warning; an open information requirement and analyst task;
-    and one restricted (SPECIAL-compartment) world object + assumption."""
+    """Build the same mission every time: registry and web evidence through the real
+    pipeline, a hypothesis, an objective and impact path, a forecast and its
+    warning, an open requirement and task, and one restricted object and
+    assumption."""
     store = ctx.store
     plant_manifestation(pipeline, source_id="gleif",
                         native_id="lei/ACMELEI000000000001", body=GLEIF_ACME,
@@ -139,7 +144,7 @@ def seed_mission(pipeline: SemanticPipeline, ctx: AnalyticContext) -> dict:
         due_time=None, depends_on=(), recorded_time=ctx.now_fn(),
         marking=MARK, actor="analyst-a")
 
-    # ---- restricted state: SPECIAL compartment ------------------------------
+    # ---- restricted state ----
     now = ctx.now_fn()
     secret_object = ObjectVersion(
         object_id="obj-secret-partner", version=1, object_type="ORGANISATION",

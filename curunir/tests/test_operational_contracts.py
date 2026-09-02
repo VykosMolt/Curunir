@@ -1,5 +1,5 @@
-"""Contracts: identifiers, timestamps, geometry, epistemic states, quality,
-markings, stable serialization and hashes."""
+"""Record contracts: timestamps, geometry, epistemic states, quality fields,
+markings, and serialization that hashes the same every time."""
 from __future__ import annotations
 
 import pytest
@@ -60,7 +60,7 @@ def test_geometry_validation():
     with pytest.raises(ValueError):
         Geometry("POINT", (-200.0, 10.0))
     with pytest.raises(ValueError):
-        Geometry("POLYGON", ((-30.0, 45.0), (-30.1, 45.0), (-30.1, 45.1)))  # unclosed / too short
+        Geometry("POLYGON", ((-30.0, 45.0), (-30.1, 45.0), (-30.1, 45.1)))  # unclosed
     point = Geometry("POINT", (-30.25, 45.5, 12.0), uncertainty_m=250.0)
     assert point.to_geojson() == {"type": "Point", "coordinates": [-30.25, 45.5, 12.0]}
     with pytest.raises(ValueError):
@@ -86,7 +86,7 @@ def test_marking_fail_closed_matrix():
     assert can_view(BASE_MARKING, HIGH_CONTEXT) and can_view(BASE_MARKING, LOW_CONTEXT)
     compartmented = Marking("CIVDEF-AUTH", compartments=("SENSITIVE-INFRA",), releasability=("CORRIDOR-OPS",), min_role="ANALYST")
     assert can_view(compartmented, HIGH_CONTEXT) and not can_view(compartmented, LOW_CONTEXT)
-    owner_only = Marking("CIVDEF-AUTH")  # empty releasability: owning organisation only
+    owner_only = Marking("CIVDEF-AUTH")  # no releasability means the owning organisation only
     assert can_view(owner_only, HIGH_CONTEXT) and not can_view(owner_only, LOW_CONTEXT)
     assert not can_view(None, HIGH_CONTEXT)
     assert not can_view({"min_role": "WIZARD", "owning_authority": "CIVDEF-AUTH"}, HIGH_CONTEXT)
@@ -102,7 +102,7 @@ def test_alert_and_recommendation_must_be_evidence_bound():
     with pytest.raises(ValueError):
         Recommendation("rec-1", ("al-1",), "ROUTE_CHANGE", "use alternate", "why", (), (), (),
                        fake_sha("snap"), "", "", "", None, "SUPERVISOR", "prov", t(1), BASE_MARKING)
-    with pytest.raises(ValueError):  # unknown role also fails closed
+    with pytest.raises(ValueError):  # an unknown role fails closed too
         Recommendation("rec-1", ("al-1",), "ROUTE_CHANGE", "use alternate", "why", (), (), ("ev-1",),
                        fake_sha("snap"), "", "", "", None, "COMMANDER", "prov", t(1), BASE_MARKING)
 

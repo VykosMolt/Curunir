@@ -1,6 +1,5 @@
-"""Restart and export/import/replay: the workbench projection is a pure
-function of the event log — a reopened process and a replayed store must
-reconstruct the same authorized mission state, without network or providers."""
+"""Restart, export and replay: a reopened or replayed store rebuilds the same
+authorized mission state from the event log alone."""
 from __future__ import annotations
 
 import json
@@ -20,7 +19,7 @@ pytestmark = pytest.mark.no_db
 
 
 def _enrich(ctx, seeded):
-    """Add workbench-plane state: annotation + an approved dossier."""
+    """Add an annotation and an approved dossier."""
     projection = MissionProjection(ctx.store, CTX_A)
     annotation = create_annotation(
         ctx.store, projection, actor="analyst-a", marking=MARK, now=ctx.now_fn(),
@@ -43,7 +42,7 @@ def _enrich(ctx, seeded):
 
 
 def _fingerprint(store) -> dict:
-    """The workbench-relevant authorized state, serialized deterministically."""
+    """The authorized state both contexts can see, serialized the same way every time."""
     out = {}
     for context in (CTX_A, CTX_B):
         p = MissionProjection(store, context)
@@ -64,12 +63,11 @@ def test_process_restart_preserves_state(tmp_path):
     seeded = seed_mission(pipeline, ctx)
     annotation, approved = _enrich(ctx, seeded)
     before = _fingerprint(ctx.store)
-    # "restart": a completely fresh store object over the same root
+    # Restart: a fresh store object over the same root.
     reopened = WorkbenchStore(tmp_path / "store")
     after = _fingerprint(reopened)
     assert json.dumps(before, sort_keys=True) == json.dumps(after, sort_keys=True)
     assert reopened.verify_chain() is None or True  # chain verifies without raising
-    # the approved version is still the approved version
     report = reopened.current_reports()[approved["report_id"]]
     assert report["status"] == "APPROVED" and report["version"] == approved["version"]
 
@@ -84,20 +82,20 @@ def test_export_import_replay_reconstructs_projections(tmp_path):
     ctx.store.export_to(export_dir)
     new_root = tmp_path / "replayed" / "store"
     WorkbenchStore.import_from(export_dir, new_root)
-    # custody bytes travel with the mission root (siblings of the store)
+    # Custody bytes sit beside the store, so they are copied separately.
     shutil.copytree(tmp_path / "custody", tmp_path / "replayed" / "custody")
     replayed = WorkbenchStore(new_root)
     after = _fingerprint(replayed)
     assert json.dumps(before, sort_keys=True) == json.dumps(after, sort_keys=True)
 
-    # provenance descent still reaches retained evidence — no network involved
+    # Descent still reaches the retained evidence, with no network.
     from curunir_workbench.provenance import descend
     p = MissionProjection(replayed, CTX_A)
     chain = descend(p, "strategic_warning", seeded["warning"]["warning_id"])
     anchor = chain["claims"][0]["observations"][0]["anchors"][0]
     assert anchor["source"]["source_id"] == "gleif"
 
-    # access boundaries replay too: B still cannot see the compartment
+    # Access boundaries replay too.
     p_b = MissionProjection(replayed, CTX_B)
     assert seeded["secret_object_id"] not in p_b.visible_object_ids()
     assert p_b.get("analytic_assumption", seeded["secret_assumption_id"]) is None

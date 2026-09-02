@@ -1,7 +1,5 @@
-"""Regression pins for the second adversarial review: requirement-fold
-declassification, base-view scrubbing, workflow visibility, command-response
-redaction, operational hidden ids, dict-key scrubbing, watch oracle,
-separation of duties."""
+"""Regression pins: folding a requirement never declassifies it, hidden ids are
+scrubbed from every view, and a refusal never doubles as an oracle."""
 from __future__ import annotations
 
 import json
@@ -44,19 +42,17 @@ def _restricted_requirement(ctx, seeded):
 
 
 def test_requirement_fold_neither_discloses_nor_declassifies(mission):
-    """Round-2 C1: a colliding open_requirement from an uncleared actor is
-    refused without content; a cleared actor's fold keeps the marking."""
+    """An uncleared actor colliding with a hidden requirement is refused with
+    nothing, and a cleared actor's fold keeps the restricted marking."""
     ctx, seeded, cc = mission
     secret_requirement = _restricted_requirement(ctx, seeded)
     with pytest.raises(PermissionError):
         commands.open_requirement(cc(CTX_B), question="Who supplies the partner?",
                                   priority="CRITICAL", mission_context="compartment",
                                   rationale="my own question")
-    # nothing about the restricted requirement reached B
     view_b = MissionProjection(ctx.store, CTX_B)
     blob = json.dumps(view_b.base_view["information_requirements"])
     assert secret_requirement["requirement_id"] not in blob
-    # a CLEARED actor's fold escalates priority but keeps the SPECIAL marking
     folded = commands.open_requirement(cc(CTX_A), question="Who supplies the partner?",
                                        priority="CRITICAL", mission_context="compartment",
                                        rationale="escalation")
@@ -70,13 +66,10 @@ def test_requirement_fold_neither_discloses_nor_declassifies(mission):
 
 
 def test_base_view_is_scrubbed_of_hidden_ids(mission):
-    """Round-2 C2 + round-5 C3: base_view is scrubbed of hidden ids, AND a
-    requirement that CITES a compartmented assumption is itself compartmented
-    (round 5) — a strictly stronger guarantee than scrubbing a PUBLIC record."""
+    """A requirement that cites a hidden assumption is hidden itself, and a public
+    record naming hidden state still has that name scrubbed."""
     ctx, seeded, cc = mission
     secret_assumption = seeded["secret_assumption_id"]
-    # round 5: the requirement inherits the assumption's SPECIAL marking, so
-    # analyst-b never sees the requirement at all
     special = commands.open_requirement(
         cc(CTX_A), question="Does the dependency assumption hold?",
         priority="MEDIUM", mission_context="acme-mission",
@@ -87,8 +80,7 @@ def test_base_view_is_scrubbed_of_hidden_ids(mission):
     assert secret_assumption not in blob
     assert not any(r["requirement_id"] == special["requirement_id"]
                    for r in view_b.base_view["information_requirements"])
-    # the base-view SCRUB itself still holds for a genuinely PUBLIC record
-    # that references hidden state through a non-marking-bearing field
+    # A genuinely public record can still name hidden state in a free-text field.
     from curunir_semantic.contracts import ReviewItem
     item = ReviewItem(item_id="ri-bv", kind="STALE_BASIS", subject_kind="object",
                       subject_id=seeded["status_claim"]["claim_id"],
@@ -102,7 +94,7 @@ def test_base_view_is_scrubbed_of_hidden_ids(mission):
 
 
 def test_workflow_transition_requires_visibility(mission):
-    """Round-2 C3: hidden subjects can be neither mutated nor enumerated."""
+    """A hidden subject can be neither changed nor probed for existence."""
     ctx, seeded, cc = mission
     secret_requirement = _restricted_requirement(ctx, seeded)
     with pytest.raises(NotFound):
@@ -120,7 +112,7 @@ def test_workflow_transition_requires_visibility(mission):
 
 
 def test_operational_hidden_ids_are_scrubbed(mission):
-    """Round-2 C5: a hidden ACTIVITY id scrubs out of visible records."""
+    """A hidden activity id is scrubbed out of the visible records that mention it."""
     ctx, seeded, cc = mission
     now = ctx.now_fn()
     secret_activity = ActivityRecord(
@@ -146,7 +138,7 @@ def test_operational_hidden_ids_are_scrubbed(mission):
 
 
 def test_hidden_review_cannot_be_mutated_over_http(mission, tmp_path):
-    """V6.7 gates the authoritative object, not a redacted view shell."""
+    """A command over HTTP checks the stored record, not the redacted view of it."""
     from fastapi.testclient import TestClient
     from curunir_workbench.auth import write_registry
     from curunir_workbench.server import create_app
@@ -178,7 +170,7 @@ def test_hidden_review_cannot_be_mutated_over_http(mission, tmp_path):
 
 
 def test_dict_keys_are_scrubbed(mission):
-    """Round-2 M6: a hidden id used as a mapping KEY is redacted too."""
+    """A hidden id used as a dictionary key is redacted like any other."""
     ctx, seeded, cc = mission
     saved = commands.save_view(cc(CTX_A), title="pinned", view_kind="graph",
                                definition={"pins": {seeded["secret_object_id"]: True},
@@ -189,7 +181,7 @@ def test_dict_keys_are_scrubbed(mission):
 
 
 def test_invisible_watch_collision_is_generic_refusal(mission):
-    """Round-2 M8: colliding with a hidden watch is not a 409 oracle."""
+    """Colliding with a watch you cannot see is refused without revealing it exists."""
     ctx, seeded, cc = mission
     restricted = CommandContext(store=ctx.store, root=None, context=CTX_A,
                                 marking=RESTRICTED_MARK, now_fn=ctx.now_fn)

@@ -1,10 +1,10 @@
-// Workbench views, part 2: analysis, forecasting, operations, reports.
+// Views, part 2: analysis, forecasting, operations.
 import { get, post } from "./api.js";
 import {
   badge, chainNode, claimDescentView, clip, emptyBox, errorBox, fmtTime, h, kv,
   pivot, probabilityChart, refLink, table,
 } from "./ui.js";
-import { annotateBox, annotationsSection, nav, render } from "./views.js";
+import { annotationsSection, nav, render } from "./views.js";
 
 // ---- generic analytical family browser --------------------------------------
 
@@ -128,9 +128,8 @@ export async function narrativeView(main, params, id) {
 
 export async function stakeholdersView(main) {
   await render(main, async () => {
-    const [assessments, positions, influence] = await Promise.all([
+    const [assessments, influence] = await Promise.all([
       get("/api/family/stakeholder_assessment"),
-      get("/api/family/stakeholder_position").catch(() => ({ records: [] })),
       get("/api/family/influence_assertion"),
     ]);
     return [h("h1", {}, "Stakeholders / influence"),
@@ -150,7 +149,7 @@ export async function stakeholdersView(main) {
         { label: "kind", render: (i) => badge(i.kind) },
         { label: "over", render: (i) => refLink("object", i.target_object_id) },
         { label: "authority", render: (i) => badge(i.authority) },
-        { label: "", render: (i) => refLink("record/influence_assertion", i.influence_id, "inspect") }],
+        { label: "", render: (i) => refLink("influence_assertion", i.influence_id, "inspect") }],
         rows: influence.records })];
   });
 }
@@ -298,7 +297,7 @@ export async function hypothesesView(main) {
         table({ columns: [
           { label: "question", render: (d) => clip(d.question, 100) },
           { label: "status", render: (d) => badge(d.status) },
-          { label: "", render: (d) => refLink("record/discriminator", d.discriminator_id, "inspect") }],
+          { label: "", render: (d) => refLink("discriminator", d.discriminator_id, "inspect") }],
           rows: matrix.discriminators })] : null,
     ];
   });
@@ -589,7 +588,7 @@ export async function collectionView(main) {
               ? h("button", { class: "primary", onclick: () => launch(r) }, "Launch route") : null,
             r.status === "PROPOSED" && !r.automatable
               ? h("button", { onclick: () => assign(r) }, "Assign to analyst") : null,
-            r.execution_id ? refLink("record/fabric_execution", r.execution_id, "execution") : null,
+            r.execution_id ? refLink("fabric_execution", r.execution_id, "execution") : null,
             r.task_id ? pivot("/tasks", "task") : null)))
         : emptyBox("no proposed routes — open information requirements generate them"),
       h("h2", {}, "Information requirements"),
@@ -658,10 +657,8 @@ export async function tasksView(main) {
   const refresh = () => tasksView(main);
   await render(main, async () => {
     const ov = await get("/api/overview");
-    const all = await get("/api/family/analytic_transition").catch(() => null);
     const session = await get("/api/session");
     const tasks = ov.open_tasks;
-    const doneTasks = [];
     const status = h("div", {});
     const move = async (t, to) => {
       const note = ["DONE", "FAILED", "ABANDONED"].includes(to) ? (prompt(`${to} note:`) || "") : "";

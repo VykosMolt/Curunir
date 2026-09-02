@@ -1,37 +1,11 @@
-"""Document provenance capture — raw evidence and normalized observations.
+"""Read what a document says about its own origin, and where it says it.
 
-Reads a normalized document and emits what it *says* about its own origin:
-publisher and issuer lines, bylines, copyright and translation notices,
-syndication, ownership, official-journal identifiers (CELEX / ELI / COM / SWD /
-JOIN, Amtsblatt, Journal officiel, Diario Oficial, Gazzetta Ufficiale), and the
-structural head/foot of the text. Every emission is pinned to an offset in the
+Publisher lines, bylines, copyright and translation notices, official-journal
+identifiers, and the head and foot of the text, each pinned to an offset in the
 custody bytes.
 
-The layer discipline is the point: an observation records *what the document
-says and where*, never what role that implies. ``EXPLICIT_PUBLISHER_LINE`` is
-an observation that a publisher line exists and what it reads;
-``PUBLISHED_BY`` would be a role, and a role is a downstream decision made by
-a human against visible evidence. ``NormalizedObservationRecord`` refuses at
-construction to carry one.
-
-Provenance of this module: lifted verbatim from the retired research-campaign
-tree (``curunir_operational/v4/models.py``, ``v5_1/models.py``,
-``v5_3/provenance.py``, ``v5_3/observations.py``) when that tree was excised.
-Only the reachable surface came across — 316 of 1,808 lines; the campaign
-scoring, prediction-manifest, and reviewer-adjudication layers did not.
-
-One deliberate deviation from the original is marked ``LIFT-DEVIATION`` below.
-
-Local id and timestamp helpers
-------------------------------
-``_sha256`` / ``_canonical_json`` / ``_stable_id`` reproduce the *legacy* byte
-contract, which differs from ``curunir_operational.canonical`` (that module
-JSON-encodes a string before hashing; this one hashes raw UTF-8). They are
-module-private and deliberately not exported: the identifiers and timestamps
-they produce are capture-internal scratch values that never reach the store —
-``curunir_semantic.extract`` consumes only ``observation_type``,
-``observed_value``, and ``raw_text``. ``curunir_operational.canonical`` remains
-the single owner of every byte contract that persists.
+An observation says what the document states, never what role that implies:
+PUBLISHED_BY would be a role, and only a person may decide one.
 """
 from __future__ import annotations
 
@@ -43,7 +17,7 @@ from datetime import datetime, timezone
 from typing import Any, Iterable, Mapping, Sequence
 from urllib.parse import urlparse
 
-# ---- local byte contract (module-private; never persisted) ----------------
+# ---- private hashing helpers; nothing here is persisted ------------------
 
 def _canonical_json(value: Any) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
@@ -73,7 +47,7 @@ def require_hash(value: str) -> None:
         raise ValueError("invalid SHA-256")
 
 
-# ---- record base and normalized-document contracts ------------------------
+# ---- the document being read ---------------------------------------------
 
 class Record:
     def to_record(self) -> dict[str, Any]:
@@ -96,7 +70,8 @@ class DerivativeMapping(Record):
     precision: str
 
     def __post_init__(self) -> None:
-        require_hash(self.source_hash); require_hash(self.derivative_hash)
+        require_hash(self.source_hash)
+        require_hash(self.derivative_hash)
         if self.precision not in MAPPING_PRECISIONS:
             raise ValueError("invalid mapping precision")
 
@@ -118,15 +93,17 @@ class NormalizedDocument(Record):
     generated_time: str
 
     def __post_init__(self) -> None:
-        require_hash(self.source_hash); require_hash(self.derivative_hash); require_aware(self.generated_time)
+        require_hash(self.source_hash)
+        require_hash(self.derivative_hash)
+        require_aware(self.generated_time)
         if self.text and not self.mappings:
             raise ValueError("normalized text requires source mapping")
 
 
-# ---- layer 1: raw evidence -----------------------------------------------
+# ---- raw evidence --------------------------------------------------------
 
 class ProvenanceViolation(ValueError):
-    """A layer boundary was crossed.  Never downgraded to a warning."""
+    """A boundary between evidence, observation and role was crossed."""
 
 OBSERVATION_MODES = ("EXPLICIT", "INFERRED")
 
@@ -135,7 +112,7 @@ EVIDENCE_STRENGTHS = ("EXPLICIT", "STRONGLY_IMPLIED", "WEAKLY_IMPLIED",
 
 @dataclass(frozen=True)
 class RawEvidenceRecord(Record):
-    """Bytes and directly observable properties.  No inference."""
+    """Bytes and what is directly visible in them. Nothing inferred."""
 
     evidence_id: str
     source_object_id: str
@@ -164,7 +141,7 @@ def raw_evidence(*, source_object_id: str, raw_text: str, locator: Mapping[str, 
         content_hash, _now_utc())
 
 
-# ---- layer 2: normalized observation --------------------------------------
+# ---- normalized observations ---------------------------------------------
 
 OBSERVATION_TYPES: tuple[str, ...] = (
     "EXPLICIT_AUTHOR_LINE", "EXPLICIT_EDITOR_LINE", "EXPLICIT_ISSUER_LINE",
@@ -186,20 +163,18 @@ _ROLE_WORDS = frozenset({
 })
 
 
-# LIFT-DEVIATION: the original enforced this with a module-level ``assert``,
-# which `python -O` removes. The invariant — that no observation type names a
-# source role — is load-bearing for the layer separation above, so it is raised
-# unconditionally here instead.
+# No observation type may name a role. Raised rather than asserted, because
+# `python -O` strips assertions and this check has to hold.
 for _name in OBSERVATION_TYPES:
     if _name in _ROLE_WORDS:
         raise ProvenanceViolation(f"observation type {_name} names a role")
 
 @dataclass(frozen=True)
 class NormalizedObservationRecord(Record):
-    """What the source says, normalized, with its exact raw support.
+    """What the source says, normalized, with the raw text that supports it.
 
-    Carries no semantic role.  ``semantic_role_supplied`` exists so a dossier
-    renderer can assert, in the artifact, that no role reached the reviewer.
+    Carries no role. ``semantic_role_supplied`` exists so a renderer can show
+    that no role reached the reader.
     """
 
     observation_id: str
@@ -250,14 +225,14 @@ def normalized_observation(*, raw_evidence_ids: Iterable[str],
         False, _now_utc())
 
 
-# ---- capture --------------------------------------------------------------
+# ---- capture -------------------------------------------------------------
 
 _HEAD = 2500
 
 _TAIL = 2500
 
 _PATTERNS: tuple[tuple[str, str, str], ...] = (
-    # (observation_type, regex, capture description)
+    # (observation type, pattern, what the match is called)
     ("EXPLICIT_PUBLISHER_LINE",
      r"(?:published\s+by|publisher|herausgegeben\s+von|herausgeber|"
      r"[ée]diteur|publi[ée]\s+par|publicado\s+por|editado\s+por|"
@@ -358,7 +333,7 @@ def capture(document: NormalizedDocument, *, source_object_id: str,
             provenance={"document_id": document.document_id,
                         "parser": document.parser, "locator": dict(locator)}))
 
-    # --- text-derived observations -------------------------------------
+    # --- from the text ---------------------------------------------------
     for name, pattern, label in _COMPILED:
         for match in pattern.finditer(window):
             captured = match.group(1) if match.groups() else match.group(0)
@@ -366,9 +341,9 @@ def capture(document: NormalizedDocument, *, source_object_id: str,
                 {"kind": "TEXT_WINDOW", "start": match.start(), "end": match.end(),
                  "label": label},
                 match.group(0), f"whitespace-normalized {label}")
-            break  # one observation per type per document; the first is the head
+            break  # one observation per type, the first one found
 
-    # --- structural observations ---------------------------------------
+    # --- from the document's shape ----------------------------------------
     lines = [line for line in text[:_HEAD].split("\n") if line.strip()]
     if lines:
         add("HEADER_TEXT", lines[0], {"kind": "FIRST_LINE"}, lines[0],
@@ -381,7 +356,7 @@ def capture(document: NormalizedDocument, *, source_object_id: str,
         add("TITLE_PAGE_INSTITUTION", title, {"kind": "CUSTODY_TITLE"}, title,
             "title recorded at capture time", strength="STRONGLY_IMPLIED")
 
-    # --- transport observations ----------------------------------------
+    # --- from how it was fetched ------------------------------------------
     if final_url:
         host = urlparse(final_url).netloc
         if host:
@@ -392,9 +367,8 @@ def capture(document: NormalizedDocument, *, source_object_id: str,
             {"kind": "REDIRECTS", "count": len(redirects)},
             str(redirects)[:400], "ordered redirect chain")
 
-    # An institutional attribution is the strongest thing the front matter can
-    # offer when no explicit publisher or issuer line exists.  It is recorded
-    # as an attribution, not as a role.
+    # When the front matter has no publisher or issuer line, an institution
+    # named there is the best it offers. Recorded as an attribution, not a role.
     institutional = re.search(
         r"\b((?:European\s+\w+|Commission|Council|Parliament|Agency|Authority|"
         r"Ministry|Ministerium|Minist[èe]re|Bundesamt|Office|Directorate[- ]General|"

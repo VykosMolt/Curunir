@@ -1,10 +1,9 @@
-"""Bounded synthetic ingestion + replay stress harness.
+"""Bounded synthetic ingestion and replay harness.
 
-Generates a mix of valid/duplicate/late/corrected/malformed records across
-multiple schema versions, compartments and source families, driving them
-through the real pipeline path so the store, indices, projection, export and
-replay are exercised at volume. Measures runtime and size and asserts
-projection determinism under replay. Not a production performance claim.
+It drives a mix of valid, duplicate, late, corrected and malformed records
+through the real pipeline so the store, projection, export and replay run at
+volume, then checks that replay reproduces the same projection. The timings
+are fixture-scale, not a performance claim.
 """
 from __future__ import annotations
 
@@ -32,8 +31,6 @@ STRESS_SCHEMA = {
                "reported_status": {"type": "string", "required": True},
                "observed_time": {"type": "string", "required": True, "format": "iso-datetime"}},
 }
-STRESS_SCHEMA_V2 = {**STRESS_SCHEMA, "version": "2.0", "compatible_with": ["1.0"],
-                    "fields": {**STRESS_SCHEMA["fields"], "confidence": {"type": "number", "required": False}}}
 STRESS_MAPPING = {
     "mapping_id": "stress-map", "version": "1.0", "input_schema_id": "stress-reading",
     "input_schema_version": "1.0", "output_object_type": "ASSET",
@@ -64,26 +61,24 @@ def run_stress(store_root: str | Path, *, n: int = 10_000, families: int = 8) ->
     store = MissionDataStore.create(store_root, "stress-store", _at(0))
     registry = SchemaRegistry(store)
     registry.register_schema(STRESS_SCHEMA, recorded_time=_at(0), actor="stress")
-    registry.register_schema(STRESS_SCHEMA_V2, recorded_time=_at(0), actor="stress")
     registry.register_mapping(STRESS_MAPPING, recorded_time=_at(0), actor="stress")
     executor = PipelineExecutor(store, registry, {"conn-stress": build_connector("json", "conn-stress", "stress-reading", "reading_id")})
     executor.register_pipeline(STRESS_PIPELINE, recorded_time=_at(0), actor="stress")
     markings = [Marking("STRESS-AUTH", releasability=("STRESS",)),
                 Marking("STRESS-AUTH", compartments=("STRESS-SENSITIVE",), releasability=("STRESS",), min_role="ANALYST")]
 
-    counts = {"valid": 0, "duplicate": 0, "late": 0, "corrected": 0, "malformed": 0, "v2": 0}
+    counts = {"valid": 0, "duplicate": 0, "late": 0, "corrected": 0, "malformed": 0}
     ingest_started = time.monotonic()
-    watermark_by_source: dict[str, int] = {}
     for i in range(n):
         family = i % families
         source = f"stress-src-{family}"
         recorded = _at(100 + i)
         marking = markings[i % 2]
         observed_seconds = 100 + i
-        if i % 97 == 0 and i > 0:  # malformed
+        if i % 97 == 0 and i > 0:  # malformed body
             body = b'{"reading_id": "broken", '
             counts["malformed"] += 1
-        elif i % 53 == 0 and i > 0:  # duplicate of a prior reading
+        elif i % 53 == 0 and i > 0:  # resend of a prior reading
             body = json.dumps({"reading_id": f"r-{family}-{i-1}", "asset_ref": f"asset-{family}",
                                "value": 1.0, "reported_status": "NOMINAL", "observed_time": _at(100 + i - 1)}).encode()
             counts["duplicate"] += 1

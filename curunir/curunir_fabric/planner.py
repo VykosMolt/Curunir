@@ -1,12 +1,7 @@
-"""Federated discovery planner.
+"""Turn an information need into a plan of typed queries matched to sources.
 
-Turns an information need into a typed, inspectable, executable plan:
-query/pivot families expanded deterministically from the need's entities,
-identifiers, languages and time bounds, then matched against registered
-source capabilities. Queries no registered source can execute are retained
-as ``unmatched_query_ids`` — a planned-but-unsearchable ask is recorded, not
-dropped. Model-proposed queries enter as origin=MODEL specs and pass the
-same matching and policy gates as everything else.
+Queries that no registered source can run are kept in the plan as unmatched,
+not dropped.
 """
 from __future__ import annotations
 
@@ -15,8 +10,9 @@ from argus.source_intelligence.models import digest_id
 from . import PLANNER_VERSION
 from .contracts import DiscoveryPlan, InformationNeed, QuerySpec
 from .registry import RegistryView
+from .variants import name_variants
 
-# identifier scheme → (source_id, operation, family)
+# identifier scheme -> (source_id, operation, family)
 IDENTIFIER_ROUTES = {
     "LEI": ("gleif", "LOOKUP", "IDENTIFIER"),
     "WIKIDATA_QID": ("wikidata", "LOOKUP", "IDENTIFIER"),
@@ -34,19 +30,19 @@ def _query_id(*parts: object) -> str:
 
 
 def eligible_sources(query: QuerySpec, registry: RegistryView) -> list[str]:
-    """Registered sources able to execute this query (declared, not assumed)."""
+    """Registered sources that declare they can run this query."""
     if query.source_id:
         descriptor = registry.descriptor(query.source_id)
         profile = registry.profile(query.source_id)
         if descriptor is None or profile is None:
             return []
         return [query.source_id] if query.operation in profile["supported_operations"] else []
-    # native identifiers are source-scoped: an unbound LOOKUP has no honest target
+    # A LOOKUP needs a named source; native ids mean nothing elsewhere.
     if query.operation == "LOOKUP":
         return []
     matches = registry.capable_sources(operation=query.operation,
                                        language=query.language or None)
-    # generic fetchers cannot run text queries: FETCH needs a URL-shaped value
+    # FETCH needs a URL, not free text.
     if query.operation == "FETCH" and not query.value.startswith(("http://", "https://")):
         return []
     return [descriptor.source_id for descriptor in matches]
@@ -60,13 +56,10 @@ def plan_discovery(need: InformationNeed, registry: RegistryView, *,
                    generation: str = "INITIAL",
                    budget_max_requests: int = 60,
                    now: str, marking) -> DiscoveryPlan:
-    from .variants import name_variants  # local import keeps module load light
-
     queries: list[QuerySpec] = []
     plan_seed = (need.need_id, generation, len(model_queries), len(pivot_queries))
 
-    # non-initial generations carry only their pivot/model queries; the base
-    # entity and identifier expansion already ran and is not re-executed
+    # Later generations carry only pivot and model queries; the base expansion already ran.
     entities = need.entities if generation == "INITIAL" else ()
     identifiers = need.identifiers if generation == "INITIAL" else ()
 
@@ -103,7 +96,7 @@ def plan_discovery(need: InformationNeed, registry: RegistryView, *,
             rationale=f"{scheme} identifier routed to {source_id}", derived_from=(),
         ))
         if scheme in ("URL", "OFFICIAL_WEBSITE", "DOMAIN"):
-            # a live page also has a history worth enumerating
+            # A live page also has an archive history worth enumerating.
             queries.append(QuerySpec(
                 query_id=_query_id(need.need_id, "DOMAIN", scheme, value, "wayback"),
                 family="DOMAIN", value=value, language="", script="",

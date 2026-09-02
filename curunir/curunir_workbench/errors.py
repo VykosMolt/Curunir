@@ -1,8 +1,8 @@
-"""Typed command-layer failures with honest HTTP semantics.
+"""Command failures that map onto honest HTTP responses.
 
-NotFound covers both "does not exist" and "exists but this context may not
-see it" — deliberately indistinguishable. A bare KeyError anywhere else is a
-bug and must surface as a server error, never as an existence claim.
+NotFound covers both "no such record" and "you may not see it"; the two are
+deliberately indistinguishable. Any other KeyError is a bug and must surface
+as a server error, never as a claim about what exists.
 """
 
 

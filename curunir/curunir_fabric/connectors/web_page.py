@@ -1,4 +1,4 @@
-"""Live ordinary-public-web page retrieval (FETCH / POLL of one URL)."""
+"""Fetch one public web page."""
 from __future__ import annotations
 
 from .base import ConnectorRequest, ConnectorResponse, NativeResult, SourceConnector, Transport

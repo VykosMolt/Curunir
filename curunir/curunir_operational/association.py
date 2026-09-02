@@ -29,6 +29,13 @@ def _identifier_attributes(version: Mapping[str, Any]) -> dict[str, Any]:
             if any(k.endswith(s) for s in IDENTIFIER_SUFFIXES) and v not in (None, "", "UNKNOWN")}
 
 
+def _weakest_mapping_confidence(left: Mapping[str, Any], right: Mapping[str, Any]) -> Any:
+    values = [v.get("quality", {}).get("mapping_confidence", "UNKNOWN") for v in (left, right)]
+    if "UNKNOWN" in values:
+        return "UNKNOWN"
+    return min(values, key=lambda x: (isinstance(x, str), x))
+
+
 def compute_features(left: Mapping[str, Any], right: Mapping[str, Any], *,
                      max_speed_kmh: float = 80.0, temporal_window_hours: float = 12.0,
                      volatile_fields: Iterable[str] = DEFAULT_VOLATILE_FIELDS,
@@ -41,10 +48,12 @@ def compute_features(left: Mapping[str, Any], right: Mapping[str, Any], *,
         identifier = "SYSTEM_MATCH"
     else:
         shared_systems = {s for s, _ in left_refs} & {s for s, _ in right_refs}
-        left_ids = _identifier_attributes(left); right_ids = _identifier_attributes(right)
+        left_ids = _identifier_attributes(left)
+        right_ids = _identifier_attributes(right)
         shared_keys = set(left_ids) & set(right_ids)
         if shared_systems:
-            identifier = "CONFLICT"  # one identity-issuing system registered them separately
+            # One identity-issuing system registered them as two things.
+            identifier = "CONFLICT"
         elif shared_keys and all(left_ids[k] == right_ids[k] for k in shared_keys):
             identifier = "ATTRIBUTE_MATCH"
         elif shared_keys:
@@ -82,7 +91,7 @@ def compute_features(left: Mapping[str, Any], right: Mapping[str, Any], *,
         if a in (None, "UNKNOWN") or b in (None, "UNKNOWN") or a == b:
             return False
         if isinstance(a, (int, float)) and isinstance(b, (int, float)) and not isinstance(a, bool):
-            # observational noise tolerance: numeric readings within 20% agree
+            # Numeric readings within 20% are treated as agreeing.
             return abs(a - b) > 0.2 * max(abs(a), abs(b))
         return True
 
@@ -96,9 +105,8 @@ def compute_features(left: Mapping[str, Any], right: Mapping[str, Any], *,
         "geospatial_compatibility": geospatial, "distance_m": distance_m,
         "source_relationship": source_relationship, "contradictory_attributes": contradictions,
         "negative_evidence": sorted(negative_evidence),
-        # UNKNOWN dominates: an unassessed mapping is weaker than any scored one
-        "mapping_confidence": min((v.get("quality", {}).get("mapping_confidence", "UNKNOWN")
-                                   for v in (left, right)), key=lambda x: (not isinstance(x, str), x)),
+        # An unassessed mapping is weaker than any scored one, so UNKNOWN wins.
+        "mapping_confidence": _weakest_mapping_confidence(left, right),
     }
 
 

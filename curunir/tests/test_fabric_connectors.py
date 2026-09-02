@@ -1,8 +1,7 @@
-"""Connector interface: parsing, pagination, failure classification — offline.
+"""Connectors, offline: parsing, pagination and how failures are classified.
 
-Fixture bytes mirror the real endpoints' shapes; the injected fake transport
-keeps unit tests off the network (the live integration test is separate and
-opt-in). Mocks here test the connectors; they are not the product capability.
+The fixture bytes copy the shape of the real endpoints and a fake transport
+stands in for the network. The live test against real endpoints is separate.
 """
 from __future__ import annotations
 

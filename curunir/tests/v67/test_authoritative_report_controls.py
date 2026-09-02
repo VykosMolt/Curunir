@@ -1,4 +1,5 @@
-"""Historical V6.7 exploits against the authoritative report gate."""
+"""The report approval gate reads the stored state, not a filtered view of it,
+and fails closed when it cannot see everything the report rests on."""
 from __future__ import annotations
 
 import pytest
@@ -268,8 +269,8 @@ def test_terminal_objective_and_rejected_option_are_not_live_support(mission):
 def test_submitter_identity_survives_missing_disposition(mission):
     context, seeded = mission
     report = _draft(context, seeded, actor="drafter")
-    # Model the durable first write of submit_report with its companion
-    # disposition absent after a crash.
+    # Submitting writes the version first and the disposition second; this is
+    # the state a crash between them leaves behind.
     submitted = _next_version(
         context.store,
         report,

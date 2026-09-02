@@ -1,7 +1,5 @@
-"""Complete synthetic scenario: expected counts, quarantine, duplicates, late
-data, dependent evidence, disputed identity, correction, alerts,
-recommendations, decisions, access-specific projections, reports, export,
-replay and hash equality."""
+"""One synthetic scenario run end to end, checked against the counts, projections,
+reports and replay hashes it is expected to produce."""
 from __future__ import annotations
 
 import json
@@ -69,14 +67,13 @@ def test_access_differentiation_and_no_leakage(scenario):
     assert access["restricted_identifiers_in_partner_projection"] == 0
     assert access["full_view_object_count"] > access["partner_view_object_count"]
     restricted = (out / "projection_restricted.json").read_text()
-    # note: the word DEGRADED may legitimately appear as a *quality summary*
-    # state; the restricted content is the observation id, its detail text and
-    # its compartment
+    # "DEGRADED" is a legitimate quality state; what must not appear is the
+    # observation id, its detail text, or its compartment.
     for token in ("obs-FN-2205", "SENSITIVE-INFRA", "protected feeder", "feeder telemetry"):
         assert token not in restricted
     low_cop = (out / "cop_restricted.html").read_text()
     assert "obs-FN-2205" not in low_cop and "feeder" not in low_cop
-    assert "infra-SUB-4" in low_cop  # the substation itself is public registry data
+    assert "infra-SUB-4" in low_cop  # the substation is public registry data
     answers = json.loads((out / "mission_question_answers.json").read_text())
     q7 = next(a for a in answers["answers"] if a["number"] == 7)
     assert q7["answer"]["alert_ids"], "restricted alert must exist for the full-access view"

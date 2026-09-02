@@ -1,19 +1,16 @@
-"""Shared basis arithmetic: claims → evidence descent and dependence counts.
+"""What actually supports an analytical object: claims resolved to their
+observations, manifestations, sources and origin families.
 
-This is the one implementation of "what actually supports this analytical
-object". It resolves supporting/contradicting claims to their observations,
-manifestations, sources and origin families, so that fifty derivative
-manifestations of one origin count as reach, never as independence, and so
-that a degraded claim (DISPUTED/RETRACTED/STALE/...) is visible in the basis
-rather than silently still counted as clean support.
-
-`describe_descent` exposes the full programmatic lineage:
-claim → observations → evidence anchors → manifestation → source.
+Fifty derivative manifestations of one origin count as reach, never as
+independence, and a degraded claim stays visible in the basis instead of
+counting as clean support. `describe_descent` walks the same lineage one claim
+at a time.
 """
 from __future__ import annotations
 
 from typing import Any, Iterable, Mapping
 
+from curunir_operational.canonical import parse_time
 from curunir_semantic.worldmodel import dependence_group_for
 
 from .contracts import BasisSummary
@@ -32,8 +29,8 @@ def _manifestation_index(store: AnalyticStore) -> dict[str, Mapping[str, Any]]:
 
 
 def _state_time(manifestation: Mapping[str, Any]) -> str:
-    """When the observed source state was current — the same axis the claim
-    integrator ranks on: capture time for archives, retrieval time for live."""
+    """When the observed source state was current: capture time for an
+    archive, retrieval time for a live fetch."""
     if manifestation.get("temporal_status") == "HISTORICAL":
         return manifestation.get("archive_capture_time") \
             or manifestation.get("source_time") or ""
@@ -45,17 +42,13 @@ def compute_basis(store: AnalyticStore,
                   contradicting_claim_ids: Iterable[str] = (),
                   *, coverage_notes: tuple[str, ...] = (),
                   note: str = "") -> BasisSummary:
-    """Resolve a claim set into its full basis summary.
-
-    Unknown claim ids are ignored rather than fabricated; a basis computed
-    over claims that no longer exist shrinks honestly.
-    """
+    """Resolve a claim set into its basis summary."""
     requested_supporting = tuple(dict.fromkeys(supporting_claim_ids))
     requested_contradicting = tuple(dict.fromkeys(contradicting_claim_ids))
     claims = store.current_claims()
-    # an id that resolves to no claim is not evidence: it is excluded from the
-    # basis and reported as unresolved, so a phantom string can never satisfy
-    # the "requires at least one supporting claim" invariant
+    states = store.claim_states()
+    # An id resolving to no claim is reported as unresolved and carries no
+    # weight, so a phantom string cannot satisfy "requires a supporting claim".
     supporting = tuple(c for c in requested_supporting if c in claims)
     contradicting = tuple(c for c in requested_contradicting if c in claims)
     unresolved = tuple(c for c in requested_supporting + requested_contradicting
@@ -81,7 +74,7 @@ def compute_basis(store: AnalyticStore,
             stated_from.append(claim["valid_from"])
         if claim.get("valid_to"):
             stated_to.append(claim["valid_to"])
-        if store.claim_state(claim_id) in DEGRADED_CLAIM_STATES:
+        if states.get(claim_id, {}).get("state", "CURRENT") in DEGRADED_CLAIM_STATES:
             degraded += 1
         for observation_id in claim["observation_ids"]:
             observation = observations.get(observation_id)
@@ -117,10 +110,11 @@ def compute_basis(store: AnalyticStore,
         origin_families=tuple(sorted(families)),
         degraded_claim_count=degraded,
         languages=tuple(sorted(languages)),
-        earliest_time=min(times, default=""),
-        latest_time=max(times, default=""),
-        stated_valid_from=min(stated_from, default=""),
-        stated_valid_to=max(stated_to, default=""),
+        # compared as instants: an offset-bearing timestamp sorts wrongly as text
+        earliest_time=min(times, key=parse_time, default=""),
+        latest_time=max(times, key=parse_time, default=""),
+        stated_valid_from=min(stated_from, key=parse_time, default=""),
+        stated_valid_to=max(stated_to, key=parse_time, default=""),
         unresolved_claim_ids=unresolved,
         coverage_notes=coverage_notes,
         note=note or default_note,
@@ -128,9 +122,10 @@ def compute_basis(store: AnalyticStore,
 
 
 def basis_from_record(record: Mapping[str, Any]) -> BasisSummary:
-    """Reconstruct a BasisSummary from its replayed dict form — the one
-    round-trip implementation, so a field added to the record cannot be
-    silently dropped by a per-engine copy."""
+    """Rebuild a BasisSummary from its replayed dict form.
+
+    The one round-trip, so a new field cannot be dropped by a per-engine copy.
+    """
     data = {k: v for k, v in record.items() if k != "record_type"}
     for key in ("supporting_claim_ids", "contradicting_claim_ids", "origin_families",
                 "languages", "unresolved_claim_ids", "coverage_notes"):
@@ -139,7 +134,7 @@ def basis_from_record(record: Mapping[str, Any]) -> BasisSummary:
 
 
 def basis_changed_materially(before: Mapping[str, Any], after: BasisSummary) -> list[str]:
-    """Which basis dimensions moved — drives typed theme/narrative transitions."""
+    """Which basis dimensions moved, as the names the transitions use."""
     changes = []
     if set(before.get("supporting_claim_ids", ())) != set(after.supporting_claim_ids):
         changes.append("membership")
@@ -156,8 +151,7 @@ def basis_changed_materially(before: Mapping[str, Any], after: BasisSummary) -> 
 
 
 def describe_descent(store: AnalyticStore, claim_id: str) -> dict[str, Any]:
-    """Programmatic evidence lineage for one claim:
-    claim → observations → anchors → manifestation → source."""
+    """Evidence lineage of one claim: observations, anchors, manifestation, source."""
     claim = store.current_claims().get(claim_id)
     if claim is None:
         return {"claim_id": claim_id, "status": "UNKNOWN_CLAIM"}

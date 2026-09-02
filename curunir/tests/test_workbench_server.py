@@ -1,5 +1,5 @@
-"""HTTP boundary: token auth, authorized projections over HTTP, command
-semantics (403/404/409/422), no hidden-object leakage through the API."""
+"""The HTTP API: token auth, per-actor projections, command status codes, and no
+hidden record leaking through a response."""
 from __future__ import annotations
 
 import json
@@ -29,8 +29,8 @@ def client(tmp_path):
          "roles": ["ANALYST"], "releasability": ["PUBLIC"],
          "organisation": "workbench-test"},
     ])
-    # the fixture clock runs ahead of real UTC; give the server a later
-    # deterministic clock so store monotonicity holds
+    # The fixture clock runs ahead of real UTC, so the server needs a later one
+    # or the store rejects the out-of-order writes.
     app = create_app(tmp_path, actors, now_fn=clock(start_minute=500))
     return TestClient(app), seeded
 
@@ -64,7 +64,6 @@ def test_hidden_record_is_404_for_restricted_actor(client):
     assert hidden.status_code == 404
     missing = c.get("/api/record/analytic_assumption/nope", headers=_h("token-b"))
     assert missing.status_code == 404
-    # unknown and forbidden are indistinguishable
     assert hidden.json() == missing.json()
 
 
@@ -142,7 +141,6 @@ def test_report_flow_with_validation_rejection(client):
     submitted = c.post(f"/api/commands/reports/{report['report_id']}/submit",
                        headers=_h("token-a"), json={"expected_version": 1})
     assert submitted.status_code == 200
-    # the submitter cannot approve their own report at all
     self_approve = c.post(f"/api/commands/reports/{report['report_id']}/approve",
                           headers=_h("token-a"),
                           json={"expected_version": submitted.json()["version"]})
@@ -153,7 +151,7 @@ def test_report_flow_with_validation_rejection(client):
     assert rejected.status_code == 422
     assert any(f["code"] == "NO_EVIDENCE_BASIS"
                for f in rejected.json()["findings"])
-    # repair: edit out the unsupported sentence, resubmit, approve
+    # Drop the unsupported sentence and run the flow again.
     edited = c.post(f"/api/commands/reports/{report['report_id']}/edit",
                     headers=_h("token-a"),
                     json={"expected_version": submitted.json()["version"],

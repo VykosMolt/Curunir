@@ -1,31 +1,28 @@
-"""Synthetic feed payloads for V2 scenarios B and C. All fictitious.
+"""Synthetic feed payloads for scenarios B and C. All invented.
 
-Scenario B (INFRASTRUCTURE_CASCADE): a hazard (from the captured GDACS fixture,
-re-anchored over the synthetic corridor) degrades a substation and bridge with
-a communications dependency, a restricted engineering assessment, conflicting
-reports, a resource requirement, an open information requirement and a
-cross-workbench route consequence.
+Scenario B is an infrastructure cascade: a hazard degrades a substation and a
+bridge, pulling in a communications dependency, a restricted assessment,
+conflicting reports and a route consequence in the other workbench.
 
-Scenario C (FALSE_CORROBORATION_AND_SCHEMA_DRIFT): several reports from one
-source basis, one genuinely independent source, a schema version change, a
-delayed correction, a source retraction, a duplicate publication, a misleading
-high source count, an ambiguous object, an access-marking change and a stale
-cached projection.
+Scenario C is false corroboration and schema drift: several reports off one
+basis, one genuinely independent source, a schema version change, a delayed
+correction, a retraction, a duplicate publication and an ambiguous object.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
 LIVE_FIXTURES = Path(__file__).resolve().parent / "live_fixtures"
 
-# corridor geometry reused from scenario A's fictitious region
+# Corridor geometry reused from the first scenario.
 CORRIDOR = {
     "ALDEN": [-30.42, 45.06], "BRUSKA": [-29.88, 45.31], "BR-7": [-30.10, 45.20], "SUB-4": [-30.05, 45.12],
     "COMMS-2": [-30.08, 45.16],
     "R1": [[-30.42, 45.06], [-30.10, 45.20], [-29.88, 45.31]],
     "R2": [[-30.42, 45.06], [-30.20, 45.00], [-29.95, 45.12], [-29.88, 45.31]],
-    "HAZARD_CENTER": [-30.09, 45.19],  # near BR-7 / SUB-4
+    "HAZARD_CENTER": [-30.09, 45.19],  # Close to BR-7 and SUB-4.
 }
 
 
@@ -38,10 +35,8 @@ def load_evidence_bundle() -> dict:
 
 
 def hazard_over_corridor(from_utc_naive: str) -> bytes:
-    """One synthetic hazard feature re-anchored over the corridor, borrowing the
-    schema shape (and one real eventid/alertlevel) from the captured GDACS feed
-    so the LIVE schema drives a SYNTHETIC-placed event. The distinction is
-    explicit: geometry is synthetic corridor coordinates, not the feed's."""
+    """One hazard feature over the corridor, borrowing the shape of a captured
+    live feed. The geometry is synthetic corridor coordinates, not the feed's."""
     capture = load_gdacs_capture()
     template = next(f["properties"] for f in capture["features"] if f["properties"]["eventtype"] == "EQ")
     feature = {
@@ -109,15 +104,15 @@ def field_observation(report_id, subject_ref, subject_kind, status, observed, de
     if corrects:
         payload["corrects_report"] = corrects
     if lon is not None:
-        payload["lon"] = lon; payload["lat"] = lat
+        payload["lon"] = lon
+        payload["lat"] = lat
     return json.dumps(payload).encode()
 
 
-# ---- scenario C: false corroboration + schema drift -------------------------
+# ---- scenario C: false corroboration and schema drift ----
 
 def argus_bundle(source_key, assertion_id, publisher, basis, subject, status, report_time, *,
                  dependents=(), review_state="UNREVIEWED", retraction=False) -> bytes:
-    import hashlib
     rels = [{"relationship_type": "SYNDICATION", "source_object_a": source_key, "source_object_b": other}
             for other in dependents]
     assertion = {"assertion_id": assertion_id, "evidence_basis_id": basis, "subject_ref": subject,

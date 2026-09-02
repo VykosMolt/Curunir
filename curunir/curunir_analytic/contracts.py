@@ -1,21 +1,13 @@
-"""Typed records for the analytical intelligence layer's event log.
+"""Typed records for the analytical layer's event log: frozen validated
+dataclasses, serialized once and replayed as dicts.
 
-Same discipline as the operational, fabric and semantic contracts: frozen
-validated dataclasses, serialized once, replayed as dicts. The invariants
-enforced at construction are the layer's epistemic law:
-
-  * an analytical object cannot exist without a supporting claim basis — a
-    model-generated title with no evidence is a proposal, never state;
-  * observed, deterministically derived, inferred, model-proposed and
-    analyst-entered assertions carry distinct authority values and the
-    combinations that would launder one into another are rejected
-    (an inferred interest can never be OBSERVED; a verbatim-match edge can
-    never claim more than derivation; a LIKELY_INFLUENCES relation can never
-    present itself as observed fact);
-  * model provenance requires the inference record identity;
-  * impact edges must carry typed semantics and evidence — decorative
-    "A → B, 0.8" edges cannot be constructed;
-  * analogues carry transfer risks structurally and have no forecast field.
+The invariants enforced at construction are what makes the layer honest. An
+object cannot exist without a supporting claim basis. Observed, derived,
+inferred, model-proposed and analyst-entered assertions carry distinct
+authority, and the combinations that would launder one into another are
+refused. Model provenance requires its inference record. An impact edge must
+carry typed semantics and evidence. An analogue carries transfer risks and has
+no forecast field.
 """
 from __future__ import annotations
 
@@ -27,19 +19,13 @@ from curunir_operational.contracts import Record, _member
 
 # ---- shared vocabularies --------------------------------------------------
 
-# Epistemic authority of an analytical assertion. Ordered strongest-to-weakest
-# for uncertainty propagation (see AUTHORITY_RANK): directly observed evidence
-# outranks deterministic derivation; an accountable human judgment outranks a
-# machine inference, which outranks an unaccepted model proposal; CONTESTED
-# and UNRESOLVED are weaker than all — machine output never outranks recorded
-# human judgment.
+# Authority of an analytical assertion, strongest first. AUTHORITY_RANK reads
+# the order, so uncertainty propagates by position.
 AUTHORITY_LEVELS = ("OBSERVED", "DERIVED", "ANALYST_ASSESSMENT",
                     "SUPPORTED_INFERENCE", "MODEL_PROPOSAL", "CONTESTED", "UNRESOLVED")
 AUTHORITY_RANK = {level: rank for rank, level in enumerate(AUTHORITY_LEVELS)}
-INFERENTIAL_AUTHORITIES = ("ANALYST_ASSESSMENT", "SUPPORTED_INFERENCE",
-                           "MODEL_PROPOSAL", "CONTESTED", "UNRESOLVED")
-# what MODEL provenance may ever stamp: never observation/derivation, and
-# never ANALYST_ASSESSMENT — machine output cannot wear human judgment
+# what MODEL provenance may stamp: never observation, derivation or human
+# judgment
 MODEL_AUTHORITIES = ("SUPPORTED_INFERENCE", "MODEL_PROPOSAL",
                      "CONTESTED", "UNRESOLVED")
 
@@ -96,12 +82,6 @@ ANALOGUE_DIMENSIONS = ("ACTOR_CONFIGURATION", "EVENT_TYPE", "INSTITUTIONAL_SETTI
                        "CAUSAL_MECHANISM", "TEMPORAL_SEQUENCE", "CONSTRAINTS", "OUTCOME")
 ANALOGUE_STATUSES = ("PROPOSED", "REVIEWED", "REJECTED")
 
-# typed failure statuses engines return instead of empty successes
-ANALYTIC_FAILURES = ("ANALYTICAL_PROVIDER_UNAVAILABLE", "INSUFFICIENT_EVIDENCE",
-                     "IDENTITY_AMBIGUITY", "DEPENDENCE_UNRESOLVED",
-                     "COVERAGE_INSUFFICIENT", "TEMPORAL_SCOPE_UNRESOLVED",
-                     "NARRATIVE_ORIGIN_UNRESOLVED", "IMPACT_PATH_UNRESOLVED")
-
 TRANSITION_TYPES = {
     "analytic_theme": ("CREATED", "STRENGTHENED", "WEAKENED", "CONTRADICTION_ADDED",
                        "SOURCE_DIVERSITY_CHANGED", "SUBTHEME_EMERGED",
@@ -143,28 +123,31 @@ TRANSITION_TYPES = {
 
 
 def weakest_authority(levels) -> str:
-    """The weakest authority in a set — uncertainty propagates, never washes
-    out: a chain is only as strong as its weakest link. Fails closed: an
-    empty set has no authority to claim."""
+    """The weakest authority in a set; an empty set has none."""
     chosen = None
     for level in levels:
         _member(level, AUTHORITY_LEVELS, "authority")
         if chosen is None or AUTHORITY_RANK[level] > AUTHORITY_RANK[chosen]:
             chosen = level
     if chosen is None:
-        raise ValueError("an empty set has no authority; nothing observed nothing")
+        raise ValueError("an empty set has no authority to claim")
     return chosen
 
 
 def _require_model_inference(provenance_kind: str, inference_id: str,
                              authority: str | None = None,
                              proposal_id: str | None = None) -> None:
-    """MODEL provenance requires the inference identity, can never carry
-    observed/derived authority, and — for records that carry a proposal_id —
-    requires the accepted-candidate identity, so a model output cannot enter
-    typed state without its acceptance trail."""
+    """Check that provenance and its identifiers agree.
+
+    Model output needs its inference record and, where the record carries one,
+    its accepted candidate; nothing else may carry a candidate at all.
+    """
     _member(provenance_kind, PROVENANCE_KINDS, "provenance kind")
     if provenance_kind != "MODEL":
+        if proposal_id:
+            raise ValueError("only model-generated analytical state carries an "
+                             "accepted candidate proposal: a human or rule act "
+                             "spends none")
         return
     if not inference_id:
         raise ValueError("model-generated analytical state requires its inference record")
@@ -181,13 +164,11 @@ def _require_model_inference(provenance_kind: str, inference_id: str,
 
 @dataclass(frozen=True)
 class BasisSummary(Record):
-    """Evidence arithmetic for one analytical object, computed from claims.
+    """Evidence arithmetic for one analytical object, computed from its claims.
 
-    The two counts that must never be conflated are ``manifestation_count``
-    (propagation reach: how many retained artifacts state this) and
-    ``origin_family_count`` (independence: how many distinct origin families
-    those artifacts descend from). Fifty derivatives of one origin are one
-    family. ``compute_basis`` in ``basis.py`` is the one implementation.
+    ``manifestation_count`` is reach — how many retained artifacts state this —
+    and ``origin_family_count`` is independence. Fifty derivatives of one origin
+    are one family. ``basis.compute_basis`` is the one implementation.
     """
     RECORD_TYPE = "analytic_basis"
     supporting_claim_ids: tuple[str, ...]
@@ -196,12 +177,13 @@ class BasisSummary(Record):
     manifestation_count: int
     source_count: int
     origin_families: tuple[str, ...]
-    degraded_claim_count: int  # supporting claims whose lifecycle is no longer CURRENT
+    degraded_claim_count: int  # supporting claims no longer CURRENT
     languages: tuple[str, ...]
-    earliest_time: str  # earliest source-STATE time in the basis ("" if unknown);
-    latest_time: str    # a knowledge-side span — never the world's valid time
-    # defaults keep pre-extension replayed bases valid
-    stated_valid_from: str = ""  # earliest source-STATED valid time ("" if none)
+    # when the evidence was seen, not when the world was that way
+    earliest_time: str
+    latest_time: str
+    # what the sources themselves stated as the valid interval
+    stated_valid_from: str = ""
     stated_valid_to: str = ""
     unresolved_claim_ids: tuple[str, ...] = ()  # ids resolving to no known claim
     coverage_notes: tuple[str, ...] = ()
@@ -232,15 +214,20 @@ class BasisSummary(Record):
 
 @dataclass(frozen=True)
 class AnalyticalTransition(Record):
-    """One typed state change of one analytical object. Never overwritten;
-    the sequence of transitions is the object's analytical history."""
+    """One typed state change of one analytical object; the sequence is its
+    history."""
     RECORD_TYPE = "analytic_transition"
-    transition_id: str; subject_kind: str; subject_id: str
-    transition_type: str; detail: str
-    caused_by: str  # change_id / claim_id / observation_id / action id / proposal id
+    transition_id: str
+    subject_kind: str
+    subject_id: str
+    transition_type: str
+    detail: str
+    caused_by: str  # the change, claim, observation, act or proposal behind it
     evidence_refs: tuple[str, ...]
-    from_status: str; to_status: str
-    recorded_time: str; marking: Marking
+    from_status: str
+    to_status: str
+    recorded_time: str
+    marking: Marking
 
     def __post_init__(self):
         _member(self.subject_kind, ANALYTIC_KINDS, "analytic kind")
@@ -256,23 +243,33 @@ class AnalyticalTransition(Record):
 
 @dataclass(frozen=True)
 class ThemeRecord(Record):
-    """An evidence-backed recurring or emerging issue across propositions,
-    entities and events over time. Not a topic-model label: membership,
-    support, contradiction and family basis are all inspectable, and a theme
-    without at least one supporting claim cannot be constructed."""
+    """A recurring or emerging issue across propositions, entities and events.
+
+    Membership, support, contradiction and source families are all inspectable,
+    and a theme without a supporting claim cannot be constructed.
+    """
     RECORD_TYPE = "analytic_theme"
-    theme_id: str; version: int; title: str; description: str
-    status: str; authority: str
-    parent_theme_id: str  # non-empty for a subtheme
-    lineage: tuple[tuple[str, str], ...]  # (MERGED_FROM/SPLIT_FROM/..., theme_id)
+    theme_id: str
+    version: int
+    title: str
+    description: str
+    status: str
+    authority: str
+    parent_theme_id: str
+    lineage: tuple[tuple[str, str], ...]  # (lineage kind, theme id)
     basis: BasisSummary
-    entity_ids: tuple[str, ...]; event_ids: tuple[str, ...]
+    entity_ids: tuple[str, ...]
+    event_ids: tuple[str, ...]
     relation_ids: tuple[str, ...]
-    valid_from: str | None; valid_to: str | None
-    provenance_kind: str; inference_id: str; proposal_id: str
+    valid_from: str | None
+    valid_to: str | None
+    provenance_kind: str
+    inference_id: str
+    proposal_id: str
     change_reason: str
     history: tuple[str, ...]
-    recorded_time: str; marking: Marking
+    recorded_time: str
+    marking: Marking
 
     def __post_init__(self):
         _member(self.status, THEME_STATUSES, "theme status")
@@ -281,7 +278,8 @@ class ThemeRecord(Record):
                                  authority=self.authority,
                                  proposal_id=self.proposal_id)
         require_aware(self.recorded_time)
-        require_aware_or_none(self.valid_from); require_aware_or_none(self.valid_to)
+        require_aware_or_none(self.valid_from)
+        require_aware_or_none(self.valid_to)
         if self.version < 1:
             raise ValueError("theme versions start at 1")
         if not self.title:
@@ -302,25 +300,32 @@ class ThemeRecord(Record):
 
 @dataclass(frozen=True)
 class NarrativeRecord(Record):
-    """A proposition/frame family being propagated: what is said, in which
-    variants, through which manifestations, with propagation reach and source
-    independence kept as separate axes. Origin is never 'proven': the
-    strongest representable origin status is EARLIEST_OBSERVED_KNOWN."""
+    """A proposition being propagated: what is said, in which variants, through
+    which manifestations, with reach and independence kept apart.
+
+    Origin is never proven; the strongest status is EARLIEST_OBSERVED_KNOWN.
+    """
     RECORD_TYPE = "analytic_narrative"
-    narrative_id: str; version: int
-    statement: str            # the core proposition, as carried by evidence
-    normalized_statement: str  # deterministic matching key
-    status: str; authority: str
+    narrative_id: str
+    version: int
+    statement: str             # the proposition as the evidence carries it
+    normalized_statement: str  # matching key for text identity
+    status: str
+    authority: str
     origin_status: str
-    earliest_manifestation_id: str; earliest_time: str
+    earliest_manifestation_id: str
+    earliest_time: str
     variant_ids: tuple[str, ...]
     counter_narrative_ids: tuple[str, ...]
     basis: BasisSummary
     entity_ids: tuple[str, ...]
-    provenance_kind: str; inference_id: str; proposal_id: str
+    provenance_kind: str
+    inference_id: str
+    proposal_id: str
     change_reason: str
     history: tuple[str, ...]
-    recorded_time: str; marking: Marking
+    recorded_time: str
+    marking: Marking
 
     @property
     def propagation_reach(self) -> int:
@@ -352,22 +357,30 @@ class NarrativeRecord(Record):
 
 @dataclass(frozen=True)
 class NarrativeVariant(Record):
-    """One materially distinct form of a narrative. Variant relations are not
-    flattened into 'same topic': a framing shift, an attribution shift and a
-    counter-narrative stay typed. Only VERBATIM (deterministic text identity)
-    and UNRESOLVED_RELATION may carry non-inferential authority — calling two
-    different texts a paraphrase is a judgment and must say whose."""
+    """One materially distinct form of a narrative.
+
+    Framing, attribution and counter-narrative relations stay typed rather than
+    flattening into "same topic". Only VERBATIM and UNRESOLVED_RELATION may
+    carry non-inferential authority: calling two texts a paraphrase is a
+    judgment and must say whose.
+    """
     RECORD_TYPE = "narrative_variant"
-    variant_id: str; narrative_id: str
-    relation: str; statement: str
-    claim_ids: tuple[str, ...]; observation_ids: tuple[str, ...]
+    variant_id: str
+    narrative_id: str
+    relation: str
+    statement: str
+    claim_ids: tuple[str, ...]
+    observation_ids: tuple[str, ...]
     manifestation_ids: tuple[str, ...]
     language: str
-    authority: str; mechanism: str
-    provenance_kind: str; inference_id: str
-    recorded_time: str; marking: Marking
-    version: int = 1  # revision is a new version, never a silent overwrite
-    proposal_id: str = ""  # the accepted candidate this consumed, if MODEL
+    authority: str
+    mechanism: str
+    provenance_kind: str
+    inference_id: str
+    recorded_time: str
+    marking: Marking
+    version: int = 1
+    proposal_id: str = ""  # the accepted candidate this consumed
 
     def __post_init__(self):
         _member(self.relation, VARIANT_RELATIONS, "variant relation")
@@ -397,22 +410,28 @@ class NarrativeVariant(Record):
 
 @dataclass(frozen=True)
 class PropagationEdge(Record):
-    """How one manifestation of a narrative relates to another. Propagation
-    reach and independent adoption are different analytical facts; this edge
-    keeps them apart. LIKELY_DERIVATIVE and INDEPENDENT_ADOPTION are
-    inferences and must carry a mechanism; SAME_ORIGIN_FAMILY is derived
-    from the dependence engine and must actually be one family."""
+    """How one manifestation of a narrative relates to another.
+
+    LIKELY_DERIVATIVE and INDEPENDENT_ADOPTION are inferences and must state a
+    mechanism; SAME_ORIGIN_FAMILY must actually be one family.
+    """
     RECORD_TYPE = "propagation_edge"
-    edge_id: str; narrative_id: str
-    from_manifestation_id: str; to_manifestation_id: str
-    relation: str; mechanism: str
-    from_family: str; to_family: str
+    edge_id: str
+    narrative_id: str
+    from_manifestation_id: str
+    to_manifestation_id: str
+    relation: str
+    mechanism: str
+    from_family: str
+    to_family: str
     authority: str
     basis_observation_ids: tuple[str, ...]
-    provenance_kind: str; inference_id: str
-    recorded_time: str; marking: Marking
-    version: int = 1  # a revised judgment is a new version, never a silent overwrite
-    proposal_id: str = ""  # the accepted candidate this consumed, if MODEL
+    provenance_kind: str
+    inference_id: str
+    recorded_time: str
+    marking: Marking
+    version: int = 1
+    proposal_id: str = ""  # the accepted candidate this consumed
 
     def __post_init__(self):
         _member(self.relation, PROPAGATION_RELATIONS, "propagation relation")
@@ -444,23 +463,30 @@ class PropagationEdge(Record):
 
 @dataclass(frozen=True)
 class StakeholderPosition(Record):
-    """One position/interest/role of a stakeholder in context. The category
-    error this record makes impossible: an INFERRED_INTEREST can never carry
-    OBSERVED authority, and an OBSERVED public position can carry only the
-    stance the source itself stated — a machine labelling stance onto quoted
-    text is interpretation and must say so."""
+    """One position, interest or role of a stakeholder in context.
+
+    An inferred interest can never carry observed authority, and an observed
+    public position can carry only the stance the source itself stated.
+    """
     RECORD_TYPE = "stakeholder_position"
-    position_id: str; kind: str; statement: str; stance: str
+    position_id: str
+    kind: str
+    statement: str
+    stance: str
     authority: str
-    claim_ids: tuple[str, ...]; relationship_ids: tuple[str, ...]
-    valid_from: str | None; valid_to: str | None
-    superseded: bool; note: str
+    claim_ids: tuple[str, ...]
+    relationship_ids: tuple[str, ...]
+    valid_from: str | None
+    valid_to: str | None
+    superseded: bool
+    note: str
 
     def __post_init__(self):
         _member(self.kind, POSITION_KINDS, "position kind")
         _member(self.stance, POSITION_STANCES, "position stance")
         _member(self.authority, AUTHORITY_LEVELS, "authority")
-        require_aware_or_none(self.valid_from); require_aware_or_none(self.valid_to)
+        require_aware_or_none(self.valid_from)
+        require_aware_or_none(self.valid_to)
         if not self.statement:
             raise ValueError("a position requires its statement")
         if self.kind == "PUBLIC_POSITION" and not self.claim_ids:
@@ -479,25 +505,33 @@ class StakeholderPosition(Record):
 
 @dataclass(frozen=True)
 class StakeholderAssessment(Record):
-    """A stakeholder is an entity with an evidence-backed relationship to a
-    specific context (mission/theme/issue/objective/event) during a period —
-    never a permanent global label. Identity caveats carried here keep open
-    IDENTITY_AMBIGUITY review items visible instead of silently collapsing
-    possibly-distinct entities."""
+    """An entity's evidence-backed relationship to one context during a period,
+    never a permanent label.
+
+    Identity caveats keep open ambiguity visible instead of collapsing
+    possibly-distinct entities.
+    """
     RECORD_TYPE = "stakeholder_assessment"
-    assessment_id: str; version: int
-    entity_object_id: str; entity_label: str
-    context_kind: str; context_id: str
+    assessment_id: str
+    version: int
+    entity_object_id: str
+    entity_label: str
+    context_kind: str
+    context_id: str
     role_in_context: str
     positions: tuple[StakeholderPosition, ...]
     influence_ids: tuple[str, ...]
-    identity_caveats: tuple[str, ...]  # open IDENTITY_AMBIGUITY review item ids
+    identity_caveats: tuple[str, ...]  # open identity-ambiguity review items
     basis: BasisSummary
-    status: str; authority: str
-    provenance_kind: str; inference_id: str; proposal_id: str
+    status: str
+    authority: str
+    provenance_kind: str
+    inference_id: str
+    proposal_id: str
     change_reason: str
     history: tuple[str, ...]
-    recorded_time: str; marking: Marking
+    recorded_time: str
+    marking: Marking
 
     def __post_init__(self):
         _member(self.context_kind, STAKEHOLDER_CONTEXT_KINDS, "stakeholder context kind")
@@ -523,21 +557,30 @@ class StakeholderAssessment(Record):
 @dataclass(frozen=True)
 class InfluenceAssertion(Record):
     """A typed, evidence-bound influence relation between two entities.
-    Decorative influence edges cannot be built: OBSERVED authority requires
-    evidence, LIKELY_INFLUENCES must state its mechanism and cannot claim
-    observation, and association alone is INFLUENCE_UNRESOLVED."""
+
+    Observed authority requires evidence, LIKELY_INFLUENCES must state its
+    mechanism, and association alone is INFLUENCE_UNRESOLVED.
+    """
     RECORD_TYPE = "influence_assertion"
-    influence_id: str; version: int
-    source_object_id: str; target_object_id: str
-    kind: str; mechanism: str
+    influence_id: str
+    version: int
+    source_object_id: str
+    target_object_id: str
+    kind: str
+    mechanism: str
     authority: str
-    claim_ids: tuple[str, ...]; relationship_ids: tuple[str, ...]
-    valid_from: str | None; valid_to: str | None
+    claim_ids: tuple[str, ...]
+    relationship_ids: tuple[str, ...]
+    valid_from: str | None
+    valid_to: str | None
     status: str
-    provenance_kind: str; inference_id: str; proposal_id: str
+    provenance_kind: str
+    inference_id: str
+    proposal_id: str
     change_reason: str
     history: tuple[str, ...]
-    recorded_time: str; marking: Marking
+    recorded_time: str
+    marking: Marking
 
     def __post_init__(self):
         _member(self.kind, INFLUENCE_KINDS, "influence kind")
@@ -547,7 +590,8 @@ class InfluenceAssertion(Record):
                                  authority=self.authority,
                                  proposal_id=self.proposal_id)
         require_aware(self.recorded_time)
-        require_aware_or_none(self.valid_from); require_aware_or_none(self.valid_to)
+        require_aware_or_none(self.valid_from)
+        require_aware_or_none(self.valid_to)
         if self.version < 1:
             raise ValueError("influence versions start at 1")
         if self.source_object_id == self.target_object_id:
@@ -571,18 +615,22 @@ class InfluenceAssertion(Record):
 
 @dataclass(frozen=True)
 class MissionObjective(Record):
-    """What a mission is trying to maintain, track, assess or understand —
-    machine-readable, with explicit dependencies and assumptions, so impact
-    propagation has something typed to land on."""
+    """What a mission is trying to maintain, track or understand, with its
+    dependencies and assumptions explicit so impact propagation can land."""
     RECORD_TYPE = "mission_objective"
-    objective_id: str; version: int
-    mission_context: str; statement: str
-    status: str; priority: str; time_horizon: str
-    depends_on: tuple[tuple[str, str], ...]  # (kind, id): world/analytical refs
+    objective_id: str
+    version: int
+    mission_context: str
+    statement: str
+    status: str
+    priority: str
+    time_horizon: str
+    depends_on: tuple[tuple[str, str], ...]  # (kind, id)
     assumption_ids: tuple[str, ...]
     change_reason: str
     history: tuple[str, ...]
-    recorded_time: str; marking: Marking
+    recorded_time: str
+    marking: Marking
 
     def __post_init__(self):
         _member(self.status, OBJECTIVE_STATUSES, "objective status")
@@ -605,18 +653,24 @@ class MissionObjective(Record):
 
 @dataclass(frozen=True)
 class AssumptionRecord(Record):
-    """An explicit assumption an impact path or objective rests on. When new
-    evidence contradicts it, the assumption is INVALIDATED as a new version —
-    and everything that depended on it can be found and marked."""
+    """An assumption an impact path or objective rests on.
+
+    Contradicting evidence invalidates it as a new version, and everything that
+    depended on it can then be found and marked.
+    """
     RECORD_TYPE = "analytic_assumption"
-    assumption_id: str; version: int
-    statement: str; status: str
+    assumption_id: str
+    version: int
+    statement: str
+    status: str
     supporting_claim_ids: tuple[str, ...]
     contradicting_claim_ids: tuple[str, ...]
     objective_ids: tuple[str, ...]
-    caused_by: str; change_reason: str
+    caused_by: str
+    change_reason: str
     history: tuple[str, ...]
-    recorded_time: str; marking: Marking
+    recorded_time: str
+    marking: Marking
 
     def __post_init__(self):
         _member(self.status, ASSUMPTION_STATUSES, "assumption status")
@@ -633,17 +687,22 @@ class AssumptionRecord(Record):
 
 @dataclass(frozen=True)
 class ImpactEdge(Record):
-    """One typed step in an impact path. Graph adjacency is not causality:
-    an edge must carry typed semantics, and every non-assumption edge must
-    carry evidence — a bare 'A relates to B' cannot be constructed. An
-    INFERENCE edge must expose its reasoning and cannot claim observation."""
+    """One typed step in an impact path.
+
+    Adjacency is not causality: every non-assumption edge carries evidence, and
+    an inference edge exposes its reasoning and cannot claim observation.
+    """
     RECORD_TYPE = "impact_edge"
     edge_id: str
-    from_kind: str; from_id: str
-    to_kind: str; to_id: str
-    edge_kind: str; effect_order: str
-    authority: str; note: str
-    basis_ids: tuple[str, ...]      # claim / relationship / activity ids
+    from_kind: str
+    from_id: str
+    to_kind: str
+    to_id: str
+    edge_kind: str
+    effect_order: str
+    authority: str
+    note: str
+    basis_ids: tuple[str, ...]      # claim, relationship or activity ids
     assumption_ids: tuple[str, ...]
 
     def __post_init__(self):
@@ -673,28 +732,34 @@ class ImpactEdge(Record):
 
 @dataclass(frozen=True)
 class ImpactPath(Record):
-    """A connected, typed, inspectable path from a world change to a mission
-    objective. The path's authority is its weakest edge (validated, not
-    trusted), direct and second-order effects stay distinguishable, and the
-    assumptions the path rests on are explicit."""
+    """A connected typed path from a world change to a mission objective.
+
+    Its authority is its weakest edge, checked here rather than trusted; direct
+    and second-order effects stay distinguishable; assumptions are explicit.
+    """
     RECORD_TYPE = "impact_path"
-    path_id: str; version: int
-    objective_id: str; summary: str
+    path_id: str
+    version: int
+    objective_id: str
+    summary: str
     edges: tuple[ImpactEdge, ...]
     status: str
     path_authority: str        # must equal the weakest edge authority
     uncertainty_note: str
     assumption_ids: tuple[str, ...]
-    provenance_kind: str; inference_id: str; proposal_id: str
+    provenance_kind: str
+    inference_id: str
+    proposal_id: str
     change_reason: str
     history: tuple[str, ...]
-    recorded_time: str; marking: Marking
+    recorded_time: str
+    marking: Marking
 
     def __post_init__(self):
         _member(self.status, IMPACT_STATUSES, "impact status")
         _member(self.path_authority, AUTHORITY_LEVELS, "authority")
-        # the path's authority is derived from its edges, so MODEL provenance
-        # here constrains only inference/proposal identity, not the level
+        # the path's authority comes from its edges, so this constrains only
+        # the inference and proposal identity
         _require_model_inference(self.provenance_kind, self.inference_id,
                                  proposal_id=self.proposal_id)
         require_aware(self.recorded_time)
@@ -725,21 +790,27 @@ class ImpactPath(Record):
 
 @dataclass(frozen=True)
 class ResponseOption(Record):
-    """A candidate response to an impact path — decision support, never
-    autonomous command: only a recorded human act can move it to ACCEPTED."""
+    """A candidate response to an impact path; only a recorded human act can
+    move it to ACCEPTED."""
     RECORD_TYPE = "response_option"
-    option_id: str; version: int
-    objective_id: str; path_id: str
+    option_id: str
+    version: int
+    objective_id: str
+    path_id: str
     description: str
-    prerequisites: tuple[str, ...]; tradeoffs: tuple[str, ...]
+    prerequisites: tuple[str, ...]
+    tradeoffs: tuple[str, ...]
     claim_ids: tuple[str, ...]
     uncertainty_note: str
-    status: str; human_actor: str
-    provenance_kind: str; inference_id: str
+    status: str
+    human_actor: str
+    provenance_kind: str
+    inference_id: str
     change_reason: str
     history: tuple[str, ...]
-    recorded_time: str; marking: Marking
-    proposal_id: str = ""  # the accepted candidate this consumed, if MODEL
+    recorded_time: str
+    marking: Marking
+    proposal_id: str = ""  # the accepted candidate this consumed
 
     def __post_init__(self):
         _member(self.status, RESPONSE_STATUSES, "response status")
@@ -759,12 +830,13 @@ class ResponseOption(Record):
 
 @dataclass(frozen=True)
 class HistoricalEpisode(Record):
-    """A structured, evidence-bound historical episode: actors, sequence,
-    institutional setting, mechanism, constraints and outcome — each carried
-    by claims, never fabricated narrative."""
+    """A historical episode as structure: actors, sequence, setting, mechanism,
+    constraints and outcome, each carried by claims."""
     RECORD_TYPE = "historical_episode"
-    episode_id: str; version: int
-    title: str; summary: str
+    episode_id: str
+    version: int
+    title: str
+    summary: str
     actor_object_ids: tuple[str, ...]
     event_ids: tuple[str, ...]          # ordered activity ids
     institutional_setting: str
@@ -772,15 +844,18 @@ class HistoricalEpisode(Record):
     constraints: tuple[str, ...]
     outcome: str
     outcome_claim_ids: tuple[str, ...]
-    claim_ids: tuple[str, ...]          # evidence basis for the episode facts
-    valid_from: str | None; valid_to: str | None
+    claim_ids: tuple[str, ...]          # the evidence behind the episode
+    valid_from: str | None
+    valid_to: str | None
     change_reason: str
     history: tuple[str, ...]
-    recorded_time: str; marking: Marking
+    recorded_time: str
+    marking: Marking
 
     def __post_init__(self):
         require_aware(self.recorded_time)
-        require_aware_or_none(self.valid_from); require_aware_or_none(self.valid_to)
+        require_aware_or_none(self.valid_from)
+        require_aware_or_none(self.valid_to)
         if self.version < 1:
             raise ValueError("episode versions start at 1")
         if not self.title:
@@ -796,10 +871,11 @@ class HistoricalEpisode(Record):
 
 @dataclass(frozen=True)
 class AnalogueDimension(Record):
-    """One explicit structural dimension on which an analogue matched or
-    mismatched, with the evidence for the comparison."""
+    """One dimension on which an analogue matched or mismatched, with its
+    evidence."""
     RECORD_TYPE = "analogue_dimension"
-    dimension: str; detail: str
+    dimension: str
+    detail: str
     basis_ids: tuple[str, ...]
 
     def __post_init__(self):
@@ -810,24 +886,30 @@ class AnalogueDimension(Record):
 
 @dataclass(frozen=True)
 class HistoricalAnalogue(Record):
-    """A structural comparison between a current situation and a historical
-    episode. It exposes matched AND mismatched dimensions and transfer risks,
-    and it has no forecast field: similar structure never silently becomes
-    expected outcome."""
+    """A structural comparison between a situation and a historical episode.
+
+    It exposes matched and mismatched dimensions and its transfer risks, and has
+    no forecast field: similar structure never becomes expected outcome.
+    """
     RECORD_TYPE = "historical_analogue"
-    analogue_id: str; version: int
-    query_kind: str; query_id: str  # theme / impact_path / hypothesis under analysis
+    analogue_id: str
+    version: int
+    query_kind: str  # the situation under analysis: theme, path or hypothesis
+    query_id: str
     episode_id: str
     matched: tuple[AnalogueDimension, ...]
     mismatched: tuple[AnalogueDimension, ...]
     transfer_risks: tuple[str, ...]
     retrieval_method: str
-    authority: str; status: str
-    provenance_kind: str; inference_id: str
+    authority: str
+    status: str
+    provenance_kind: str
+    inference_id: str
     change_reason: str
     history: tuple[str, ...]
-    recorded_time: str; marking: Marking
-    proposal_id: str = ""  # the accepted candidate this consumed, if MODEL
+    recorded_time: str
+    marking: Marking
+    proposal_id: str = ""  # the accepted candidate this consumed
 
     def __post_init__(self):
         _member(self.status, ANALOGUE_STATUSES, "analogue status")
@@ -869,10 +951,9 @@ INDICATOR_EFFECT_MODES = ("REVIEW_ONLY", "APPLY_PROBABILITY")
 
 WARNING_TIERS = ("ROUTINE", "ATTENTION", "PRIORITY", "CRITICAL")
 WARNING_STATUSES = ("ACTIVE", "ESCALATED", "DOWNGRADED", "RESOLVED", "WITHDRAWN")
-# Status is a control input, not display text.  The settled set is declared
-# beside each authoritative vocabulary so additions fail closed until they are
-# deliberately classified.  Report approval consumes this table; callers must
-# not maintain private lists of terminal spellings.
+# Status is a control input, not display text. Declaring the settled set beside
+# each vocabulary makes a new status fail closed until it is classified here,
+# and gives report approval one table to read instead of private lists.
 SETTLED_SUPPORT_STATUSES: dict[str, frozenset[str]] = {
     "analytic_forecast": frozenset(FORECAST_STATUSES)
     - frozenset(FORECAST_TERMINAL_STATUSES),
@@ -911,14 +992,15 @@ EVIDENCE_CONFIDENCES = ("NONE", "WEAK", "MODERATE", "STRONG")
 
 @dataclass(frozen=True)
 class ResolutionRule(Record):
-    """How a forecast resolves. Machine resolution exists only for typed,
-    evidence-checkable rules; everything else is a recorded human judgment.
-    A FALSE-by-absence verdict additionally requires the coverage the rule
-    declares — "we did not see it" is not "it did not happen" unless the
-    places it would appear were actually looked at."""
+    """How a forecast resolves.
+
+    Machine resolution exists only for typed, checkable rules. A FALSE by
+    absence additionally requires the coverage the rule declares: "we did not
+    see it" is not "it did not happen" unless someone looked.
+    """
     RECORD_TYPE = "resolution_rule"
     kind: str
-    criteria: str  # the humanly-stated resolution criterion, always required
+    criteria: str  # the resolution criterion, stated for a human
     # CLAIM_PREDICATE: the claim whose value settles the question
     claim_subject_ref: str = ""
     claim_attribute: str = ""
@@ -946,9 +1028,8 @@ class ResolutionRule(Record):
         if self.absence_min_successful_sources < 1:
             raise ValueError("absence coverage requires at least one source")
         if self.kind != "HUMAN_JUDGMENT":
-            # these kinds can resolve FALSE by absence — coverage that names
-            # no source would be satisfied by any unrelated search anywhere,
-            # making "we looked" meaningless
+            # these kinds can resolve FALSE by absence, and coverage naming no
+            # source would be satisfied by any unrelated search anywhere
             if not self.absence_required_source_ids:
                 raise ValueError("a machine-resolvable rule must NAME the "
                                  "sources whose successful search constitutes "
@@ -962,48 +1043,48 @@ class ResolutionRule(Record):
 
 @dataclass(frozen=True)
 class ForecastRecord(Record):
-    """A forecast is a first-class epistemic object: an exact proposition,
-    explicit outcome semantics, a horizon, a typed resolution rule, a
-    probability with its authored basis, and an append-only update history.
+    """An exact proposition with explicit outcome semantics, a horizon, a typed
+    resolution rule, a probability with its authored basis, and its history.
 
-    The invariants that keep it honest:
-      * a probability is NEVER observed or derived — it is an authored
-        judgment (analyst, or a human-accepted model candidate), so
-        provenance is ANALYST or MODEL and authority is inferential;
-      * p is strictly inside (0,1): certainty is not a forecast;
-      * changing a probability is a NEW VERSION with its reason and the
-        evidence that moved it — 0.35 is never overwritten by 0.62;
-      * a resolved forecast carries its resolution evidence and resolver;
-        RESOLVED_TRUE/FALSE without evidence is unconstructible.
+    A probability is authored, never observed or derived, and lies strictly
+    inside (0,1). Moving it is a new version with its reason. A resolved
+    forecast carries its resolution evidence and its resolver.
     """
     RECORD_TYPE = "analytic_forecast"
-    forecast_id: str; version: int
+    forecast_id: str
+    version: int
     question: str            # the exact proposition being forecast
-    outcome_semantics: str   # what counts as TRUE, unambiguously
-    proposition_refs: tuple[tuple[str, str], ...]  # (kind, id) world/analytic refs
+    outcome_semantics: str   # what counts as TRUE
+    proposition_refs: tuple[tuple[str, str], ...]  # (kind, id)
     horizon_time: str
     resolution: ResolutionRule
     probability: float
-    probability_basis: str   # the authored rationale for THIS number
-    basis: BasisSummary      # evidence bearing on the question (claims)
+    probability_basis: str   # the rationale for this number
+    basis: BasisSummary      # the claims bearing on the question
     assumption_ids: tuple[str, ...]
     indicator_ids: tuple[str, ...]
-    author: str              # analyst id or model id — calibration groups on it
+    author: str              # analyst or model id; calibration groups on it
     domain: str              # calibration grouping, e.g. "corporate-registry"
-    status: str; authority: str
-    provenance_kind: str; inference_id: str; proposal_id: str
-    outcome: str             # "" until resolved; then TRUE/FALSE/VOID
+    status: str
+    authority: str
+    provenance_kind: str
+    inference_id: str
+    proposal_id: str
+    outcome: str             # "" until resolved, then TRUE/FALSE/VOID
     resolved_time: str       # "" until resolved
     resolution_evidence_refs: tuple[str, ...]
-    resolver_id: str; resolver_kind: str
+    resolver_id: str
+    resolver_kind: str
     change_reason: str
     history: tuple[str, ...]
-    recorded_time: str; marking: Marking
+    recorded_time: str
+    marking: Marking
 
     def __post_init__(self):
         _member(self.status, FORECAST_STATUSES, "forecast status")
         _member(self.authority, AUTHORITY_LEVELS, "authority")
-        require_aware(self.recorded_time); require_aware(self.horizon_time)
+        require_aware(self.recorded_time)
+        require_aware(self.horizon_time)
         if self.version < 1:
             raise ValueError("forecast versions start at 1")
         if not self.question or not self.outcome_semantics:
@@ -1046,9 +1127,10 @@ class ForecastRecord(Record):
 @dataclass(frozen=True)
 class IndicatorEffect(Record):
     """What an indicator firing is pre-authorized to do to its forecasts.
-    APPLY_PROBABILITY is a HUMAN pre-commitment — an analyst's own
-    conditional judgment executing later — never a machine's invention:
-    it requires the authorizing human and a target inside (0,1)."""
+
+    APPLY_PROBABILITY is a human's own conditional judgment executing later, so
+    it requires the authorizing human and a target inside (0,1).
+    """
     RECORD_TYPE = "indicator_effect"
     mode: str
     target_probability: float | None = None
@@ -1073,44 +1155,52 @@ class IndicatorEffect(Record):
 
 @dataclass(frozen=True)
 class IndicatorRecord(Record):
-    """An observation pattern that would move a forecast. PRESENCE fires on
-    matching evidence; ABSENCE fires only when its deadline passes AND the
-    declared coverage was actually achieved — "we did not see it" moves
-    nothing when the sources that would show it were never searched."""
+    """An observation pattern that would move a forecast.
+
+    PRESENCE fires on matching evidence. ABSENCE fires only once its deadline
+    passes and the declared coverage was achieved: silence moves nothing when
+    the sources that would show it were never searched.
+    """
     RECORD_TYPE = "forecast_indicator"
-    indicator_id: str; version: int
+    indicator_id: str
+    version: int
     forecast_ids: tuple[str, ...]
     description: str
-    kind: str; direction: str
+    kind: str
+    direction: str
     desired_observation_type: str
     desired_subject_ref: str
     desired_attribute: str
-    expected_value: str      # "" = any new/changed observation matches
+    expected_value: str      # "" matches any new or changed observation
     effect: IndicatorEffect
-    # ABSENCE only:
-    deadline: str            # "" for PRESENCE
+    # ABSENCE only; empty for PRESENCE
+    deadline: str
     coverage_min_successful_sources: int
     coverage_required_source_ids: tuple[str, ...]
     status: str
     armed_time: str
     fired_time: str
     fired_evidence_refs: tuple[str, ...]
-    provenance_kind: str; inference_id: str; proposal_id: str
+    provenance_kind: str
+    inference_id: str
+    proposal_id: str
     change_reason: str
     history: tuple[str, ...]
-    recorded_time: str; marking: Marking
+    recorded_time: str
+    marking: Marking
 
     def __post_init__(self):
         _member(self.kind, INDICATOR_KINDS, "indicator kind")
         _member(self.direction, INDICATOR_DIRECTIONS, "indicator direction")
         _member(self.status, INDICATOR_STATUSES, "indicator status")
         if self.desired_observation_type:
-            # a typo here would silently never match — the indicator would sit
-            # ARMED forever looking like honest waiting
+            # a typo would never match, leaving the indicator ARMED forever and
+            # looking like honest waiting
             from curunir_semantic.contracts import OBSERVATION_TYPES
             _member(self.desired_observation_type, OBSERVATION_TYPES,
                     "observation type")
-        require_aware(self.recorded_time); require_aware(self.armed_time)
+        require_aware(self.recorded_time)
+        require_aware(self.armed_time)
         _require_model_inference(self.provenance_kind, self.inference_id,
                                  proposal_id=self.proposal_id)
         if self.version < 1:
@@ -1159,20 +1249,21 @@ class IndicatorRecord(Record):
 
 @dataclass(frozen=True)
 class WarningRecord(Record):
-    """Strategic warning as a PROJECTION over a forecast and the impact
-    state it threatens — never an independent alert classifier. The tier is
-    bound to a named derivation rule over typed components (probability
-    band, consequence, time pressure, evidence confidence): a tier the rule
-    table does not produce is unconstructible, and every component carries
-    its basis."""
+    """A projection of one forecast onto the impact state it threatens, never an
+    independent classifier.
+
+    The tier must be what the named rule yields for the typed components, and
+    every component carries its basis.
+    """
     RECORD_TYPE = "strategic_warning"
-    warning_id: str; version: int
+    warning_id: str
+    version: int
     mission_context: str
     objective_id: str
     forecast_id: str
     impact_path_ids: tuple[str, ...]
     probability_band: str
-    consequence: str          # objective priority: LOW/MEDIUM/HIGH/CRITICAL
+    consequence: str          # the threatened objective's priority
     time_pressure: str
     evidence_confidence: str
     tier: str
@@ -1181,7 +1272,8 @@ class WarningRecord(Record):
     status: str
     change_reason: str
     history: tuple[str, ...]
-    recorded_time: str; marking: Marking
+    recorded_time: str
+    marking: Marking
 
     def __post_init__(self):
         _member(self.probability_band, PROBABILITY_BANDS, "probability band")
@@ -1200,8 +1292,7 @@ class WarningRecord(Record):
         if not self.tier_rule_id:
             raise ValueError("a warning tier is produced by a named rule, "
                              "never asserted freely")
-        # naming the rule is not enough — the record must actually satisfy it:
-        # a tier the rule table does not produce is unconstructible
+        # naming the rule is not enough: the record must satisfy it
         from .warning import TIER_RULE_V1, derive_tier
         if self.tier_rule_id != TIER_RULE_V1:
             raise ValueError(f"unknown warning tier rule "

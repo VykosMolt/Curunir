@@ -1,34 +1,30 @@
-"""Deterministic semantic extraction: normalized documents → observations.
+"""Read observations out of a normalized document, without any model.
 
-The correct instrument per source shape: field-path extraction for structured
-registry/API records (GLEIF, Wikidata, EDGAR), element-path extraction for
-feeds, and the text-observation capture in `provenance_capture` for
-prose/HTML pages.
-Nothing here routes a clean structured field through a model; model providers
-plug in through the operational inference plane and are recorded as
-MODEL_PROVIDER observations — none are required for this pipeline.
-
-Every observation descends to a FIELD or TEXT_SPAN anchor on its
-manifestation. Extraction is idempotent: an observation with an identical
-semantic identity is not re-appended.
+Each source shape gets the right instrument: field paths for structured
+registry and API records, element paths for feeds, and the text capture in
+`provenance_capture` for prose and HTML. Every observation lands on a field or
+text-span anchor in its manifestation, and re-running appends nothing new.
 """
 from __future__ import annotations
 
 import re
-from typing import Any, Iterable, Mapping
+from datetime import datetime
+from typing import Mapping
 
 from argus.source_intelligence.models import digest_id
 
 from . import PARSER_VERSION
 from .contracts import EvidenceAnchor, SemanticObservation
 from .normalize import load_fields, load_text
+from curunir_fabric.connectors.rss import _iso_or_none, _rfc822_to_iso
+
 from .provenance_capture import DerivativeMapping, NormalizedDocument, capture
 from .store import SemanticStore
 
 FIELD_MAPPING = "EXACT_FIELD_PATH"
 TEXT_MAPPING = "NORMALIZED_EXACT_ORIGINAL_APPROXIMATE"
 
-# Wikidata external-id properties worth naming (mirrors the fabric connector)
+# the Wikidata properties that carry an external identifier
 _WIKIDATA_IDENTIFIERS = {
     "P1278": "LEI", "P5531": "SEC_CIK", "P1320": "OPENCORPORATES",
     "P946": "ISIN", "P249": "TICKER", "P6782": "ROR", "P2427": "GRID",
@@ -37,14 +33,14 @@ _WIKIDATA_IDENTIFIERS = {
 
 def _observation_identity(document_id: str, observation_type: str, subject: str,
                           attribute: str, value: str, object_ref: str) -> str:
-    # the identity hashes exactly the value the record stores, so two
-    # observations differing only past a prefix can never collide
+    # Hash exactly the value the record stores, so two observations that differ
+    # only past the stored prefix cannot collide.
     return digest_id("semobs", document_id, observation_type, subject, attribute,
                      value[:2000], object_ref)
 
 
 class _Emitter:
-    """Collects observations idempotently for one document."""
+    """Appends one document's observations, skipping ones already recorded."""
 
     def __init__(self, store: SemanticStore, document: dict, *, producer_id: str,
                  now: str, actor: str, marking):
@@ -59,8 +55,8 @@ class _Emitter:
         self.emitted: list[dict] = []
 
     def field_anchor(self, field_path: str, value: str) -> EvidenceAnchor:
-        # a FIELD anchor names the fields payload its path addresses, so the
-        # anchor alone identifies the exact table replay must consult
+        # Name the field table the path addresses, so the anchor alone says
+        # which payload a replay must read.
         return EvidenceAnchor(
             manifestation_id=self.document["manifestation_id"],
             source_id=self.document["source_id"],
@@ -114,17 +110,16 @@ class _Emitter:
 
 
 def _iso_day(value: str | None) -> str | None:
-    """Parse a source-stated date/timestamp to an aware ISO string, or None.
+    """Parse a source-stated date or timestamp to an ISO string with a zone.
 
-    A date without a zone is day-precision UTC by convention (declared via
-    time_precision downstream); a timestamp without a zone is returned as
-    None rather than being stamped with a zone the source never stated."""
+    A bare date is taken as UTC at day precision. A bare timestamp returns None
+    rather than being stamped with a zone the source never gave.
+    """
     if not value:
         return None
     value = value.strip()
     if re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
         return value + "T00:00:00+00:00"
-    from datetime import datetime
     try:
         parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
     except ValueError:
@@ -138,7 +133,7 @@ def _iso_day(value: str | None) -> str | None:
 
 
 def _record_prefixes(fields: Mapping[str, str], container: str) -> list[str]:
-    """Record roots: '$.data' for a lookup, '$.data[N]' for a search page."""
+    """The path of each record: '$.data' for a lookup, '$.data[N]' for a search."""
     prefixes = set()
     for path in fields:
         m = re.match(rf"^\$\.{container}(\[\d+\])?\.", path)
@@ -270,10 +265,9 @@ def _strip_ns(path: str) -> str:
 
 
 def extract_feed(emitter: _Emitter, fields: dict[str, str]) -> None:
-    # xml_derivative rides each child's per-tag counter on its parent path
-    # segment, so an item instance is identified by everything up to and
-    # including its own "/item"/"/entry" stem (the counter that distinguishes
-    # sibling items lives on the segment before it).
+    # In an element path the counter that tells sibling items apart sits on the
+    # segment before the tag, so an item is identified by its whole stem up to
+    # and including "/item" or "/entry".
     items: dict[str, dict[str, tuple[str, str]]] = {}
     channel_title = ""
     title_path = ""
@@ -298,7 +292,6 @@ def extract_feed(emitter: _Emitter, fields: dict[str, str]) -> None:
         published = entry.get("pubDate") or entry.get("updated") or entry.get("published")
         published_iso = None
         if published:
-            from curunir_fabric.connectors.rss import _rfc822_to_iso, _iso_or_none
             published_iso = _rfc822_to_iso(published[1]) or _iso_or_none(published[1])
         anchors = [emitter.field_anchor(guid_path, guid)]
         if entry.get("title"):
@@ -313,7 +306,7 @@ def extract_feed(emitter: _Emitter, fields: dict[str, str]) -> None:
 
 
 def extract_text_signals(emitter: _Emitter, text: str) -> None:
-    """Run the typed-observation capture over normalized text."""
+    """Read statements and provenance lines out of normalized text."""
     document = emitter.document
     shim = NormalizedDocument(
         document_id=document["document_id"],
@@ -336,13 +329,13 @@ def extract_text_signals(emitter: _Emitter, text: str) -> None:
     raws, observations = capture(
         shim, source_object_id=document["manifestation_id"],
         content_hash=document["content_sha256"], title=document.get("title") or None)
-    # the anchoring below relies on capture appending one raw per observation
-    # in lockstep; if that contract ever changes, fail loudly, never mis-pair
+    # The anchoring below pairs each raw with its observation by position. If
+    # that ever stops holding, fail loudly rather than mis-pair.
     if len(raws) != len(observations):
         raise ValueError("capture returned unpaired raws/observations; "
                          "anchor pairing would be wrong")
-    # the subject of a page's statements is the page's origin, not the
-    # capture: an archived manifestation speaks for the archived site
+    # A page's statements are about where the page came from, so an archived
+    # copy speaks for the site it archived, not for the archive.
     native = document.get("native_id") or document["manifestation_id"]
     if document["source_id"] == "wayback" and "/" in native:
         subject = f"URL:{native.partition('/')[2]}"
@@ -350,8 +343,8 @@ def extract_text_signals(emitter: _Emitter, text: str) -> None:
         subject = f"URL:{native}"
     else:
         subject = native
-    # labeled statements: "Managing Director: Kari Nordmann." — deterministic,
-    # bounded, exactly anchored; the label becomes the attribute
+    # Labeled lines like "Managing Director: Kari Nordmann." — the label
+    # becomes the attribute.
     offset = 0
     for line in text.split("\n")[:200]:
         match = re.match(r"^\s*([A-Za-zÀ-ÿ][\w /()-]{2,48}):\s+(.{2,160}?)\s*\.?\s*$", line)
@@ -365,10 +358,8 @@ def extract_text_signals(emitter: _Emitter, text: str) -> None:
         offset += len(line) + 1
 
     for raw, item in zip(raws, observations):
-        # anchor at the raw matched text's position (the capture's own
-        # evidence), then narrow to the observed value inside it; when the
-        # value cannot be located exactly, the anchor honestly declares
-        # document scope rather than fabricating a span
+        # Anchor on the matched text, then narrow to the value inside it. If
+        # the value cannot be located, say so rather than invent a span.
         needle = item.observed_value
         raw_text = raw.raw_text or ""
         raw_position = text.find(raw_text) if raw_text else -1
@@ -408,7 +399,7 @@ _EXTRACTORS = {
 
 def extract_observations(store: SemanticStore, document_record: dict, *,
                          now: str, actor: str, marking) -> list[dict]:
-    """Run the appropriate deterministic extractor for one normalized document."""
+    """Run the extractor that suits one normalized document."""
     source_id = document_record["source_id"]
     fmt = document_record["format"]
     if source_id in _EXTRACTORS and fmt == "JSON":
@@ -427,6 +418,6 @@ def extract_observations(store: SemanticStore, document_record: dict, *,
                            now=now, actor=actor, marking=marking)
         extract_text_signals(emitter, load_text(store, document_record))
         return emitter.emitted
-    # an unrecognized structured source yields no observations, honestly:
-    # nothing is fabricated from a schema the parser does not understand
+    # A source no extractor understands yields nothing; nothing is invented
+    # from a schema the parser cannot read.
     return []

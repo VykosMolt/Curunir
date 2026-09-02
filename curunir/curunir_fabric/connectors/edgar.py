@@ -1,9 +1,4 @@
-"""SEC EDGAR full-text search — regulatory filings with deep history.
-
-SEARCH queries the EDGAR full-text search API (quoted phrases, date bounds);
-FETCH retrieves one filing document from the EDGAR archive. The SEC asks
-automated clients to declare an identifying User-Agent; the fabric complies.
-"""
+"""SEC EDGAR: SEARCH uses the full-text search API; FETCH gets one filing document."""
 from __future__ import annotations
 
 import json

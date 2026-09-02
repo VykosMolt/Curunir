@@ -1,4 +1,4 @@
-// Shell: session, navigation, hash router.
+// Shell: sign-in, navigation, hash router, display modes.
 import { get, setToken, clearToken, token } from "./api.js";
 import { setSession } from "./session.js";
 import { h } from "./ui.js";
@@ -29,7 +29,7 @@ const NAV = [
     ["/annotations", "Annotations"], ["/reports", "Dossiers"]]],
 ];
 
-// route table: pattern → handler(main, params, ...captures)
+// Route table: pattern -> handler(main, params, ...captures).
 const ROUTES = [
   ["/overview", v1.overviewView],
   ["/investigation", v2.investigationView],
@@ -110,6 +110,52 @@ function buildNav() {
   }
 }
 
+// ---- display modes ----------------------------------------------------------
+// "t" toggles the theme, "a" toggles auditor mode (raw identifiers), "/" focuses search.
+const rootEl = document.documentElement;
+
+function setTheme(value) {
+  if (value) rootEl.setAttribute("data-theme", value);
+  else rootEl.removeAttribute("data-theme");
+  try {
+    if (value) localStorage.setItem("curunir-theme", value);
+    else localStorage.removeItem("curunir-theme");
+  } catch {}
+}
+
+function toggleTheme() {
+  const now = rootEl.getAttribute("data-theme");
+  setTheme(now === "dark" ? "light" : now === "light" ? null : "dark");
+}
+
+function toggleAuditor() {
+  const on = rootEl.getAttribute("data-auditor") === "on";
+  rootEl.setAttribute("data-auditor", on ? "off" : "on");
+  try { localStorage.setItem("curunir-auditor", on ? "off" : "on"); } catch {}
+}
+
+try {
+  const saved = localStorage.getItem("curunir-theme");
+  if (saved) setTheme(saved);
+  if (localStorage.getItem("curunir-auditor") === "on") rootEl.setAttribute("data-auditor", "on");
+} catch {}
+
+addEventListener("keydown", (e) => {
+  if (e.target.matches("input, textarea, select")) return;
+  if (e.key === "/") {
+    e.preventDefault();
+    document.getElementById("quick-search").focus();
+    return;
+  }
+  if (e.metaKey || e.ctrlKey || e.altKey) return;
+  if (e.key === "a") toggleAuditor();
+  if (e.key === "t") toggleTheme();
+});
+
+window.addEventListener("hashchange", route);
+
+// ---- boot -------------------------------------------------------------------
+
 async function boot() {
   const login = document.getElementById("login");
   const shell = document.getElementById("shell");
@@ -145,43 +191,9 @@ async function boot() {
     clearToken(); location.reload();
   });
 
-
-/* ---- display modes ------------------------------------------------------- */
-const rootEl = document.documentElement;
-function setTheme(v) {
-  v ? rootEl.setAttribute("data-theme", v) : rootEl.removeAttribute("data-theme");
-  try { v ? localStorage.setItem("curunir-theme", v) : localStorage.removeItem("curunir-theme"); } catch {}
-}
-function toggleTheme() {
-  const now = rootEl.getAttribute("data-theme");
-  setTheme(now === "dark" ? "light" : now === "light" ? null : "dark");
-}
-function toggleAuditor() {
-  const on = rootEl.getAttribute("data-auditor") === "on";
-  rootEl.setAttribute("data-auditor", on ? "off" : "on");
-  try { localStorage.setItem("curunir-auditor", on ? "off" : "on"); } catch {}
-}
-try {
-  const saved = localStorage.getItem("curunir-theme"); if (saved) setTheme(saved);
-  if (localStorage.getItem("curunir-auditor") === "on") rootEl.setAttribute("data-auditor", "on");
-} catch {}
-addEventListener("keydown", (e) => {
-  if (e.target.matches("input, textarea, select")) return;
-  if (e.metaKey || e.ctrlKey || e.altKey) return;
-  if (e.key === "a") toggleAuditor();
-  if (e.key === "t") toggleTheme();
-});
-
-window.addEventListener("hashchange", route);
   document.getElementById("quick-search").addEventListener("keydown", (e) => {
     if (e.key === "Enter") {
       location.hash = `#/search?q=${encodeURIComponent(e.target.value)}`;
-    }
-  });
-  document.addEventListener("keydown", (e) => {
-    if (e.key === "/" && !["INPUT", "TEXTAREA", "SELECT"].includes(document.activeElement.tagName)) {
-      e.preventDefault();
-      document.getElementById("quick-search").focus();
     }
   });
 

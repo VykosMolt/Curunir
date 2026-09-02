@@ -1,6 +1,6 @@
-"""Integration: semantic change → analytical update → alert; analytical
-uncertainty → discriminator → requirement; provider boundary honesty; unified
-explanation."""
+"""A change in the evidence reaches exactly the analytics that rest on it and
+raises an alert; analytic uncertainty turns into collection; a model proposal
+stays a proposal; and one explanation covers every section."""
 from __future__ import annotations
 
 import pytest
@@ -27,8 +27,8 @@ ACME_OBJECT = world_object_id("LEI:ACMELEI000000000001")
 
 
 def _seed_world_and_analytics(pipeline, ctx):
-    """GLEIF evidence + a theme, assumption, objective, path and hypothesis
-    all resting on the entity_status claim."""
+    """Registry evidence plus a theme, assumption, objective, path and
+    hypothesis, all resting on the entity_status claim."""
     v1 = plant_manifestation(pipeline, source_id="gleif",
                              native_id="lei/ACMELEI000000000001",
                              body=GLEIF_ACME, media_type="application/json",
@@ -71,7 +71,7 @@ def _seed_world_and_analytics(pipeline, ctx):
 def test_semantic_change_updates_exactly_the_dependent_analytics(tmp_path):
     pipeline, ctx = make_analytic(tmp_path)
     state = _seed_world_and_analytics(pipeline, ctx)
-    # an unrelated theme must not be touched by the change
+    # A theme resting on a different claim, to prove the change stays narrow.
     unrelated_claim = next(c["claim_id"] for c in ctx.store.current_claims().values()
                            if c["predicate"] == "jurisdiction")
     unrelated = create_theme(ctx, title="Acme jurisdiction",
@@ -97,8 +97,7 @@ def test_semantic_change_updates_exactly_the_dependent_analytics(tmp_path):
     assert ("analytic_theme", "EVIDENCE_UPDATED") in all_transitions
     assert ("analytic_assumption", "QUESTIONED") in all_transitions
     assert ("mission_objective", "EXPOSED") in all_transitions
-    # attribution is collective and truthful: each object outcome names the
-    # full set of changes folded into its refresh
+    # Each refreshed object names every change folded into it.
     object_outcomes = [o for o in outcomes if "change_ids" in o]
     assert all(o["change_ids"] for o in object_outcomes)
 
@@ -108,15 +107,12 @@ def test_semantic_change_updates_exactly_the_dependent_analytics(tmp_path):
     assert objective["status"] == "EXPOSED"
     hypothesis = ctx.store.current_hypotheses()[state["hypothesis"]["hypothesis_id"]]
     assert any(o.get("hypotheses_refreshed") for o in outcomes) or hypothesis
-    # the unrelated theme was not touched
     assert ctx.store.current_themes()[unrelated["theme_id"]]["version"] == 1
-    # alerts were raised and explain the analytical effect
     alerts = [a for a in ctx.store.records_of("alert")
               if a["rule_id"] == "analytic-change"]
     assert alerts
     assert "analytical effect" in alerts[0]["trigger"]
 
-    # idempotence: a second propagation pass changes nothing
     again = propagate_semantic_changes(ctx)
     assert again == []
 
@@ -138,8 +134,8 @@ def test_analytic_uncertainty_generates_requirements_through_existing_machinery(
 
     needs = analytic_collection_needs(ctx.store)
     kinds = {n["source_kind"] for n in needs}
-    assert "analytic_theme" in kinds        # single-family theme
-    assert "stakeholder_assessment" in kinds  # interest without public position
+    assert "analytic_theme" in kinds        # rests on one source family
+    assert "stakeholder_assessment" in kinds  # an interest with no public position
     theme_need = next(n for n in needs if n["source_kind"] == "analytic_theme")
     assert theme_need["independence_required"] is True
 
@@ -148,7 +144,7 @@ def test_analytic_uncertainty_generates_requirements_through_existing_machinery(
     for entry in opened:
         assert entry["discriminator"]["status"] == "REQUESTED"
         assert entry["requirement"]["requirement_id"]
-    # idempotent: same needs map to the same discriminators/requirements
+    # The same needs must map to the same discriminators, not to new ones.
     reopened = open_analytic_requirements(ctx, mission_context="m1")
     assert {e["discriminator"]["discriminator_id"] for e in reopened} \
         == {e["discriminator"]["discriminator_id"] for e in opened}
@@ -178,7 +174,7 @@ def test_provider_boundary_is_honest_and_attributed(tmp_path):
     inference = next(r for r in ctx.store.records_of("inference")
                      if r["inference_id"] == proposed["inference_id"])
     assert inference["model_id"] == "stub-model"
-    # the candidate is not analytical state until a human accepts it
+    # A proposal is not analytical state until a person accepts it.
     assert proposed["proposal"]["proposal_id"] not in ctx.store.current_themes()
     resolved = resolve_candidate(ctx, proposed["proposal"]["proposal_id"],
                                  accept=True, actor_id="jan", actor_kind="HUMAN")
@@ -190,7 +186,6 @@ def test_provider_boundary_is_honest_and_attributed(tmp_path):
                          proposal_id=resolved["proposal_id"])
     assert theme["provenance_kind"] == "MODEL"
     assert theme["inference_id"] == proposed["inference_id"]
-    # a MODEL theme without its inference identity is unconstructible
     with pytest.raises(ValueError, match="inference record"):
         create_theme(ctx, title="phantom", supporting_claim_ids=[state["status_claim"]],
                      provenance_kind="MODEL")

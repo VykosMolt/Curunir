@@ -1,71 +1,39 @@
-"""Fail-closed custody for held-out evidence partitions — the READ boundary.
+"""Fail-closed custody for held-out evidence partitions: the read boundary.
 
-``access.py`` decides who may *see* a record that a process already holds.
-``v5_4/custody.py`` decides who may *write* into a reviewer seat.  Neither one
-prevents a process from reading bytes it was never supposed to touch, and that
-is exactly how two holdout generations were lost:
+Access markings decide who may see a record a process already holds. They do
+not stop a process from reading bytes it should never touch, and that is how
+two holdout generations were lost. This module makes the read impossible
+rather than discouraged, through four mechanisms:
 
-* the V1 sealed partition was destroyed because the aligned shard plan drew
-  from every partition, so 21 sealed units acquired reference answers;
-* the V2 development-validation and sealed-confirmation partitions were
-  destroyed by ``V581-PARTITION-CUSTODY-INCIDENT-306`` (2026-07-28): all four
-  historical partitions share one plaintext file,
-  ``55_d25_role_binding_reference/population/selected_population.jsonl``
-  (750 rows, mode 0644), and the standing D42 loader deserialized every row
-  before joining the 120 exposed identifiers.  ``item_text_bytes_read = true``.
-  Both partitions were retired ``RETIRED_UNSCORED_CUSTODY_FAILURE``.
+sealed store
+    A holdout file is held at mode 0o000, so even its owner gets
+    PermissionError from the kernel, whatever the calling code does.
 
-The lesson recorded in incident 306 is that a holdout partition is not
-protected by intention, by review, or by a naming convention.  A later campaign
-did introduce a 120-row exposed-only snapshot
-(``307_d42g_structural_region_truth/exposed_population.jsonl``) and every live
-runner now points at it — but that is a *convention*.  Three entry points that
-still target the shared plaintext file remain runnable today, and nothing
-stops the next script from writing ``read_text()`` against it.
+one-shot lock
+    ``os.open(O_CREAT | O_EXCL)``. The first opener wins; every later attempt
+    is refused. The lock file is never removed here.
 
-This module replaces the convention with three mechanisms that fail closed:
+first-access log
+    A hash-chained append-only ledger. The intent to open is written and
+    fsynced before the store is unsealed, so an unlogged read cannot happen
+    silently — an interrupted open shows up as an unterminated one.
 
-``SEALED STORE``
-    A holdout-bearing file is held at mode ``0o000``.  A non-root process —
-    including its owner — gets ``PermissionError`` from the kernel, in any
-    language, from any script, reviewed or not.  This is what makes the byte
-    read impossible rather than discouraged, and it is why the historical
-    defect is repaired without editing a single frozen campaign artifact: the
-    three legacy loaders now fail closed with their bytes unchanged.
-
-``ONE-SHOT LOCK``
-    ``os.open(O_CREAT | O_EXCL)``.  The first opener wins atomically; every
-    later attempt raises :class:`CustodyViolation`.  The lock file is never
-    removed by this module.
-
-``FIRST-ACCESS LOG``
-    A hash-chained, append-only ledger.  The record that a store is about to
-    be opened is appended and ``fsync``-ed *before* the store is unsealed, so
-    an access that happened but was not logged requires the log write to have
-    succeeded and the process to have then crashed — which the observer
-    reports as an unterminated open, not as an absence.
-
-``ADJUDICATION READ``
-    A *second* gated read path, for the one lawful use that is not an opening:
-    handing the evidence of an explicitly named identity list to a packet
-    builder so a reference can be adjudicated.  It writes its own event class
-    and it does **not** touch the one-shot lock, because
-    ``V3_ADJUDICATION_PROTOCOL.json`` A8 reserves that lock for the single
-    sealed OPENING.  See :func:`read_units_for_adjudication`.
+adjudication read
+    A second gated path for the one lawful use that is not an opening:
+    handing the evidence for an explicitly named identity list to a packet
+    builder. It writes its own event class and leaves the one-shot lock alone,
+    which is reserved for a sealed opening.
 
 :class:`AccessObserver` answers "has this partition been read, and by whom"
-from that ledger.  It never answers a bare ``NO`` when the ledger does not
-verify; a broken chain reports ``UNKNOWN_LOG_TAMPERED``.  It answers the
-opening question and the adjudication-read question separately, because A8
-requires the two event classes to stay distinguishable.
+from the ledger, keeping openings and adjudication reads distinguishable. It
+never answers a bare no when the ledger does not verify; a broken chain
+reports UNKNOWN_LOG_TAMPERED.
 
-Nothing here is advisory.  There is no flag a caller can forget: the store is
-unreadable until a gate unseals it, the opening gate cannot unseal without
-taking the lock and writing the log first, and the adjudication gate cannot
-unseal without an explicit identity list that is provably a subset of a
-registered partition.
+Nothing here is advisory. A store stays unreadable until a gate unseals it, no
+gate unseals before taking the lock and writing the log, and the adjudication
+gate needs an identity list provably inside a registered partition.
 
-Research shadow only.  Nothing here claims human validation.
+Research shadow only. Nothing here claims human validation.
 """
 from __future__ import annotations
 
@@ -131,15 +99,13 @@ class CustodyViolation(ValueError):
     """A custody rule was broken.  Never downgraded to a warning."""
 
 
-#: Holdout-bearing stores are held at this mode.  ``0o000`` denies the owner
-#: too: Linux enforces the permission bits for every process without
-#: ``CAP_DAC_OVERRIDE``, so an unprivileged read fails regardless of who runs
-#: it.  ``0o400`` would not do — the campaign runs as the file's owner.
+#: Mode a holdout store is held at. ``0o000`` denies the owner too, so an
+#: unprivileged read fails whoever runs it; ``0o400`` would not, because the
+#: campaign runs as the file's owner.
 SEALED_MODE = 0o000
 
-#: Directories are sealed the same way.  ``0o000`` on a directory removes
-#: search permission, so nothing inside it can be opened either — which is how
-#: a whole reviewer-seat delivery tree is closed with one call.
+#: Directories seal the same way: ``0o000`` removes search permission, so one
+#: call closes everything beneath.
 SEALED_DIR_MODE = 0o000
 
 #: Mode granted for the duration of one gated open.  Read-only, owner-only.
@@ -148,41 +114,19 @@ OPEN_MODE = 0o400
 #: Mode granted to a directory for the duration of one gated open.
 OPEN_DIR_MODE = 0o500
 
-#: Mode held by the custody ledger and its heads file.  Owner-only.
+#: Mode for the custody ledger, its heads file and the seal registry.
 #:
-#: The ledger is identifier-bearing: ``HOLDOUT_REGISTER`` and ``EXPOSURE``
-#: records name unit identities so that :func:`assert_not_holdout` can refuse
-#: to shard them.  It was created at ``0o644`` by :func:`_append_line`'s
-#: ``O_CREAT`` mode, which made the *membership* of a sealed partition readable
-#: by any process on the host without unsealing anything — weaker than
-#: ``V3_SAMPLING_RULE.json`` S5 STEP_10, which requires a partition's identity
-#: list to be written once into that partition's own physically separate store
-#: at mode ``0o400``.  Identity is not item text, so no eligibility conjunct is
-#: breached by the exposure and no unit is spent; but a control that publishes
-#: what it is protecting is not a control.
-#:
-#: ``0o600`` and not ``0o000``: the ledger must stay writable and verifiable by
-#: the custody layer itself, which appends to it on every gated open.  A
+#: The ledger names unit identities, so a world-readable one would publish the
+#: membership of a sealed partition without unsealing anything. It cannot be
+#: ``0o000`` either: the custody layer appends to it on every gated open, and a
 #: sealed ledger could not record the access it exists to record.
-#:
-#: The seal registry is held at the same mode.  It was left at ``0o644``
-#: (``LEDGER_EXPOSURE_REPAIR.json`` REPAIR_1) on the argument that a readable
-#: registry is what lets a third party confirm that every holdout store sits at
-#: mode ``0``.  That argument does not survive inspection: the registry is a
-#: *claim* about a past chmod, while :func:`verify_seals` reads the live inode,
-#: which is the *fact*, and a third party who can stat the store does not need
-#: the registry to check it.  What world-readability actually publishes is the
-#: path of every holdout-bearing store on the host.  Consistency at ``0o600``
-#: costs a confirmation channel nobody was using and closes a directory listing
-#: of where the holdouts live.
 LEDGER_MODE = 0o600
 
-#: Documented genesis constant for the first-access chain.  Sixty-four zeros
-#: is never the SHA-256 of any record this module writes, so "chains from
-#: genesis" is decidable.
+#: Genesis of the first-access chain. Sixty-four zeros is never a real record
+#: hash, so "chains from genesis" is decidable.
 GENESIS_HASH = "0" * 64
 
-#: The product root (``.../curunir``).
+#: The product root.
 _REPO = Path(__file__).resolve().parent.parent
 
 
@@ -218,11 +162,10 @@ class SealedStore:
         return OPEN_DIR_MODE if self.is_directory else OPEN_MODE
 
 
-#: The historical holdout-bearing stores, declared in production code rather
-#: than in a data file.  A data file can be deleted, renamed or "not found";
-#: this tuple can only be changed by editing a reviewed source file.  It is the
-#: floor of the registry, never the whole of it: V3 and later generations
-#: register through :func:`seal_store`.
+#: The historical holdout stores, declared in code rather than a data file: a
+#: data file can be deleted or renamed, this tuple needs a reviewed edit. It is
+#: the floor of the registry, not the whole of it — later generations register
+#: through :func:`seal_store`.
 SEALED_STORES: tuple[SealedStore, ...] = (
     SealedStore(
         store_id="D25_SHARED_POPULATION_750",
@@ -282,9 +225,7 @@ SEALED_STORES: tuple[SealedStore, ...] = (
 )
 
 
-# ---------------------------------------------------------------------------
-# Custody root: ledger, seal registry and locks
-# ---------------------------------------------------------------------------
+# ---- custody root: ledger, seal registry and locks ----
 
 
 @dataclass(frozen=True)
@@ -325,9 +266,7 @@ def custody_root(root: str | Path | None = None) -> CustodyRoot:
                        else DEFAULT_CUSTODY_ROOT)
 
 
-# ---------------------------------------------------------------------------
-# Small helpers
-# ---------------------------------------------------------------------------
+# ---- small helpers ----
 
 
 def _now_utc() -> str:
@@ -348,21 +287,13 @@ def _sha256_file(path: Path) -> str:
 
 
 def _append_line(path: Path, text: str, *, mode: int) -> None:
-    """Append one line and fsync it.  ``O_APPEND`` only: never truncate, never
-    seek.  The file descriptor is opened without ``O_TRUNC`` and without write
-    positioning, so this writer cannot rewrite history even by mistake.
+    """Append one line and fsync it.
 
-    ``mode`` is applied on creation *and* enforced on an existing file, because
-    ``O_CREAT``'s mode argument is ignored once the file exists — which is
-    exactly how an identifier-bearing ledger created at ``0o644`` stays
-    world-readable forever.  Enforcing it here means the permission is a
-    property of the writer, not of whoever happened to create the file.
-
-    ``mode`` is required and has no default.  A default is what produced
-    ``V3_ADJUDICATION_INFRA_STATUS.json`` FINDING-2: the ledger was moved to
-    ``LEDGER_MODE`` by naming it at two call sites, and the third — the seal
-    registry — kept the ``0o644`` default and stayed world-readable.  A writer
-    that cannot forget the mode cannot reintroduce that asymmetry.
+    ``O_APPEND`` only, with no truncation and no seeking, so this writer cannot
+    rewrite history even by mistake. ``mode`` is applied on creation and
+    enforced on an existing file, because ``O_CREAT`` ignores its mode once the
+    file exists; it is required and has no default, so no caller can leave a
+    file behind at the wrong permissions.
     """
 
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -396,32 +327,25 @@ def _actor() -> dict[str, Any]:
     }
 
 
-# ---------------------------------------------------------------------------
-# First-access log
-# ---------------------------------------------------------------------------
+# ---- first-access log ----
 
 
 class FirstAccessLog:
     """Append-only, hash-chained ledger of every custody event.
 
-    Append-only is enforced three ways, because any one of them alone is a
-    promise rather than a control:
+    Three separate controls, since any one alone would only be a promise: the
+    writer opens with ``O_APPEND`` and never truncates; every record names the
+    hash of the one before it, so an interior edit breaks the chain; and every
+    append also writes to a separate heads ledger, so dropping the last record
+    leaves the chain head disagreeing with the recorded head.
 
-    * the writer only ever opens with ``O_APPEND`` and never with ``O_TRUNC``;
-    * every record carries ``previous_record_hash``, so editing or removing an
-      interior record breaks the chain;
-    * every append also writes a line to a separate heads ledger, so removing
-      the *last* record — which a backward chain alone cannot see — leaves the
-      chain head disagreeing with the recorded head.
-
-    :meth:`verify` is the only thing anyone should trust.  It reports, it never
-    repairs.
+    :meth:`verify` reports; it never repairs.
     """
 
     def __init__(self, root: CustodyRoot) -> None:
         self.root = root
 
-    # -- writing ---------------------------------------------------------
+    # ---- writing ----
 
     def append(self, *, store_id: str, event: str,
                detail: Mapping[str, Any] | None = None) -> dict[str, Any]:
@@ -451,7 +375,7 @@ class FirstAccessLog:
         )
         return record
 
-    # -- reading ---------------------------------------------------------
+    # ---- reading ----
 
     def records(self) -> list[dict[str, Any]]:
         out: list[dict[str, Any]] = []
@@ -511,7 +435,7 @@ class FirstAccessLog:
                 )
         return _chain_state(True, previous, total, "chain verifies")
 
-    # -- queries ---------------------------------------------------------
+    # ---- queries ----
 
     def events_for(self, store_id: str) -> list[dict[str, Any]]:
         return [record for record in self.records()
@@ -530,20 +454,16 @@ def _chain_state(verified: bool, head: str, count: int,
             "record_count": count, "reason": reason}
 
 
-# ---------------------------------------------------------------------------
-# One-shot lock
-# ---------------------------------------------------------------------------
+# ---- one-shot lock ----
 
 
 class OneShotLock:
     """A partition may be opened for scoring exactly once.
 
-    ``O_CREAT | O_EXCL`` is atomic at the kernel: exactly one caller creates
-    the file, everyone else — including a concurrent process on another host
-    sharing the filesystem — gets ``EEXIST``.  The lock is written ``0o444``
-    and is never removed by this module.  Releasing it is a programme act
-    performed by a human with ``rm``, which leaves a trace in the shell that
-    did it; there is no API for it here, on purpose.
+    ``O_CREAT | O_EXCL`` is atomic in the kernel, so exactly one caller wins
+    and everyone else is refused. The lock is never removed here: releasing it
+    takes a human with ``rm``, which leaves a trace, and there is deliberately
+    no API for it.
     """
 
     def __init__(self, root: CustodyRoot, store_id: str) -> None:
@@ -591,9 +511,7 @@ class OneShotLock:
         return payload
 
 
-# ---------------------------------------------------------------------------
-# Seal registry and sealing
-# ---------------------------------------------------------------------------
+# ---- seal registry and sealing ----
 
 
 def _registry_entries(root: CustodyRoot) -> list[dict[str, Any]]:
@@ -645,10 +563,8 @@ def is_sealed_path(path: str | Path,
                    root: str | Path | None = None) -> SealedStore | None:
     """Return the sealed store a path denotes, or ``None``.
 
-    Matching is by resolved path *and* by ``(device, inode)``.  The inode
-    comparison is what defeats a rename, a hard link or a symlink pointed at
-    the store: the bytes are the same bytes, so the answer is the same answer.
-    This check never opens the file.
+    Matching is by resolved path and by (device, inode), so a rename, a hard
+    link or a symlink still resolves to the same answer. Nothing is opened.
     """
 
     target = Path(path).resolve()
@@ -672,17 +588,12 @@ def seal_store(store_id: str, *, root: str | Path | None = None,
                known_sha256: str | None = None) -> dict[str, Any]:
     """Seal a store to its sealed mode and record it in the registry.
 
-    Sealing never modifies file contents; it changes the permission bits only.
+    Only the permission bits change; contents are untouched.
 
-    ``compute_digest`` defaults to **False** on purpose.  Hashing a store reads
-    every byte of it, and for a store that carries holdout item text that is
-    the very act incident 306 recorded as the violation
-    (``item_text_bytes_read = true``).  Sealing must not require committing the
-    offence it prevents.  Where a digest is already known from an independent
-    frozen record, pass it as ``known_sha256``; the registry then pins it
-    without anyone reading the store.  Only a caller that legitimately holds
-    the bytes already — the process that wrote the store — should pass
-    ``compute_digest=True``.
+    ``compute_digest`` defaults to False because hashing reads every byte,
+    which is the very act sealing exists to prevent. Pass a digest you already
+    hold as ``known_sha256`` instead; only the process that wrote the store
+    should ask for one to be computed.
     """
 
     croot = custody_root(root).ensure()
@@ -777,12 +688,10 @@ def verify_seals(root: str | Path | None = None) -> dict[str, Any]:
     return {"stores": rows, "all_sealed": not breached, "breached": breached}
 
 
-# ---------------------------------------------------------------------------
-# The gate
-# ---------------------------------------------------------------------------
+# ---- the gate ----
 
-#: Stores this process unsealed and has not yet resealed.  A crash between
-#: unseal and reseal must not leave a holdout store readable.
+#: Stores this process unsealed and has not resealed. A crash in between must
+#: not leave one readable.
 _UNSEALED: dict[str, tuple[Path, int]] = {}
 
 
@@ -807,27 +716,22 @@ def open_sealed_partition(
 ) -> Iterator[Path]:
     """The only sanctioned way to reach a sealed store.
 
-    The order of operations is the control.  Nothing that could fail after the
-    store becomes readable is allowed to run before it:
+    The order is the control: nothing that could fail after the store becomes
+    readable runs before it.
 
-    1. the path is confirmed to be a registered sealed store;
-    2. the first-access log is verified from genesis — a broken ledger blocks
-       the open, because an open that cannot be recorded truthfully must not
-       happen;
-    3. every prerequisite must be ``True`` (the code-enforced prerequisite
-       check required by incident 306); a failure is itself appended to the
-       ledger as ``DENIED`` and does *not* consume the one-shot lock;
-    4. the one-shot lock is taken with ``O_EXCL``;
-    5. the ``OPEN`` record is appended and ``fsync``-ed **while the store is
-       still at mode 0**, and the observed mode goes into the record, so the
-       ledger proves the log preceded the read;
-    6. only then is the store unsealed to ``0o400``;
-    7. the store is resealed and a ``CLOSE`` record appended on the way out,
-       whatever happened in between.
+    1. confirm the path is a registered sealed store;
+    2. verify the first-access log from genesis, because an open that cannot
+       be recorded truthfully must not happen;
+    3. require every prerequisite to hold; a failure is appended as ``DENIED``
+       and does not consume the one-shot lock;
+    4. take the one-shot lock;
+    5. append and fsync the ``OPEN`` record while the store is still sealed,
+       recording the mode observed, so the ledger proves the log came first;
+    6. only then unseal the store;
+    7. reseal and append ``CLOSE`` on the way out, whatever happened.
 
-    Steps 4 and 5 are deliberately ordered so that a failure to write the
-    ledger burns the lock.  Burning a partition is a recoverable programme
-    cost; reading one without a record is not.
+    Steps 4 and 5 are ordered so a failure to write the ledger burns the lock.
+    Burning a partition is recoverable; reading one unrecorded is not.
     """
 
     croot = custody_root(root).ensure()
@@ -881,8 +785,10 @@ def open_sealed_partition(
 
     digest: str | None = None
     try:
-        os.chmod(path, store.open_mode)
+        # Arm the reseal before the store becomes readable, so an interrupt in
+        # between cannot leave it open.
         _UNSEALED[store_id] = (path, store.sealed_mode)
+        os.chmod(path, store.open_mode)
         if not store.is_directory:
             digest = _sha256_file(path)
             pinned = expect_sha256 or registry_digest(store_id, root=root)
@@ -910,14 +816,11 @@ def unseal_store_for_audit(store_id: str, *, purpose: str,
                                  prerequisites=prerequisites, root=root)
 
 
-# ---------------------------------------------------------------------------
-# The adjudication read — the second gate, and the one that is not an opening
-# ---------------------------------------------------------------------------
+# ---- the adjudication read: the second gate, which is not an opening ----
 
-#: The event class :func:`open_sealed_partition` writes.  Named here so the
-#: distinction A8 requires between "the partition was opened" and "evidence for
-#: named units was handed to a packet builder" is a constant a reader can grep,
-#: not a string literal repeated in two places.
+#: The event class :func:`open_sealed_partition` writes. Named here so that
+#: "the partition was opened" and "evidence for named units was handed over"
+#: stay greppably distinct.
 SEALED_OPENING_EVENT = "OPEN"
 
 #: The event class :func:`read_units_for_adjudication` writes.
@@ -927,19 +830,17 @@ ADJUDICATION_READ_EVENT = "ADJUDICATION_READ"
 ADJUDICATION_READ_CLOSE_EVENT = "ADJUDICATION_READ_CLOSE"
 
 #: Appended before an adjudication read is refused, so a refusal is evidence
-#: rather than an absence.  Deliberately NOT ``DENIED``: an opening denial and
-#: an adjudication denial are different facts about a partition.
+#: rather than an absence. Not ``DENIED``: refusing an opening and refusing an
+#: adjudication are different facts.
 ADJUDICATION_DENIED_EVENT = "ADJUDICATION_DENIED"
 
 
 def partition_identity_sha256(unit_ids: Sequence[str]) -> str:
-    """``DRAW_RECORD.json`` STEP_10: ``sha256(join(sorted(unit_ids), '|'))``.
+    """Commitment over an identity list: ``sha256(join(sorted(ids), '|'))``.
 
-    The same definition the V3 packet builder pins its identity list to, so a
-    custody record and a builder record commit to the same object and a third
-    party recomputes either from a sorted list of identifiers.  It is a
-    commitment, not a disclosure: the ledger carries this digest and a count,
-    never the list.
+    The packet builder pins the same definition, so a custody record and a
+    builder record commit to the same object and a third party can recompute
+    either. The ledger carries the digest and a count, never the list.
     """
 
     return hashlib.sha256(
@@ -953,28 +854,17 @@ def assert_partition_membership(partition_id: str,
                                 ) -> dict[str, Any]:
     """Refuse unless every identifier is a member of the named partition.
 
-    This is the inverse of :func:`assert_not_holdout` and it is deliberately
-    built on the same two registration forms, so a blinded partition is exactly
-    as testable as a plaintext one and neither answer requires unsealing the
-    partition's identity store:
+    The inverse of :func:`assert_not_holdout`, over the same two registration
+    forms: a plaintext registration is tested by set membership, a blinded one
+    by recomputing each candidate's commitment under that partition's salt.
+    Neither answer needs the partition's identity store unsealed.
 
-    * a plaintext registration is tested by set membership;
-    * a blinded registration is tested by recomputing each candidate's
-      commitment under that partition's salt.
+    Three refusals, all fail-closed: an unregistered partition cannot
+    authorise anything; a blinded partition whose salt is missing is
+    untestable, and untestable refuses; and a non-member is refused by count.
 
-    Three refusals, all fail-closed:
-
-    * a partition with no registration at all is not a partition this layer
-      knows about, and an unregistered partition cannot authorise anything;
-    * a blinded partition whose salt is missing is *untestable*, and an
-      untestable register refuses rather than passes — the rule
-      :func:`assert_not_holdout` already applies in the other direction;
-    * an identifier that is not a member is refused by count.
-
-    The refusal names counts and partitions, never identifiers.  A refusal
-    message is read by whoever ran the job, and a message that echoes the
-    offending identity is a disclosure channel out of the partition it just
-    protected.
+    The message names counts and partitions, never identifiers, so a refusal
+    is not itself a way out of the partition it just protected.
     """
 
     if not isinstance(partition_id, str) or not partition_id:
@@ -1040,13 +930,12 @@ def _assert_identity_list(identity_list: Sequence[str], *,
                           what: str) -> list[str]:
     """Validate the one unit-selecting input, before anything is opened.
 
-    A ``str`` is a ``Sequence[str]`` and would silently authorise its own
-    characters, so it is refused by type.  ``None`` is refused rather than read
-    as "everything".  Only a materialised collection is accepted: a path, a
-    file handle, a generator or any other lazy source is refused, because the
+    A ``str`` is a sequence of strings and would quietly authorise its own
+    characters, so it is refused by type, and ``None`` is refused rather than
+    read as "everything". Only a materialised collection is accepted: the
     authorisation has to be a list somebody wrote down, not a stream that
-    produces one on demand.  Duplicates are refused so that the recorded
-    identity commitment is the commitment of exactly the list that was passed.
+    produces one on demand. Duplicates are refused so the recorded commitment
+    is the commitment of exactly the list passed.
     """
 
     if identity_list is None or isinstance(identity_list, (str, bytes)):
@@ -1089,67 +978,39 @@ def read_units_for_adjudication(
     expect_identity_sha256: str | None = None,
     root: str | Path | None = None,
 ) -> dict[str, dict]:
-    """Hand the evidence of an explicitly named identity list to a builder.
+    """Hand the evidence for an explicitly named identity list to a builder.
 
-    This is the path that did not exist, and its absence made lawful V3
-    adjudication impossible in both directions:
-    :func:`load_authorised_packets` refuses every registered holdout identity —
-    which every drawn V3 unit is — and :func:`open_sealed_partition` would
-    permit the read but consumes the one-shot lock that
-    ``V3_ADJUDICATION_PROTOCOL.json`` A8 reserves for the single sealed
-    OPENING.  Preserving a partition that can never be adjudicated preserves
-    nothing.
+    This is narrower than an opening, not looser:
 
-    It is a *narrower* operation than an opening, not a looser one:
+    1. ``identity_list`` is the only unit-selecting input. It is positional and
+       required, and there is no partition-wide or "all units" call shape
+       anywhere on this path. ``None``, a bare string, an empty list and a list
+       with duplicates are all refused.
+    2. Every identity must belong to ``partition_id``, tested in whichever form
+       it was registered. One call therefore cannot span two partitions.
+    3. The store must be a registered sealed store.
+    4. The one-shot lock is read and never taken, and its observed state goes
+       into the record as evidence that the opening was not consumed.
+    5. The ``ADJUDICATION_READ`` record is appended and fsynced while the store
+       is still sealed, carrying the time, the partition, the identity count
+       and the identity commitment — never the list itself.
+    6. Only then is the store unsealed, and selection happens on the
+       identifier, so a record outside the list is never deserialized.
+    7. The store is resealed and a close record appended on the way out.
 
-    1. ``identity_list`` is the ONLY unit-selecting input.  It is positional,
-       required, has no default, and there is no partition-wide, store-wide or
-       "all units" call shape anywhere on this path.  ``None``, a bare string,
-       an empty list and a list with duplicates are all refused.
-    2. Every identity must be a member of ``partition_id``, tested against the
-       holdout register in whichever form it was recorded.  ``partition_id`` is
-       one string, so a single call cannot span the prospective and the sealed
-       partition, and a list that mixes them is refused as a membership
-       failure before any store is touched.
-    3. The store must be a *registered* sealed store.  An unregistered path is
-       refused by :func:`store_for_id`.
-    4. The one-shot lock is **read and never taken**.  Its observed state goes
-       into the record as evidence that the adjudication did not consume the
-       opening.  A8: the lock guards the OPENING, not the adjudication.
-    5. The ``ADJUDICATION_READ`` record is appended and ``fsync``-ed while the
-       store is still sealed, with the UTC time, the partition, the identity
-       count, the identity commitment and the purpose — a count and a digest,
-       never the list, so the ledger does not republish what the blinded
-       registration was written to stop publishing.
-    6. Only then is the store unsealed to ``0o400``, and selection happens on
-       the identifier: a record outside the list is never deserialized.
-    7. The store is resealed and an ``ADJUDICATION_READ_CLOSE`` record appended
-       on the way out, whatever happened in between.
+    ``prerequisites`` is the adjudication's own checklist, deliberately not the
+    opening's: gating this read on the opening verifier would make lawful
+    adjudication impossible. A refused prerequisite is appended as
+    ``ADJUDICATION_DENIED`` and consumes nothing.
 
-    ``prerequisites`` is required, must be non-empty, and every value must be
-    ``True``.  It is deliberately the adjudication's OWN checklist and not the
-    opening checklist: ``OPENING_PRECONDITIONS.json`` C-05 gates the opening,
-    and A7 requires the reference to be frozen BEFORE the partition is opened,
-    so gating the adjudication read on the opening verifier would make lawful
-    adjudication impossible for the second time.  A refused prerequisite is
-    appended as ``ADJUDICATION_DENIED`` and consumes nothing.
+    What this does not enforce, said plainly: whether the sealed reference was
+    frozen before the partition was opened. That is not a custody event and
+    this layer never sees a reference. What it does provide is the evidence a
+    verifier needs — every read and every opening is a sequenced, hash-chained
+    record naming its partition and its time.
 
-    WHAT THIS FUNCTION DOES NOT ENFORCE, stated so nothing downstream claims
-    it does: A8's ordering — the SEALED reference is frozen BEFORE the
-    PROSPECTIVE partition is opened — is not enforceable here.  "The reference
-    is frozen" is not a custody event; this layer never sees a reference.  What
-    it provides is the evidence a verifier needs: every read is a sequenced,
-    hash-chained record naming its partition and its time, and every opening is
-    a distinct record in the same chain.  The layer that must enforce the
-    ordering is the C-05 code-enforced prerequisite verifier that gates the
-    openings, which has to carry "the sealed reference is frozen" as one of its
-    prerequisites.  Today no reference-freeze event class exists in this
-    ledger, so that prerequisite has no evidence channel yet; that gap is real
-    and is recorded rather than papered over.
-
-    Returns a mapping of ``unit_id`` to the deserialized record, exactly the
-    shape :func:`load_authorised_packets` returns, so a one-identity-at-a-time
-    reader can be built over it without any other change.
+    Returns ``unit_id`` to record, the same shape
+    :func:`load_authorised_packets` returns.
     """
 
     what = f"adjudication read {purpose!r}"
@@ -1241,15 +1102,15 @@ def read_units_for_adjudication(
     rows: dict[str, dict] = {}
     completed = False
     try:
-        os.chmod(path, store.open_mode)
         _UNSEALED[store_id] = (path, store.sealed_mode)
+        os.chmod(path, store.open_mode)
         with path.open() as handle:
             for number, line in enumerate(handle, 1):
                 if not line.strip():
                     continue
                 unit_id = _scan_unit_id(line, number)
                 if unit_id not in allowed:
-                    continue  # never deserialized, never materialized
+                    continue
                 if unit_id in rows:
                     raise CustodyViolation(
                         f"{what}: {path} repeats an authorised identity at "
@@ -1294,13 +1155,11 @@ def adjudication_read_records(*, store_id: str | None = None,
                               partition_id: str | None = None,
                               root: str | Path | None = None
                               ) -> list[dict[str, Any]]:
-    """Every ``ADJUDICATION_READ`` record, optionally filtered.
+    """Every adjudication-read record, optionally filtered.
 
-    Reports, never repairs, and never resolves anything the ledger does not
-    already say.  Callers that need to know whether the chain verifies must ask
-    :meth:`FirstAccessLog.verify` or :class:`AccessObserver`; a list of records
-    from an unverified chain is not evidence and this function does not pretend
-    otherwise by returning an empty list.
+    It reports what the ledger says and nothing more. Whether the chain
+    verifies is a separate question for :meth:`FirstAccessLog.verify` or
+    :class:`AccessObserver`.
     """
 
     out = []
@@ -1316,27 +1175,19 @@ def adjudication_read_records(*, store_id: str | None = None,
     return out
 
 
-# ---------------------------------------------------------------------------
-# Access observer
-# ---------------------------------------------------------------------------
+# ---- access observer ----
 
 
 class AccessObserver:
     """Answers "has this partition been read, and by whom" with evidence.
 
-    The answer is a tri-state, never a bare boolean, because the only
-    interesting failure mode is a ledger that has been tampered with.  A
-    tampered ledger reports ``UNKNOWN_LOG_TAMPERED``; it never reports ``NO``.
+    The answer is three-valued rather than a boolean, because the interesting
+    failure is a tampered ledger: that reports UNKNOWN_LOG_TAMPERED and never
+    a bare no.
 
-    Two questions are answered, not one, because
-    ``V3_ADJUDICATION_PROTOCOL.json`` A8 makes them different facts:
-    ``has_been_read`` is about the sealed OPENING and counts ``OPEN`` events
-    only, and ``has_been_read_for_adjudication`` counts ``ADJUDICATION_READ``
-    events.  Both are the same tri-state and both are gated on the same chain
-    verification, so neither can answer ``NO`` from a ledger that does not
-    verify.  Reporting one number for both would either understate an
-    adjudication or overstate an opening, and the whole point of the sealed
-    partition is that those are not the same event.
+    Openings and adjudication reads are counted separately, since they are
+    different facts about a partition, and both are gated on the same chain
+    verification.
     """
 
     def __init__(self, root: str | Path | None = None) -> None:
@@ -1462,16 +1313,11 @@ class AccessObserver:
         }
 
 
-# ---------------------------------------------------------------------------
-# Exposure ledger, holdout register and eligibility
-# ---------------------------------------------------------------------------
+# ---- exposure ledger, holdout register and eligibility ----
 
-#: The ways a unit can stop being a lawful holdout candidate.  ``REFERENCED``
-#: — "it has a reference answer" — is only one of them, and it is the weakest.
-#: The V2 partition was drawn from units defined solely as ``not REFERENCED``,
-#: roughly two and a half hours after 600 full item-text packets had already
-#: been delivered to three blind seats.  ``SHARDED`` and ``JUDGED`` are what
-#: that definition missed, and ``READ`` is what incident 306 missed.
+#: The ways a unit stops being a lawful holdout candidate. "It has a reference
+#: answer" is only the weakest of them: a partition drawn on that alone once
+#: turned out to have been sharded, judged and read already.
 EXPOSURE_KINDS: tuple[str, ...] = ("READ", "SHARDED", "JUDGED", "REFERENCED")
 
 
@@ -1479,11 +1325,9 @@ def declare_ledger_scope(corpus_id: str, *, note: str,
                          root: str | Path | None = None) -> dict[str, Any]:
     """Declare that the exposure ledger covers a corpus from now on.
 
-    :func:`assert_eligible_for_holdout` refuses to answer for a corpus that has
-    no scope declaration.  An empty ledger is not evidence of non-exposure; it
-    is usually evidence that nobody was recording.  Requiring the declaration
-    makes "we have been watching this corpus since it was built" an explicit,
-    dated, hash-chained claim rather than an inference from silence.
+    An empty ledger is not evidence of non-exposure; it usually means nobody
+    was recording. Requiring this declaration turns "we have been watching
+    since it was built" into a dated, hash-chained claim.
     """
 
     croot = custody_root(root).ensure()
@@ -1508,29 +1352,22 @@ def record_exposure(kind: str, unit_ids: Sequence[str] | set[str], *,
                     root: str | Path | None = None) -> dict[str, Any]:
     """Record that these units have been exposed, and how.
 
-    Identifiers only.  This ledger never carries item text, which is why it
-    can be consulted by code that has no right to read the store.
+    Identifiers only; this ledger never carries item text, which is why code
+    with no right to read a store may still consult it.
 
-    ``blinded`` mirrors :func:`register_holdout_units` and exists for one
-    reason: the moment adjudication starts, the units being exposed are the
-    units of a holdout partition, and a plaintext ``SHARDED`` or ``JUDGED``
-    record would republish in the shared ledger exactly the membership that
-    ``LEDGER_EXPOSURE_REPAIR.json`` blinded the registration to stop
-    publishing.  A blinded exposure writes a count and a sorted list of salted
-    commitments under the partition's own salt — the SAME salt as its
-    registration, so the two records commit to the same identities and
-    :func:`assert_eligible_for_holdout` can still resolve them.
+    ``blinded`` mirrors :func:`register_holdout_units`. Once adjudication
+    starts, the units being exposed are a holdout partition's units, so a
+    plaintext record would republish the membership that blinding the
+    registration was meant to stop publishing. A blinded exposure writes a
+    count and salted commitments under the same salt as the registration, so
+    the two commit to the same identities and eligibility still resolves.
 
-    ``partition_id`` names the commitment scope and is REQUIRED when
-    ``blinded`` is true, because the salt is per partition.  It is REFUSED when
-    ``blinded`` is false: a record that names a partition and lists its
-    identities in plaintext is the disclosure this form exists to prevent, and
-    offering it as an option is offering the defect.
+    ``partition_id`` names the commitment scope: required when blinded, since
+    the salt is per partition, and refused when not, because a record naming a
+    partition and listing its identities is the disclosure to avoid.
 
-    The blinded form hides membership from a reader of the ledger; it does not
-    make membership unknowable to an actor who can enumerate the candidate
-    identity space and also read the salt file.  That is the same guarantee
-    :func:`register_holdout_units` states, and it is not enlarged here.
+    Blinding hides membership from a reader of the ledger. It does not hide it
+    from someone who can enumerate the identity space and read the salt.
     """
 
     if kind not in EXPOSURE_KINDS:
@@ -1583,15 +1420,13 @@ def record_exposure(kind: str, unit_ids: Sequence[str] | set[str], *,
 def exposed_unit_ids(*, corpus_id: str | None = None,
                      kinds: Sequence[str] | None = None,
                      root: str | Path | None = None) -> dict[str, set[str]]:
-    """Every unit the ledger has ever seen exposed, grouped by kind.
+    """Every unit the ledger has seen exposed, grouped by kind.
 
-    Blinded exposures contribute no identifiers here, by construction — the
-    same property :func:`holdout_unit_ids` has.  Use
+    A blinded exposure contributes no identifiers here by construction, so
+    "absent from this list" does not mean "not exposed". Use
     :func:`exposed_commitments` to see that they exist, and
     :func:`assert_eligible_for_holdout`, which resolves both forms, to test a
-    candidate against them.  Reading only this function and concluding "not
-    exposed" is exactly the inference a blinded record must not support, which
-    is why the eligibility predicate does not rely on it alone.
+    candidate.
     """
 
     wanted = set(kinds or EXPOSURE_KINDS)
@@ -1634,18 +1469,14 @@ def exposed_commitments(*, corpus_id: str | None = None,
     return out
 
 
-#: How a blinded holdout registration commits to an identity.  Declared as a
-#: constant so a reader of one ledger record can recompute the commitment
-#: without reading this module.
+#: How a blinded registration commits to an identity, named here so a reader
+#: of one ledger record can recompute it without reading this module.
 HOLDOUT_COMMITMENT_SCHEME = "sha256(salt + '|' + unit_id)"
 
-#: Where per-partition commitment salts live: one JSON object in the custody
-#: root, at :data:`LEDGER_MODE`.  The salt is deliberately NOT in the ledger
-#: record.  A ledger is the artifact people copy into reports, quote in
-#: verifications and hand to auditors; a salt that travels with the commitment
-#: turns every such copy back into a membership oracle.  Splitting them means
-#: publishing the ledger publishes a count and an opaque digest list, and
-#: nothing else.
+#: Where per-partition commitment salts live, kept out of the ledger records
+#: on purpose. A ledger gets copied into reports and handed to auditors; a salt
+#: travelling with the commitment would turn every copy into a membership
+#: oracle. Split, publishing the ledger publishes a count and opaque digests.
 HOLDOUT_SALT_FILE = "holdout_commitment_salts.json"
 
 
@@ -1692,28 +1523,19 @@ def register_holdout_units(partition_id: str,
     """Declare a set of identifiers to be held out.
 
     Once registered, :func:`assert_not_holdout` refuses to let those units be
-    sharded, delivered or otherwise handled by code that is not going through
-    the gate.  This is the register the shard builder consults.
+    sharded or delivered by code that is not going through the gate. This is
+    the register the shard builder consults.
 
-    ``blinded`` controls what the ledger record itself carries.
+    ``blinded`` decides what the ledger record carries. False writes the sorted
+    identity list, which makes the partition's membership readable without
+    unsealing anything. True writes a count and salted commitments instead, so
+    the identity list lives only in the partition's own separate store; the
+    ledger stops disclosing membership while :func:`assert_not_holdout`, which
+    holds the salt, can still test it. It does not hide membership from someone
+    who can enumerate the identity space and read the salt.
 
-    ``False`` (the default, and what every historical record used) writes the
-    sorted identity list into the record.  That is what makes a partition's
-    membership readable from the ledger without unsealing the partition —
-    FINDING_2 of ``artifacts/curunir_v6_readiness/v3_draw_verification/
-    V3_DRAW_VERIFICATION.json``.
-
-    ``True`` writes a count and a sorted list of salted commitments instead,
-    and the identity list then exists only in the partition's own physically
-    separate store, which is where ``V3_SAMPLING_RULE.json`` S5 STEP_10 says it
-    belongs.  The guarantee this buys is exact and worth stating precisely: the
-    ledger no longer *discloses* membership, and membership remains *testable*
-    by :func:`assert_not_holdout`, which holds the salt.  It does not make
-    membership unknowable to an actor who can independently enumerate the
-    candidate identity space and also read the salt file.
-
-    ``identity_store`` records where the identity list does live, so the
-    blinded record is self-describing.
+    ``identity_store`` records where the identity list does live, so a blinded
+    record is self-describing.
     """
 
     ids = sorted(set(unit_ids))
@@ -1748,9 +1570,9 @@ def register_holdout_units(partition_id: str,
 def holdout_unit_ids(root: str | Path | None = None) -> dict[str, set[str]]:
     """Registered holdout identifiers, by partition.
 
-    Blinded registrations contribute no identifiers here, by construction.
-    Use :func:`holdout_registrations` to see that they exist at all, and
-    :func:`assert_not_holdout` to test membership against them.
+    A blinded registration contributes none here. Use
+    :func:`holdout_registrations` to see that it exists and
+    :func:`assert_not_holdout` to test membership against it.
     """
 
     out: dict[str, set[str]] = {}
@@ -1805,15 +1627,12 @@ def assert_not_holdout(unit_ids: Sequence[str] | set[str], *, what: str,
                        root: str | Path | None = None) -> dict[str, Any]:
     """Refuse if any identifier is a registered holdout unit.
 
-    Both registration forms are checked: plaintext registrations by set
-    intersection, blinded registrations by recomputing the commitment of every
-    candidate under that partition's salt.  A blinded partition is therefore
-    exactly as protected as a plaintext one; the difference is only in what the
-    ledger discloses to a reader.
+    Both forms are checked: plaintext by set intersection, blinded by
+    recomputing each candidate's commitment under that partition's salt, so a
+    blinded partition is as protected as a plaintext one.
 
-    The error names counts and partitions, never the offending identifiers: a
-    refusal message is read by whoever ran the job, and leaking the holdout
-    identity set through an exception is its own contamination channel.
+    The error names counts and partitions, never the offending identifiers —
+    an exception that echoed them would be its own leak.
     """
 
     candidates = set(unit_ids)
@@ -1866,22 +1685,16 @@ def assert_eligible_for_holdout(unit_ids: Sequence[str] | set[str], *,
                                 ) -> dict[str, Any]:
     """Refuse to draw a holdout partition from units that were ever exposed.
 
-    Eligibility is NEVER-READ **and** NEVER-SHARDED **and** NEVER-JUDGED **and**
-    NEVER-REFERENCED.  Not "has no reference answer" — that definition is what
-    produced a partition whose units had already been delivered to blind seats
-    and, for some of them, already judged.
+    Eligible means never read, never sharded, never judged and never
+    referenced — all four. "Has no reference answer" alone once produced a
+    partition whose units had already been delivered and judged.
 
-    Refuses outright when the corpus has no ledger-scope declaration, because
-    an unwatched corpus cannot support a non-exposure claim.
+    A corpus with no ledger-scope declaration is refused outright, since an
+    unwatched corpus cannot support a claim of non-exposure.
 
-    Both exposure forms are resolved.  A blinded exposure records commitments
-    instead of identifiers, so a predicate that consulted
-    :func:`exposed_unit_ids` alone would read a blinded ``SHARDED`` record as
-    silence and re-draw a spent unit — the blinding would have bought
-    disclosure hygiene at the cost of the control it protects.  Each blinded
-    record is therefore resolved under its scope's salt, and a scope whose salt
-    is missing REFUSES rather than passes, exactly as
-    :func:`assert_not_holdout` does.
+    Both exposure forms are resolved: a blinded record is checked under its
+    scope's salt, because reading it as silence would re-draw a spent unit. A
+    scope whose salt is missing refuses rather than passes.
     """
 
     if corpus_id not in _ledger_scopes(root):
@@ -1938,25 +1751,19 @@ def assert_eligible_for_holdout(unit_ids: Sequence[str] | set[str], *,
     }
 
 
-# ---------------------------------------------------------------------------
-# The hardened exposed-population loader
-# ---------------------------------------------------------------------------
+# ---- the hardened exposed-population loader ----
 
-#: ``unit_id`` as it appears as a top-level JSON key.  The leading ``{`` or
-#: ``,`` prevents ``"parent_unit_id"`` and friends from matching.  The value
-#: class excludes backslash, so an escaped value never parses "cheaply" and
-#: wrong — it fails closed instead.
+#: ``unit_id`` as a top-level JSON key. The leading ``{`` or ``,`` stops
+#: ``parent_unit_id`` and friends matching, and the value class excludes
+#: backslash so an escaped value fails closed rather than parsing wrongly.
 _UNIT_ID_RE = re.compile(r'[{,]\s*"unit_id"\s*:\s*"([^"\\]*)"')
 
 
 def _scan_unit_id(line: str, line_number: int) -> str:
     """Extract ``unit_id`` without deserializing the record.
 
-    Nothing in the line is bound to a Python object except the identifier.
-    The item text is never parsed, never decoded into a ``str`` field, and
-    never reachable by the caller.  Ambiguity fails closed: if the pattern
-    matches zero times, or more than once, the loader refuses rather than
-    guessing which match is the key.
+    Nothing but the identifier becomes a Python object, so the item text is
+    never reachable. Zero matches or more than one is a refusal, not a guess.
     """
 
     found = _UNIT_ID_RE.findall(line)
@@ -1976,27 +1783,20 @@ def load_exposed_population(
     expect_sha256: str | None = None,
     root: str | Path | None = None,
 ) -> dict[str, dict]:
-    """Load a population store that a process is entitled to read in full.
+    """Load a population store a process is entitled to read in full.
 
-    This is the replacement for the ``{row["unit_id"]: row for line in
-    path.read_text().splitlines()}`` idiom that destroyed the V2 partitions.
-    It differs in three ways, in the order they matter:
+    Three controls, in the order they matter:
 
-    1. **It refuses a sealed store without opening it.**  The registry lookup
-       is by resolved path and by ``(device, inode)`` and happens before any
-       file is opened, so zero holdout bytes enter the process.  This is the
-       load-bearing control: incident 306 counted *bytes read*, and a
-       streaming filter over a shared file still reads every byte.
-    2. **It refuses a foreign identity before deserializing anything.**  When
-       ``expected_unit_ids`` is given, every line's identifier is scanned with
-       a regex and checked against the allowance in a first pass.  Not one
-       record is deserialized until the whole file is known to contain only
-       permitted identities, so a store that silently gained a holdout row
-       cannot leak its text through this function.
-    3. **It verifies a pinned digest** when one is supplied.
+    1. A sealed store is refused before anything is opened. The registry lookup
+       is by resolved path and by (device, inode), so no holdout bytes enter
+       the process — a streaming filter over a shared file still reads them.
+    2. A foreign identity is refused before anything is deserialized. With
+       ``expected_unit_ids``, every line's identifier is scanned and checked
+       first, so a store that quietly gained a holdout row cannot leak its text
+       through here.
+    3. A pinned digest is verified when one is supplied.
 
-    On success it returns exactly what the legacy idiom returned: a mapping of
-    ``unit_id`` to the deserialized row, in file order.
+    Returns ``unit_id`` to row, in file order.
     """
 
     target = Path(path).resolve()
@@ -2063,17 +1863,14 @@ def load_authorised_packets(
 ) -> dict[str, dict]:
     """Load only the records a caller is explicitly authorised to handle.
 
-    Unlike :func:`load_exposed_population` this does not require the store to
-    contain nothing else — a packet store legitimately outlives the
-    authorisation of any one job.  What it guarantees is the other direction:
-    a record whose identifier is not on the allowlist is never deserialized,
-    so its item text never becomes a Python object and cannot be written
-    anywhere.  Selection happens on the identifier, before the record exists.
+    Unlike :func:`load_exposed_population`, the store may contain other things;
+    a packet store outlives any one job's authorisation. The guarantee runs the
+    other way: a record not on the allowlist is never deserialized, so its item
+    text never becomes a Python object. Selection happens on the identifier,
+    before the record exists.
 
-    It also refuses when the allowlist itself contains a registered holdout
-    identifier.  "Load everything and slice" is what delivered 87 of 120
-    sealed units to reviewer seats; an allowlist that is allowed to name a
-    holdout unit reproduces it with extra steps.
+    An allowlist naming a registered holdout identifier is refused, since that
+    would be "load everything and slice" with extra steps.
     """
 
     target = Path(path).resolve()
@@ -2103,7 +1900,7 @@ def load_authorised_packets(
                 continue
             unit_id = _scan_unit_id(line, number)
             if unit_id not in allowed:
-                continue  # never deserialized, never materialized
+                continue
             if unit_id in rows:
                 raise CustodyViolation(
                     f"{what}: {target} repeats identity at line {number}"

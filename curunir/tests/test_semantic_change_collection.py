@@ -1,5 +1,5 @@
-"""Semantic change engine, propagation, hypotheses and the collection loop —
-deterministic fixtures with fake transports for execution."""
+"""What changed between two readings of a source, what that does to the claims
+resting on it, and how an open question becomes a plan to go and look."""
 from __future__ import annotations
 
 import json
@@ -45,7 +45,7 @@ def _interpret(pipeline, prior, current, **kwargs):
 def test_chrome_only_change_is_semantically_unchanged(tmp_path):
     pipeline = make_pipeline(tmp_path)
     prior, current = _plant_page_pair(pipeline, PAGE_V1, PAGE_V1_CHROME_ONLY)
-    assert prior["content_sha256"] != current["content_sha256"]  # bytes did change
+    assert prior["content_sha256"] != current["content_sha256"]  # the bytes differ
     changes = _interpret(pipeline, prior, current)
     assert [c["change_class"] for c in changes] == ["SEMANTICALLY_UNCHANGED"]
 
@@ -64,7 +64,6 @@ def test_real_text_change_identifies_affected_claim_and_explains(tmp_path):
     store = pipeline.store
     items = store.open_review_items()
     assert any(i["kind"] == "MANIFESTATION_CHANGED" for i in items)
-    # the claim history keeps both values; nothing was rewritten
     versions = [c for c in store.records_of("semantic_claim")
                 if c["claim_id"] == change["affected_claim_ids"][0]]
     values = [v["object_or_value"] for v in versions]
@@ -90,7 +89,7 @@ def test_structured_field_change_supersedes_claim_within_origin(tmp_path):
     store = pipeline.store
     claim = next(c for c in store.current_claims().values() if c["predicate"] == "legal_name")
     assert claim["object_or_value"] == "Vessia Materials AS"
-    assert claim["version"] == 2  # supersession within one origin, history intact
+    assert claim["version"] == 2  # one source revising itself, history kept
 
 
 def test_correction_classifies_and_marks_claim_corrected(tmp_path):
@@ -118,7 +117,7 @@ def test_contradiction_between_independent_sources_disputes_not_overwrites(tmp_p
     store = pipeline.store
     claim = next(c for c in store.current_claims().values() if c["predicate"] == "legal_name")
     assert claim["object_or_value"] == "Vessia Steel AS"
-    # an independent origin later asserts a different value for the same subject
+    # A second, independent source gives a different value for the same subject.
     wikidata_body = json.dumps({"entities": {"Q999001": {
         "id": "Q999001",
         "labels": {"en": {"language": "en", "value": "Vessia Holding"}},
@@ -127,7 +126,7 @@ def test_contradiction_between_independent_sources_disputes_not_overwrites(tmp_p
         pipeline, source_id="wikidata", native_id="Q999001", body=wikidata_body,
         media_type="application/json", retrieval_time="2026-08-17T13:05:00+00:00")
     pipeline.process_manifestation(conflicting)
-    # simulate the conflicting observation targeting the same claim subject
+    # Point the conflicting observation at the same claim by hand.
     from curunir_semantic.worldmodel import _record_claim_conflict
     ctx = pipeline.context()
     observation = next(o for o in store.records_of("semantic_observation")
@@ -155,12 +154,12 @@ def test_hypothesis_degrades_when_supporting_claim_is_corrected(tmp_path):
                             now=pipeline.now_fn(), actor="analyst", marking=MARK)
     hypothesis = refresh_hypothesis(pipeline.context(), hypothesis["hypothesis_id"])
     assert hypothesis["status"] == "WEAKLY_SUPPORTED"
-    _interpret(pipeline, prior, current)  # the correction lands
+    _interpret(pipeline, prior, current)  # the correction arrives
     hypothesis = refresh_hypothesis(pipeline.context(), hypothesis["hypothesis_id"])
     assert hypothesis["status"] == "UNRESOLVED", \
         "corrected support must degrade the hypothesis"
     assert claim["claim_id"] in hypothesis["unresolved_claim_ids"]
-    assert len(hypothesis["history"]) >= 4  # full assessment trail retained
+    assert len(hypothesis["history"]) >= 4  # every assessment is kept
 
 
 def _fake_gleif_transport(body: bytes):
@@ -208,7 +207,7 @@ def test_collection_loop_closes_with_ranked_routes_and_updates(tmp_path):
         assert route["explanation"] and route["factors"]
     gleif_route = next(r for r in routes if r["source_id"] == "gleif")
     assert gleif_route["rank"] == 1, "hinted source family outranks alternatives here"
-    # the source updated its record in the meantime: execution discovers LAPSED
+    # The source has since changed its record, so the search finds LAPSED.
     result = execute_route(pipeline, registry, gleif_route,
                            transports={"gleif-lei-v1": _fake_gleif_transport(GLEIF_RECORD_LAPSED)})
     assert result["execution_outcome"] == "EXECUTED_WITH_RESULTS"
@@ -222,7 +221,7 @@ def test_collection_loop_closes_with_ranked_routes_and_updates(tmp_path):
     route_state = store.latest_by_id("collection_route", "route_id")[gleif_route["route_id"]]
     assert route_state["status"] == "EXECUTED"
     assert route_state["execution_id"]
-    # requirement remains open for the human: the machine never answers it
+    # The requirement stays open: only a person closes it.
     requirement = next(r for r in store.records_of("information_requirement")
                        if r["requirement_id"] == discriminator["requirement_id"])
     assert requirement["status"] in ("OPEN", "EVIDENCE_PENDING")
@@ -299,13 +298,11 @@ def test_watch_change_flows_to_semantic_alert(tmp_path):
     assert "managing_director" in alert["trigger"]
     assert "'Kari Nordmann' → 'Ola Hansen'" in alert["trigger"]
     assert "hash" not in alert["trigger"].split("\n")[0]
-    # idempotent: reprocessing raises nothing new
     assert pipeline.process_fabric_changes() == []
 
 
 def test_many_observation_historical_discovery_does_not_crash(tmp_path):
-    """Second review N1: >max_records differences with no prior manifestation
-    must emit an UNRESOLVED_CHANGE summary, not raise."""
+    """More differences than can be listed are summarised, not raised as an error."""
     pipeline = make_pipeline(tmp_path)
     rows = "".join(f"<p>Field {i}: Value {i}.</p>\n" for i in range(80)).encode()
     body = b"<html><head><title>Big</title></head><body>" + rows + b"</body></html>"
@@ -319,15 +316,15 @@ def test_many_observation_historical_discovery_does_not_crash(tmp_path):
     assert outcomes, "interpretation must complete"
     classes = [c for outcome in outcomes for c in outcome["semantic_changes"]]
     assert "HISTORICAL_STATE_DISCOVERED" in classes
-    assert "UNRESOLVED_CHANGE" in classes  # the truncated remainder is recorded
+    assert "UNRESOLVED_CHANGE" in classes  # what did not fit is still recorded
     unresolved = [c for c in pipeline.store.records_of("semantic_change")
                   if c["change_class"] == "UNRESOLVED_CHANGE"]
     assert unresolved and "not" in unresolved[0]["detail"]
 
 
 def test_machine_never_reverts_human_retraction(tmp_path):
-    """Second review N2: fresh evidence must not machine-reset an adjudicated
-    state; machine bookkeeping states may reset."""
+    """New evidence never undoes a person's decision, though it may clear a
+    state the machine set itself."""
     from curunir_semantic.contracts import ClaimStateRecord
     from semantic_support import GLEIF_RECORD_V2
     pipeline = make_pipeline(tmp_path)
@@ -356,7 +353,7 @@ def test_machine_never_reverts_human_retraction(tmp_path):
                       if r["subject_id"] == claim["claim_id"]
                       and "unadjudicated" in r["detail"]]
     assert standing_items, "the tension must be queued for review"
-    # machine bookkeeping states DO reset: mark STALE, advance again
+    # A state the machine set is a different matter: mark STALE and move on.
     stale = ClaimStateRecord(
         state_id="st-mach-1", claim_id=claim["claim_id"], state="STALE",
         reason="basis changed", caused_by="x", superseded_by="",
@@ -374,8 +371,7 @@ def test_machine_never_reverts_human_retraction(tmp_path):
 
 
 def test_historical_document_reintegration_appends_nothing(tmp_path):
-    """Second review N3: idempotency judged by observation identity, so a
-    document whose valid point predates current state never re-appends."""
+    """Re-reading an old document adds nothing, however often it is processed."""
     from semantic_support import GLEIF_RECORD_V2
     pipeline = make_pipeline(tmp_path)
     store = pipeline.store

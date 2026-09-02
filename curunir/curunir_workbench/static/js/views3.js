@@ -1,6 +1,6 @@
-// Workbench views, part 3: the report / decision-dossier engine.
+// Views, part 3: reports and dossiers.
 import { get, post, token } from "./api.js";
-import { badge, clip, emptyBox, errorBox, fmtTime, h, kv, pivot, refLink, table } from "./ui.js";
+import { badge, clip, emptyBox, errorBox, fmtTime, h, pivot, refLink, table } from "./ui.js";
 import { annotationsSection, nav, render } from "./views.js";
 import { session } from "./session.js";
 import { approveReportSigned, ed25519Available } from "./identity.js";
@@ -67,8 +67,7 @@ function sentenceEditor(sentence = {}) {
       h("button", { class: "danger", onclick: () => wrap.remove() }, "remove")),
     basisEl, assumptionsEl, inferenceEl, unresolvedEl);
   wrap.value = () => ({
-    // keep a stable id while the text is unchanged, so annotations and
-    // dissent stay anchored; a rewritten sentence is a new statement
+    // Keep the id while the text is unchanged so annotations stay anchored.
     sentence_id: textEl.value === originalText ? sentence.sentence_id : undefined,
     text: textEl.value, status: statusEl.value,
     basis_refs: basisEl.value.split(",").map((s) => s.trim()).filter(Boolean),
@@ -91,8 +90,7 @@ function sectionEditor(section = {}) {
       h("button", { class: "danger", onclick: () => wrap.remove() }, "remove section")),
     sentenceHost);
   wrap.value = () => ({
-    // the section id stays stable across kind/title edits, so sentence ids
-    // and their annotations survive a retitle
+    // Keep the section id across retitles so sentence ids survive.
     section_id: section.section_id,
     kind: kindEl.value, title: titleEl.value,
     sentences: [...sentenceHost.children].map((c) => c.value()),
@@ -104,8 +102,6 @@ function sectionEditor(section = {}) {
 function sentenceDisplay(sentence) {
   const note = sentence.status === "EXPLICITLY_INFERENTIAL" ? sentence.inference_note
     : sentence.status === "UNRESOLVED" ? sentence.unresolved_reason : "";
-  const assumptions = (sentence.assumption_ids || []).length
-    ? ` · assumptions: ${(sentence.assumption_ids || []).length}` : "";
   return h("div", { class: `sentence s-${sentence.status.toLowerCase()}` },
     h("div", {}, sentence.text, " ", badge(sentence.status),
       sentence.temporal_scope ? badge(sentence.temporal_scope) : null,
@@ -215,22 +211,20 @@ export async function reportView(main, params, id) {
           ? h("button", { onclick: () => nav(`/reports/${id}?edit=1`) }, "Revise (new draft version)") : null,
         r.status === "IN_REVIEW"
           ? [h("button", { class: "primary", onclick: act(async () => {
-               // the server's dissent set covers sentence/section anchors
-               // across every version — the UI drives the dialog from it
+               // The server lists open dissent across every version of the report.
                const dissent = validation.open_dissent || [];
                const acknowledged = dissent.length && confirm(
                  `${dissent.length} open dissent annotation(s) exist ` +
                  `(${dissent.map((a) => a.author).join(", ")}). ` +
                  "Approve WITH dissent (kept visible on the disposition)?")
                  ? dissent.map((a) => a.annotation_id) : [];
-               if (await ed25519Available()) {
-                 await approveReportSigned(r, session.mission_id, session.actor_id,
-                                           session.actor_kind, "", acknowledged);
-               } else {
-                 await post(`/api/commands/reports/${id}/approve`, {
-                   expected_version: r.version,
-                   acknowledge_dissent: acknowledged });
+               // Approval is a signed act. Never fall back to an unsigned request.
+               if (!(await ed25519Available())) {
+                 throw new Error("this browser cannot sign approvals (Ed25519 WebCrypto is " +
+                                 "unavailable or the page is not a secure context)");
                }
+               await approveReportSigned(r, session.mission_id, session.actor_id,
+                                         session.actor_kind, "", acknowledged);
              }) }, "Approve (validated, human act)"),
              h("button", { onclick: act(async () => {
                const note = prompt("return-for-revision note:") || "";
@@ -248,7 +242,7 @@ export async function reportView(main, params, id) {
         h("a", { href: `/api/reports/${id}/export`, target: "_blank",
           onclick: (e) => { e.preventDefault(); exportWithAuth(`/api/reports/${id}/export`, `${id}.json`); } }, "export JSON"),
         h("a", { href: `/api/reports/${id}/export.html`, target: "_blank",
-          onclick: (e) => { e.preventDefault(); exportWithAuth(`/api/reports/${id}/export.html`, `${id}.html`, true); } }, "export HTML")),
+          onclick: (e) => { e.preventDefault(); exportWithAuth(`/api/reports/${id}/export.html`, `${id}.html`); } }, "export HTML")),
       r.sections.map((s) => [h("h2", {}, s.title, " ", h("span", { class: "faint" }, s.kind)),
         s.sentences.length ? s.sentences.map(sentenceDisplay) : emptyBox("empty section"),
         (s.option_ids || []).map((oid) => h("div", {}, refLink("response_option", oid, "decision option")))]),
@@ -276,7 +270,7 @@ export async function reportView(main, params, id) {
   });
 }
 
-async function exportWithAuth(path, filename, isHtml = false) {
+async function exportWithAuth(path, filename) {
   const response = await fetch(path, { headers: { Authorization: `Bearer ${token()}` } });
   const blob = await response.blob();
   const url = URL.createObjectURL(blob);

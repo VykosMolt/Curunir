@@ -1,4 +1,5 @@
-"""Causal locks for independent V6.7 adversarial reviews."""
+"""A restricted record can be cited but never quoted: its prose must not reach a
+public forecast, collection or indicator."""
 from __future__ import annotations
 
 import hashlib
@@ -62,7 +63,7 @@ def _seed(pipeline, ctx):
 
 
 def test_restricted_indicator_prose_never_enters_public_forecast(tmp_path):
-    """R25A-1: cite a restricted indicator; never quote its prose."""
+    """A public forecast may cite a restricted indicator but not quote it."""
     pipeline, public_ctx = make_analytic(tmp_path)
     claims = _seed(pipeline, public_ctx)
     forecast = create_forecast(
@@ -145,7 +146,7 @@ def test_restricted_indicator_prose_never_enters_public_forecast(tmp_path):
 
 
 def test_collection_cites_and_inherits_restricted_analytic_source(tmp_path):
-    """R26A-2: collection cites the source id and inherits its marking."""
+    """A collection cites the source id and takes its marking."""
     pipeline, public_ctx = make_analytic(tmp_path)
     claims = _seed(pipeline, public_ctx)
     restricted_ctx = AnalyticContext(
@@ -184,7 +185,7 @@ def test_collection_cites_and_inherits_restricted_analytic_source(tmp_path):
 
 
 def test_restricted_observation_value_never_enters_public_indicator(tmp_path):
-    """R25A-2: fired evidence raises the indicator without quoting values."""
+    """Evidence that fires raises the indicator without quoting its values."""
     secret = "COVERT-SANCTION-CODE-MOONLIGHT"
     pipeline, public_ctx = make_analytic(tmp_path)
     claims = _seed(pipeline, public_ctx)

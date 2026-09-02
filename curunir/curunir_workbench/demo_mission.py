@@ -1,26 +1,22 @@
-"""Integrated operator exercise over a REAL mission root, through the
-workbench HTTP boundary only — no research scripts, no JSON patching.
+"""An end-to-end operator exercise over a real mission root, driven only through
+the workbench HTTP API.
 
     python -m curunir_workbench.demo_mission --root missions/apple_workbench_v66
 
-Prerequisite: the root was populated by the live analytic demo phases
-(curunir_analytic.demo phases 1/2/3/6 — real GLEIF/Wikidata/SEC/Wayback
-acquisition). This driver then walks the operator loop:
-
-  overview → warning/forecast inspection → provenance descent → hypothesis →
-  identity-review disposition → fresh LIVE public-source collection launched
-  from the workbench → state update visible → annotation → second restricted
-  analyst → dossier (validation rejects an unsupported sentence → repair →
-  approve) → restart → replay fingerprint.
-
-Every step is an authenticated HTTP call; failures are reported, not painted
-over. The restricted fixture record is deterministic test data, labeled as
-such — the public mission itself carries no naturally secret evidence.
+The root must already hold a mission from the live analytic demo. This walks the
+operator loop: overview, warning and forecast, provenance descent, hypothesis,
+review disposition, a live collection launch, annotation, a second analyst with
+narrower access, a dossier that fails validation and is repaired and approved,
+a restart, and a replay fingerprint. Every step is a real authenticated call and
+a failure is reported rather than painted over. The one restricted record is
+labelled test data; the mission itself holds nothing naturally secret.
 """
 from __future__ import annotations
 
 import argparse
 import json
+import secrets
+import shutil
 import socket
 import threading
 import time
@@ -30,12 +26,13 @@ from pathlib import Path
 import httpx
 import uvicorn
 
-from curunir_operational.access import Marking
+from curunir_analytic.impact import record_assumption
+from curunir_analytic.substrate import AnalyticContext
+from curunir_operational.access import AccessContext, Marking
 from curunir_workbench.auth import write_registry
+from curunir_workbench.projections import MissionProjection
 from curunir_workbench.server import create_app
 from curunir_workbench.store import WorkbenchStore
-
-import secrets as _secrets
 
 JAN = {"actor_id": "jan", "actor_kind": "HUMAN",
        "roles": ["ANALYST", "SUPERVISOR"], "compartments": ["SPECIAL"],
@@ -50,13 +47,12 @@ RESTRICTED_ANALYST = {"actor_id": "analyst-b", "actor_kind": "HUMAN",
 
 
 def _ensure_actors(actors_path: Path) -> None:
-    """Create the demo registry with FRESH random tokens on first run; never
-    overwrite an existing registry — reuse its tokens by actor id."""
-    import json as _json
+    """Create the demo registry with fresh random tokens the first time; an
+    existing registry is reused by actor id, never overwritten."""
     entries = [JAN, REVIEWER, RESTRICTED_ANALYST]
     if actors_path.exists():
         known = {e["actor_id"]: e["token"]
-                 for e in _json.loads(actors_path.read_text())["actors"]}
+                 for e in json.loads(actors_path.read_text())["actors"]}
         missing = [e["actor_id"] for e in entries if e["actor_id"] not in known]
         if missing:
             raise SystemExit(f"existing actor registry lacks demo actors "
@@ -65,9 +61,9 @@ def _ensure_actors(actors_path: Path) -> None:
             entry["token"] = known[entry["actor_id"]]
         return
     for entry in entries:
-        entry["token"] = _secrets.token_urlsafe(16)
-    # write_registry creates the file at mode 0600 atomically — no world-
-    # readable window for the freshly generated bearer tokens
+        entry["token"] = secrets.token_urlsafe(16)
+    # write_registry creates the file 0600, so the new tokens are never
+    # world-readable, even briefly.
     write_registry(actors_path, entries)
 
 
@@ -76,10 +72,8 @@ def _now() -> str:
 
 
 def _ensure_restricted_fixture(root: Path) -> str:
-    """One SPECIAL-compartment record (deterministic fixture, labeled) so the
-    two-analyst access demonstration has restricted material to protect."""
-    from curunir_analytic.impact import record_assumption
-    from curunir_analytic.substrate import AnalyticContext
+    """One record in the SPECIAL compartment, so the two-analyst part of the
+    demo has something restricted to protect. Labelled test data."""
     store = WorkbenchStore(root / "store")
     marking = Marking(owning_authority="curunir-analytic-demo",
                       compartments=("SPECIAL",), releasability=("PUBLIC",))
@@ -135,7 +129,7 @@ def run_exercise(root: Path, base: str, step: Step) -> dict:
     step.ok("evidence viewer", f"payload_bytes={evidence['payload'].get('bytes')} "
             f"anchors={len(evidence['anchors'])} verified_custody={bool(has_payload)}")
 
-    # 6: hypothesis over the real claims, compared with evidence
+    # 6: hypothesis over the real claims, compared against the evidence
     claims = {c["predicate"]: c for c in jan.get("/api/family/semantic_claim").json()["records"]
               if c["subject_ref"].startswith("LEI:")}
     hyp = jan.post("/api/commands/hypotheses", json={
@@ -147,13 +141,13 @@ def run_exercise(root: Path, base: str, step: Step) -> dict:
     matrix = jan.get("/api/hypotheses/matrix").json()
     step.ok("hypothesis matrix", f"hypotheses={len(matrix['hypotheses'])} rows={len(matrix['rows'])}")
 
-    # 7-8: information gap + EIV routes with explanations
+    # 7-8: information gap + ranked collection routes with explanations
     routes = jan.get("/api/family/collection_route").json()["records"]
     proposed = [r for r in routes if r["status"] == "PROPOSED" and r["automatable"]]
     step.ok("EIV routes", f"{len(routes)} routes, {len(proposed)} proposed; "
             f"top explanation: {proposed[0]['explanation'][:90] if proposed else 'n/a'}")
 
-    # 9-12: fresh LIVE public-source acquisition from the workbench
+    # 9-12: fresh live public-source acquisition from the workbench
     counts_mid = jan.get("/api/overview").json()["counts"]
     launched = None
     if proposed:
@@ -225,7 +219,7 @@ def run_exercise(root: Path, base: str, step: Step) -> dict:
         f"jan={seen_by_jan.status_code} analyst-b={seen_by_b.status_code} "
         f"b_search_hits={search_b['total']} id_in_b_payloads={fixture_id in blob_b}")
 
-    # 15: review disposition (identity ambiguity stays a recorded human act)
+    # 15: review disposition — identity ambiguity stays a human act
     review = jan.get("/api/review").json()
     open_semantic = [i for i in review["items"]
                      if i["status"] == "OPEN" and i["queue"] == "SEMANTIC"]
@@ -344,9 +338,6 @@ def main(argv=None) -> int:
     thread2.join(timeout=10)
 
     # 23: export/import/replay reconstructs the same authorized history
-    import shutil
-    from curunir_workbench.projections import MissionProjection
-    from curunir_operational.access import AccessContext
     store = WorkbenchStore(root / "store")
     export_dir = root / "open_export"
     if export_dir.exists():
@@ -365,7 +356,8 @@ def main(argv=None) -> int:
     for ctx in (ctx_jan, ctx_b):
         original = MissionProjection(store, ctx).overview()
         replayed = MissionProjection(WorkbenchStore(replay_root / "store"), ctx).overview()
-        original["meta"].pop("context_id"); replayed["meta"].pop("context_id")
+        original["meta"].pop("context_id")
+        replayed["meta"].pop("context_id")
         if json.dumps(original, sort_keys=True, default=str) \
                 != json.dumps(replayed, sort_keys=True, default=str):
             same = False

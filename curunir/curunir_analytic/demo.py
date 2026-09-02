@@ -1,32 +1,28 @@
-"""Live integrated exercise of the analytical intelligence layer.
+"""End-to-end exercise of the analytical layer against live sources.
 
-    python -m curunir_analytic.demo --root DIR --phase 1|2|3|4 [--operator NAME]
+    python -m curunir_analytic.demo --root DIR --phase 1|2|3|4|5|6 [--operator NAME]
 
-Phase 1  ACQUIRE  (live network): targeted real acquisition — GLEIF LEI
-         record, Wikidata entity, SEC EDGAR full-text search, Wayback
-         captures of the company site — through the OSINT fabric with full
-         custody, then semantic understanding.
-Phase 2  ANALYZE  (fresh process = restart): deterministic theme discovery,
-         stakeholder discovery with identity caveats, analyst-entered
-         inferred interest, objective + assumption + typed impact path from
-         a real event, narrative scan, structured explanations.
-Phase 3  COLLECT  (fresh process): analytical uncertainty → discriminator →
-         mission requirement → EIV-ranked routes (dependence-aware: the
-         same-family route scores zero) → live execution → honest
-         satisfaction accounting → operator (human) folds independent
-         evidence into the theme → propagation and alerts.
-Phase 4  REPLAY   (fresh process): export → import → identical analytical
-         views, chain verification, anchor recovery from replayed payloads
-         alone, and proof that no model provider was invoked anywhere.
-Phase 6  FORECAST (fresh process, live network): analyst forecasts over the
-         real registry claims — machine TRUE resolution against standing
-         evidence, the coverage gate refusing FALSE-from-silence until a
-         real post-horizon search lands, a pre-authorized indicator, a
-         named-rule warning projection, and the calibration scoreboard.
+Phase 1  ACQUIRE   real retrieval of the subject's registry record, entity,
+                   filings and site captures, then semantic understanding.
+Phase 2  ANALYZE   theme and stakeholder discovery, an analyst-entered
+                   interest, an objective, an assumption, a typed impact path
+                   and a narrative scan.
+Phase 3  COLLECT   analytical uncertainty becomes a discriminator, a mission
+                   requirement and ranked routes; one is executed live, the
+                   operator folds independent evidence in, and the change
+                   propagates.
+Phase 4  REPLAY    export, import, identical views, chain verification, and an
+                   anchor recovered from the replayed payloads alone.
+Phase 5  ANALOGUE  a comparable entity acquired live, recorded as an episode,
+                   and compared structurally to the subject's theme.
+Phase 6  FORECAST  forecasts over the real registry claims: machine TRUE
+                   resolution, the coverage gate refusing FALSE from silence
+                   until a real post-horizon search lands, an indicator, a
+                   warning projection and the calibration scoreboard.
 
-Every phase-1/3 retrieval is a real network request. Nothing is mocked, and
-nothing pretends: where the acquired evidence cannot answer a question, the
-demo reports the typed uncertainty instead of manufacturing corroboration.
+Every retrieval in phases 1, 3, 5 and 6 is a real network request. Where the
+evidence cannot answer a question the demo reports the typed uncertainty
+rather than manufacturing corroboration.
 """
 from __future__ import annotations
 
@@ -131,7 +127,7 @@ def phase_1(root: Path) -> dict:
         executed.append(f"{source}/{operation} {outcome.execution.outcome} "
                         f"results={outcome.execution.result_count}")
         if operation == "HISTORICAL_ENUMERATE" and outcome.results:
-            # fetch the earliest enumerated capture: real historical evidence
+            # the earliest enumerated capture is the real historical evidence
             captures = sorted(outcome.results, key=lambda r: r.native_id)
             capture = captures[0]
             fetch = execute_single(fabric, query=_query(
@@ -167,7 +163,7 @@ def phase_2(root: Path, operator: str) -> dict:
     pipeline, ctx = _stores(root)
     store = ctx.store
 
-    # deterministic theme discovery over the world graph, then themes
+    # theme discovery over the world graph
     candidates = discover_theme_candidates(store)
     lei_candidate = next(c for c in candidates if LEI_OBJECT in c["entity_ids"])
     theme = create_theme(
@@ -178,9 +174,7 @@ def phase_2(root: Path, operator: str) -> dict:
         event_ids=lei_candidate["event_ids"], provenance_kind="RULE",
         caused_by=lei_candidate["candidate_id"])
 
-    # stakeholders from what the world model states (OPERATES from Wikidata)
-    site_objects = [c["object_object_id"] for c in store.current_claims().values()
-                    if c["object_object_id"]]
+    # stakeholders from what the world model states
     operates = [r for r in store.records_of("relationship_version")
                 if r["relation_type"] == "OPERATES" and r["status"] == "ACTIVE"]
     discovered = []
@@ -193,7 +187,7 @@ def phase_2(root: Path, operator: str) -> dict:
         context_id=theme["theme_id"], role_in_context="subject entity",
         supporting_claim_ids=theme["basis"]["supporting_claim_ids"])
 
-    # an analyst-entered inferred interest — visibly non-observed
+    # an analyst-entered inferred interest, visibly not an observation
     status_claims = [c["claim_id"] for c in store.current_claims().values()
                      if c["subject_ref"] == f"LEI:{SUBJECT_LEI}"
                      and c["predicate"] == "entity_status"]
@@ -209,7 +203,7 @@ def phase_2(root: Path, operator: str) -> dict:
     add_position(ctx, assessment["assessment_id"], interest,
                  caused_by=f"analyst:{operator}")
 
-    # objective, assumption, and a typed impact path from a real event
+    # an objective, an assumption, and a typed impact path from a real event
     objective = create_objective(
         ctx, mission_context=MISSION,
         statement="Maintain continuous visibility of the subject's registry "
@@ -242,8 +236,8 @@ def phase_2(root: Path, operator: str) -> dict:
         summary="registry-standing exposure of the visibility objective",
         edges=(inference_edge,), caused_by=event["activity_id"])
 
-    # narrative scan: a real proposition family needs the same normalized
-    # statement across manifestations; report honestly what the corpus holds
+    # a narrative needs the same normalized statement across manifestations,
+    # so report what this corpus actually holds
     by_norm: dict[str, list] = {}
     for claim in store.current_claims().values():
         norm = normalize_statement(claim["object_or_value"])
@@ -312,8 +306,8 @@ def phase_3(root: Path, operator: str) -> dict:
     theme_entry = next((e for e in opened
                         if e["need"]["source_kind"] == "analytic_theme"), None)
     if theme_entry is None:
-        # re-run after the loop already closed: the theme's independence
-        # uncertainty no longer exists — that is the loop's success state
+        # the theme's independence uncertainty is gone, which is what success
+        # looks like on a re-run
         theme = next(t for t in store.current_themes().values()
                      if LEI_OBJECT in t["entity_ids"])
         return {
@@ -340,14 +334,13 @@ def phase_3(root: Path, operator: str) -> dict:
     executed = execute_route(pipeline, registry, viable[0]) if viable else \
         {"execution_outcome": "NO_VIABLE_ROUTE"}
 
-    # honest satisfaction accounting: acquiring an independent family does
-    # not by itself corroborate a source-native attribute of another scheme
+    # acquiring an independent family does not by itself corroborate a
+    # source-native attribute of another scheme
     discriminator_after = store.latest_by_id(
         "discriminator", "discriminator_id")[discriminator["discriminator_id"]]
 
-    # the operator (a human analyst) folds genuinely independent evidence
-    # into the theme: statements preserved from the subject's own site are an
-    # independent origin family relative to the registry publisher
+    # the operator folds in genuinely independent evidence: the subject's own
+    # site is a different origin family from the registry publisher
     theme_id = theme_entry["need"]["source_id"]
     site_claims = [c["claim_id"] for c in store.current_claims().values()
                    if c["subject_ref"].startswith("URL:")
@@ -402,8 +395,7 @@ COMPARABLE_LEI = "INR2EJN1ERAN0W5ZP974"  # Microsoft Corporation
 
 
 def phase_5(root: Path) -> dict:
-    """Bounded real analogue exercise: acquire a comparable entity's registry
-    record live, record its lifecycle as an evidence-bound episode, and
+    """Acquire a comparable entity live, record its lifecycle as an episode, and
     retrieve structural analogues for the subject theme."""
     from .analogues import explain_analogue, record_episode, retrieve_analogues
     pipeline, ctx = _stores(root)
@@ -465,16 +457,13 @@ def phase_5(root: Path) -> dict:
 
 
 def phase_6(root: Path, operator: str) -> dict:
-    """Live forecast lifecycle over the real Apple evidence:
+    """The forecast lifecycle over the real acquired evidence.
 
-    * an analyst forecast machine-resolves TRUE against the real GLEIF claim;
-    * a second forecast reaches its horizon and shows the coverage gate —
-      a live search executed BEFORE the horizon cannot prove absence AT the
-      horizon, so resolution blocks until a real post-horizon search lands;
-    * a warning projects the open forecast onto the phase-2 objective through
-      the named tier rule, and resolves when the question settles;
-    * the calibration scoreboard scores exactly what resolved and reports
-      exactly what it could not score.
+    One forecast machine-resolves TRUE against the standing registry claim. A
+    second reaches its horizon and shows the coverage gate: a search run before
+    the horizon cannot prove absence at it, so resolution blocks until a real
+    post-horizon search lands. A warning projects the open forecast onto the
+    objective, and the scoreboard reports what it could not score.
     """
     import time as _time
 
@@ -483,7 +472,7 @@ def phase_6(root: Path, operator: str) -> dict:
     from .forecasts import (create_forecast, refresh_forecast,
                             try_machine_resolution)
     from .indicators import arm_indicator
-    from .warning import project_warning, refresh_warnings
+    from .warning import project_warning
 
     pipeline, ctx = _stores(root)
     store = ctx.store
@@ -500,12 +489,10 @@ def phase_6(root: Path, operator: str) -> dict:
                          for o in store.current_objectives().values()
                          if o["mission_context"] == MISSION), "")
 
-    # forecast A: settles TRUE (early, pre-horizon) against the standing
-    # real claim — a machine-resolution demonstration. The scoreboard
-    # excludes it from aggregates (resolved_by_prior_evidence): its answer
-    # was on the record when it was authored, and the demo says so
-    from datetime import timedelta as _timedelta
-    horizon_a = (datetime.now(timezone.utc) + _timedelta(hours=1)).isoformat()
+    # forecast A settles TRUE against the standing claim. The scoreboard keeps
+    # it out of the aggregates: its answer was on the record when it was written.
+    from datetime import timedelta
+    horizon_a = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
     forecast_a = create_forecast(
         ctx,
         question=f"Will GLEIF registration_status for {SUBJECT_NAME} read "
@@ -527,8 +514,7 @@ def phase_6(root: Path, operator: str) -> dict:
         author=operator, domain="corporate-registry",
         supporting_claim_ids=[registration_claim["claim_id"]])
 
-    # forecast B: a lapse that will NOT be observed — the honest FALSE path
-    from datetime import timedelta
+    # forecast B watches for a lapse that will not appear: the FALSE path
     horizon_b = (datetime.now(timezone.utc)
                  + timedelta(seconds=20)).isoformat()
     forecast_b = create_forecast(
@@ -552,7 +538,7 @@ def phase_6(root: Path, operator: str) -> dict:
         author=operator, domain="corporate-registry",
         supporting_claim_ids=[registration_claim["claim_id"]])
 
-    # a pre-authorized indicator: the analyst's conditional judgment on record
+    # the analyst's conditional judgment, pre-authorized on record
     indicator = arm_indicator(
         ctx, description=f"GLEIF registration_status for {SUBJECT_NAME} "
                          f"reads LAPSED",
@@ -568,16 +554,16 @@ def phase_6(root: Path, operator: str) -> dict:
                                authorized_by=operator,
                                authorized_kind="HUMAN"))
 
-    # the warning projects the open lapse forecast onto the mission objective
+    # project the open lapse forecast onto the mission objective
     warning = None
     if objective_id:
         warning = project_warning(ctx, forecast_id=forecast_b["forecast_id"],
                                   objective_id=objective_id)
 
-    # A resolves TRUE against the real claim, machine act with real evidence
+    # A resolves TRUE against the real claim
     resolved_a = try_machine_resolution(ctx, forecast_a["forecast_id"])
 
-    # a LIVE search BEFORE B's horizon: real work that cannot prove absence
+    # a live search before B's horizon: real work that cannot prove absence
     pre = execute_single(fabric, query=_query(
         forecast_b["forecast_id"], "IDENTIFIER", SUBJECT_LEI, "LOOKUP", "gleif",
         "pre-horizon search: demonstrates it cannot satisfy the coverage gate"),
@@ -596,7 +582,7 @@ def phase_6(root: Path, operator: str) -> dict:
     needs = [n for n in analytic_collection_needs(store)
              if n["source_id"] == forecast_b["forecast_id"]]
 
-    # a LIVE post-horizon search: only now can silence mean anything
+    # a live post-horizon search: only now can silence mean anything
     post = execute_single(fabric, query=_query(
         forecast_b["forecast_id"], "IDENTIFIER", SUBJECT_LEI, "LOOKUP", "gleif",
         "post-horizon search satisfying the declared absence coverage"),
@@ -702,7 +688,7 @@ def phase_4(root: Path) -> dict:
     theme_id = next(iter(replayed.current_themes()), "")
     explanation = explain_object(replayed, "analytic_theme", theme_id) \
         if theme_id else {}
-    # recover one exact anchor from replayed payloads alone
+    # recover one exact anchor from the replayed payloads alone
     anchor_check = {}
     theme = replayed.current_themes().get(theme_id)
     if theme:

@@ -1,5 +1,5 @@
-"""Synthetic feed payloads for the Vessia Corridor scenario. All names,
-coordinates (open North Atlantic) and events are fictitious. Data only."""
+"""Synthetic feed payloads for the Vessia Corridor scenario. Data only; every
+name, coordinate and event is invented."""
 from __future__ import annotations
 
 import hashlib
@@ -53,10 +53,10 @@ STOCK_INITIAL = stock_csv([
     ("ALD-FUEL", "ALDEN", "fuel", 12000, "l", at(0)),
     ("ALD-MED", "ALDEN", "medical", 400, "kits", at(0)),
     ("BRK-REP", "BRUSKA", "repair", 60, "units", at(0)),
-    ("BRK-FUEL", "BRUSKA", "fuel", 5000, "l", at(-30)),  # never refreshed → stale
+    ("BRK-FUEL", "BRUSKA", "fuel", 5000, "l", at(-30)),  # Never refreshed, so it goes stale.
 ])
 STOCK_UPDATE = stock_csv([("ALD-FUEL", "ALDEN", "fuel", 11000, "l", at(24))])
-STOCK_LATE = stock_csv([("ALD-FUEL", "ALDEN", "fuel", 11500, "l", at(20))])  # older validity, arrives later
+STOCK_LATE = stock_csv([("ALD-FUEL", "ALDEN", "fuel", 11500, "l", at(20))])  # Older validity, arriving later.
 
 
 def movement_plan(status="PLANNED", effective_hours=0.75) -> bytes:

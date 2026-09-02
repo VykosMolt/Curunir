@@ -7,14 +7,16 @@ writes the artifact set. Deterministic: all times come from the fixture clock.
 """
 from __future__ import annotations
 
+import hashlib
 import json
+import sys
 import time
 from pathlib import Path
 from typing import Any
 
 from curunir_operational.analytics import DeterministicRuleProvider, MockAssessmentProvider
 from curunir_operational.association import AssociationEngine
-from curunir_operational.canonical import canonical_line, digest_id, sha256
+from curunir_operational.canonical import canonical_line, digest_id
 from curunir_operational.contracts import SourceRecord
 from curunir_operational.explain import explain, explain_markdown
 from curunir_operational.pipelines import PipelineExecutor, build_connector
@@ -63,7 +65,7 @@ def run_scenario(store_root: Path, out_dir: Path) -> dict[str, Any]:
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    # ---- setup -------------------------------------------------------------
+    # ---- setup ----
     store = MissionDataStore.create(store_root, "vessia-corridor-v1", at(-1.0))
     registry = SchemaRegistry(store)
     for record in _sources():
@@ -89,18 +91,19 @@ def run_scenario(store_root: Path, out_dir: Path) -> dict[str, Any]:
         ingest_log.append(result)
         return result
 
-    # ---- phase 1: initial operating picture --------------------------------
+    # ---- phase 1: initial operating picture ----
     ingest("infrastructure-status", feeds.infrastructure_registry(), "src-regsys", at(-24), at(0.1))
     ingest("route-registry", feeds.route_registry(), "src-regsys", at(-24), at(0.2))
     ingest("logistics-stock", feeds.STOCK_INITIAL, "src-logsys", at(0.0), at(0.5))
     ingest("movement-plan", feeds.movement_plan(), "src-moveplan", at(0.75), at(0.8))
     seq_phase1 = store.head()["event_count"]
-    timings["phase1_ingest_s"] = round(time.monotonic() - clock, 3); clock = time.monotonic()
+    timings["phase1_ingest_s"] = round(time.monotonic() - clock, 3)
+    clock = time.monotonic()
     initial_projection = Projection(store, snapshot_time=at(1.0), staleness_hours=STALENESS_HOURS)
     initial_view = WorkbenchRenderer(initial_projection).render(workshop, CONTEXTS["high"])
     _write(out_dir / "cop_initial.html", render_cop_html(initial_view, title="Vessia Corridor — initial picture"))
 
-    # ---- phase 2: disruption ----------------------------------------------
+    # ---- phase 2: disruption ----
     ingest("civdef-bulletins", feeds.BULLETIN_DAMAGE, "src-civdef", at(24.5), at(24.6))
     ingest("argus-evidence-observations", feeds.ARGUS_BUNDLE_A, "src-argus", at(24.8), at(25.0))
     ingest("argus-evidence-observations", feeds.ARGUS_BUNDLE_B, "src-argus", at(24.8), at(25.2))
@@ -119,9 +122,10 @@ def run_scenario(store_root: Path, out_dir: Path) -> dict[str, Any]:
                             "CIVDEF-AUTH", {"track_record": "UNKNOWN", "recent_conflicts": "1"},
                             BASE_MARKING, "DEGRADED", "conflicting bridge report under review", at(27.1))
     store.append("SOURCE_REGISTERED", degraded, recorded_time=at(27.1), actor="fixture")
-    timings["phase2_ingest_s"] = round(time.monotonic() - clock, 3); clock = time.monotonic()
+    timings["phase2_ingest_s"] = round(time.monotonic() - clock, 3)
+    clock = time.monotonic()
 
-    # ---- phase 3: ambiguity ------------------------------------------------
+    # ---- phase 3: ambiguity ----
     ingest("movement-sightings", feeds.SIGHTING_CONV_A, "src-fieldnet", at(28.0), at(28.1))
     ingest("movement-sightings", feeds.SIGHTING_CONV_B, "src-fieldnet", at(28.5), at(28.6))
     engine = AssociationEngine(store)
@@ -136,9 +140,10 @@ def run_scenario(store_root: Path, out_dir: Path) -> dict[str, Any]:
     engine.resolve(proposal_plan["proposal_id"], "ACCEPTED", actor_id="analyst-vale", actor_kind="HUMAN",
                    rationale="checkpoint log ties CONV-A to the RELIEF-101 manifest", recorded_time=at(29.8),
                    marking=BASE_MARKING)
-    timings["phase3_association_s"] = round(time.monotonic() - clock, 3); clock = time.monotonic()
+    timings["phase3_association_s"] = round(time.monotonic() - clock, 3)
+    clock = time.monotonic()
 
-    # ---- phase 4: detection, alerts, recommendations, decisions ------------
+    # ---- phase 4: detection, alerts, recommendations, decisions ----
     projection4 = Projection(store, snapshot_time=at(31.0), staleness_hours=STALENESS_HOURS)
     rules = DeterministicRuleProvider(store)
     proposals = rules.run(projection4, CONTEXTS["rules"], recorded_time=at(31.0))
@@ -173,9 +178,10 @@ def run_scenario(store_root: Path, out_dir: Path) -> dict[str, Any]:
                         rationale="await the scheduled fieldnet pass before tasking a new observation",
                         recorded_time=at(32.3), marking=BASE_MARKING),
     ]
-    timings["phase4_analytics_workflow_s"] = round(time.monotonic() - clock, 3); clock = time.monotonic()
+    timings["phase4_analytics_workflow_s"] = round(time.monotonic() - clock, 3)
+    clock = time.monotonic()
 
-    # ---- phase 5: reporting, export, replay --------------------------------
+    # ---- phase 5: reporting, export, replay ----
     final_projection = Projection(store, snapshot_time=at(33.0), staleness_hours=STALENESS_HOURS)
     renderer = WorkbenchRenderer(final_projection)
     view_high = renderer.render(workshop, CONTEXTS["high"])
@@ -220,9 +226,10 @@ def run_scenario(store_root: Path, out_dir: Path) -> dict[str, Any]:
            + "\n## route-change recommendation (full access)\n\n" + explain_markdown(explanation_rec)
            + "\n## obs-FN-2205 from the partner context\n\n" + explain_markdown(explanation_denied)
            + "\n(The partner context receives the same NOT_AVAILABLE answer for hidden and nonexistent records.)\n")
-    timings["phase5_reporting_export_s"] = round(time.monotonic() - clock, 3); clock = time.monotonic()
+    timings["phase5_reporting_export_s"] = round(time.monotonic() - clock, 3)
+    clock = time.monotonic()
 
-    # ---- accounting --------------------------------------------------------
+    # ---- accounting ----
     from .questions import answer_questions
     answers = answer_questions(store=store, final_projection=final_projection,
                                projection_high=projection_high, projection_low=projection_low,
@@ -256,7 +263,6 @@ def run_scenario(store_root: Path, out_dir: Path) -> dict[str, Any]:
         "projection_hash_restricted": projection_hash(projection_low),
         "questions_answerable": sum(1 for a in answers["answers"] if a["answerable"]),
     }
-    import hashlib
     manifest_files = sorted(p for p in out_dir.rglob("*") if p.is_file())
     file_manifest = {str(p.relative_to(out_dir)): hashlib.sha256(p.read_bytes()).hexdigest()
                      for p in manifest_files}
@@ -280,7 +286,10 @@ def _collect_metrics(store, ingest_log, final_projection, projection_high, proje
     alerts = final_projection.alerts
     unknown_dims = sum(1 for o in objects for v in o.get("quality", {}).values() if v == "UNKNOWN")
     evidence_groups = final_projection.dependence_groups
-    import sys
+    serialized_low = canonical_line(projection_low)
+    restricted_tokens_present = sum(
+        1 for token in ("obs-FN-2205", "protected feeder", "SENSITIVE-INFRA")
+        if token in serialized_low)
     return {
         "ingestion": {
             "payloads_received": len(ingest_log),
@@ -362,13 +371,10 @@ def _collect_metrics(store, ingest_log, final_projection, projection_high, proje
         "access_security": {
             "partner_view_object_count": projection_low["counts"]["objects_total"],
             "full_view_object_count": projection_high["counts"]["objects_total"],
-            # the substation itself is public registry data; what must not leak
-            # is the restricted observation, its content and its compartment
-            "restricted_identifiers_in_partner_projection": sum(
-                1 for token in ("obs-FN-2205", "protected feeder", "SENSITIVE-INFRA")
-                if token in canonical_line(projection_low)),
-            "leakage_failures": 0 if all(token not in canonical_line(projection_low)
-                                         for token in ("obs-FN-2205", "protected feeder", "SENSITIVE-INFRA")) else 1,
+            # The substation is public registry data; what must not leak is
+            # the restricted observation, its content and its compartment.
+            "restricted_identifiers_in_partner_projection": restricted_tokens_present,
+            "leakage_failures": 0 if restricted_tokens_present == 0 else 1,
         },
         "performance": {
             **timings,

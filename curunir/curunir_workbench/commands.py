@@ -1,20 +1,21 @@
-"""The workbench command layer: every mutation is an attributable act routed
-through the canonical plane functions.
+"""Every workbench mutation, as a named act with a named actor.
 
-The browser cannot mutate truth: it names a command, the server resolves the
-actor from authentication, validates authority, and calls the same store
-functions the rest of Curunír uses. Human-only guards (task closure, model
-candidate acceptance, forecast authorship, report approval) live in the
-canonical layers and are surfaced — never bypassed — here. Stale writes
-raise conflicts; nothing silently overwrites another analyst's work.
+The browser cannot change anything itself: it names a command, the server works
+out who the actor is, checks their authority, and calls the same store functions
+the rest of Curunír uses. Rules that require a human live in those functions and
+are surfaced here rather than bypassed, and a stale write raises a conflict
+instead of overwriting someone's work.
 """
 from __future__ import annotations
 
+import json
+import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
+from argus.source_intelligence.custody import SourceCustodyStore
 from argus.source_intelligence.models import digest_id
 from curunir_analytic.contracts import ResolutionRule
 from curunir_analytic.forecasts import (create_forecast, resolve_forecast_human,
@@ -22,65 +23,54 @@ from curunir_analytic.forecasts import (create_forecast, resolve_forecast_human,
 from curunir_analytic.candidate_schema import refusal_reason
 from curunir_analytic.model_backends import assist_from_environment
 from curunir_analytic.substrate import AnalyticContext, resolve_candidate
-from curunir_fabric.executor import ExecutionContext, RateGate
+from curunir_analytic.warning import project_warning
+from curunir_fabric.contracts import WatchDefinition
 from curunir_fabric.registry import load_registry
-from curunir_fabric.watch import register_watch, retire_watch
+from curunir_fabric.watch import register_watch
 from curunir_operational.access import (AccessContext, Marking, can_view,
                                         marking_from_record, most_restrictive)
+from curunir_operational.canonical import validate_interchange
 from curunir_operational.missions import MissionWorkflow
 from curunir_operational.security import MaterialReference, resolve_reference_records
-from curunir_operational.canonical import validate_interchange
 from curunir_operational.workflow import WorkflowEngine
 from curunir_semantic.collection import assign_human_route, execute_route
-from curunir_semantic.contracts import ReviewItem
-from curunir_semantic.hypotheses import record_hypothesis
+from curunir_semantic.contracts import HYPOTHESIS_STATUSES, HypothesisRecord, ReviewItem
+from curunir_semantic.hypotheses import link_claim, record_hypothesis
 from curunir_semantic.pipeline import SemanticPipeline
-
-from argus.source_intelligence.custody import SourceCustodyStore
 
 from . import annotations as annotations_module
 from . import reports as reports_module
+from .contracts import SavedViewRecord
+from .errors import Conflict, NotFound
 from .projections import MissionProjection
 from .store import WorkbenchStore
-
-
-from .errors import Conflict, NotFound
 
 
 class CommandError(ValueError):
     pass
 
 
-import re as _re
-
-# digest-shaped record ids ("prefix-hex"); evgroup- names dependence
-# families, which are arithmetic groupings rather than records
-_ID_TOKEN_RE = _re.compile(r"(?!evgroup-)[a-z][a-z-]{1,32}-[0-9a-f]{12,64}")
-# a broad tokenizer for free text: any id-shaped run we then test for membership
-_FREE_TOKEN_RE = _re.compile(r"[A-Za-z][A-Za-z0-9_-]{5,}")
+# Digest-shaped record ids ("prefix-hex"). An evgroup- name is a dependence
+# group, not a record.
+_ID_TOKEN_RE = re.compile(r"(?!evgroup-)[a-z][a-z-]{1,32}-[0-9a-f]{12,64}")
+# Anything id-shaped in free text, to be tested for membership below.
+_FREE_TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z0-9_-]{5,}")
 
 
 def _validate_inbound(projection: MissionProjection, *,
                       refs: tuple = (), texts: tuple = ()) -> None:
-    """Uniform inbound validation.
+    """Refuse a payload that cites anything the caller cannot open.
 
-    Reference fields are structured id lists: every one must resolve in the
-    CALLER's own view — hidden and nonexistent are rejected identically, so
-    the refusal carries no existence signal, no hidden id can be laundered
-    into a record, and a client echoing REDACTED is refused rather than
-    corrupting the record's real reference.
+    Every reference field must resolve in the caller's own view. A hidden id and
+    a missing one are refused the same way, so the refusal says nothing about
+    what exists, no hidden id can be written into a record, and a client that
+    echoes REDACTED back is refused rather than corrupting the real reference.
 
-    Free text is scanned for (a) any of the caller's OWN hidden ids
-    (shape-independent, from the exact hidden set — a probe or a paste of
-    restricted state carries these) and (b) digest-shaped tokens that do not
-    resolve. RESIDUAL, stated honestly: a NON-digest, nonexistent id-shaped
-    token in prose is not rejected (we cannot distinguish it from an ordinary
-    hyphenated word), while a non-digest HIDDEN id is. For an id whose form
-    an analyst can guess (a mnemonic object id), that asymmetry is a narrow
-    free-text existence oracle. Production ids are digest-shaped, where the
-    two branches are symmetric; the residual is bounded to guessable-mnemonic
-    ids and is a V6.6 limitation, not a structured-reference one (reference
-    FIELDS are airtight: hidden and nonexistent are rejected identically)."""
+    Free text is scanned for the caller's own hidden ids and for digest-shaped
+    ids that do not resolve. Known gap: an id-shaped word that is neither
+    digest-shaped nor hidden goes through, because it is indistinguishable from
+    an ordinary hyphenated word. Real ids are digest-shaped, where both cases
+    behave alike."""
     known = projection.visible_id_set()
     hidden = projection.hidden_ids
     bad: list[str] = []
@@ -95,9 +85,8 @@ def _validate_inbound(projection: MissionProjection, *,
         if "REDACTED" in text:
             bad.append("REDACTED")
         for match in _FREE_TOKEN_RE.finditer(text):
-            # a token whose preceding char is '/' or '.' is a URL path or
-            # dotted-host segment (reg.example/lookup/lei-0123…), not a record
-            # id — analysts paste registry/archive links into notes and prose
+            # A token right after "/" or "." belongs to a pasted link or
+            # hostname, not to a record id.
             prev = text[match.start() - 1] if match.start() > 0 else " "
             if prev in "/.":
                 continue
@@ -114,8 +103,8 @@ def _validate_inbound(projection: MissionProjection, *,
 
 
 def _soft_reject(projection: MissionProjection, values: tuple) -> None:
-    """For loose / external-identifier fields: don't require resolution, but
-    never let a hidden id or a REDACTED echo be laundered into the record."""
+    """For fields naming things outside the store: they need not resolve, but a
+    hidden id or a REDACTED echo is still refused."""
     hidden = projection.hidden_ids
     bad = [str(v) for v in values
            if v and (str(v) == "REDACTED" or str(v).split("@v")[0] in hidden)]
@@ -125,11 +114,9 @@ def _soft_reject(projection: MissionProjection, values: tuple) -> None:
 
 
 def marked(ctx: "CommandContext", compartments: tuple[str, ...] = ()) -> Marking:
-    """The write marking for a NEW record: the server default, optionally
-    raised into compartments the actor actually holds. This function itself
-    enforces the floor — it raises if the actor does not hold every declared
-    compartment, so a record can never be written into access the author
-    lacks."""
+    """The marking for a new record: the default, raised into compartments the
+    actor actually holds. Raises otherwise, so nobody writes into access they
+    do not have."""
     if not compartments:
         return ctx.marking
     missing = set(compartments) - set(ctx.context.compartments)
@@ -147,21 +134,20 @@ def _utc_now() -> str:
 
 
 def _record_marking(record: Mapping[str, Any]) -> Marking:
-    """The marking a record derived from `record` must inherit — a derived
-    record is never less restricted than the subject it is about."""
+    """The marking anything derived from this record must carry; a derived
+    record is never less restricted than its subject."""
     return marking_from_record(record["marking"]) \
         if isinstance(record.get("marking"), dict) else record["marking"]
 
 
 def _reference_marking(ctx: "CommandContext", projection: MissionProjection, *,
                        refs: tuple, compartments: tuple[str, ...] = ()) -> Marking:
-    """The write marking for a NEW record that CITES existing state: the
-    high-water-mark of the actor's declared marking and every reference it
-    carries. A record is never less restricted than anything it is about —
-    a report/requirement/task/view whose prose or fields reference a
-    compartmented subject is itself compartmented. The actor must be cleared
-    for the result (`marked` already enforces the compartment floor; this
-    also refuses a join above the actor's own access)."""
+    """The marking for a new record that cites existing state: the most
+    restrictive of the actor's own and everything the record names.
+
+    A record is never less restricted than what it is about. The actor must also
+    be cleared for the result, so citing several records cannot land the writer
+    above their own access."""
     markings = [marked(ctx, compartments)] + _ref_markings(projection, tuple(refs))
     result = most_restrictive(markings)
     if not can_view(result, ctx.context):
@@ -184,13 +170,12 @@ def _ref_markings(projection: MissionProjection, refs: tuple) -> list[Marking]:
 
 def _guard_reference_floor(projection: MissionProjection, subject_marking: Marking,
                            refs: tuple) -> None:
-    """A record kept at its OWN fixed marking (a re-append, a fold, a
-    transition on an existing subject) must not cite state more restricted
-    than it can hold — that reference and any prose about it would sit in an
-    under-classified record. When the citation would raise the high-water
-    mark above the subject's marking, refuse. This is the single guard every
-    reference-accepting re-append/extend path shares; the NEW-record path
-    uses `_reference_marking` (which raises the marking instead)."""
+    """Refuse when a record that keeps its own marking cites something more
+    restricted.
+
+    A re-append or an extension does not re-classify its subject, so such a
+    citation, and the prose around it, would sit in an under-classified record.
+    A new record instead raises its own marking, through _reference_marking."""
     joined = most_restrictive([subject_marking] + _ref_markings(projection, refs))
     if joined.to_record() != subject_marking.to_record():
         raise CommandError(
@@ -200,8 +185,8 @@ def _guard_reference_floor(projection: MissionProjection, subject_marking: Marki
 
 
 def _definition_refs(definition: Mapping[str, Any]) -> tuple:
-    """Every string value nested in a saved-view definition — candidate
-    object/record references whose marking the view must inherit."""
+    """Every string anywhere in a saved-view definition; any of them may name a
+    record whose marking the view has to inherit."""
     out: list[str] = []
 
     def walk(value):
@@ -239,12 +224,10 @@ class CommandContext:
         return MissionProjection(self.store, self.context)
 
     def analytic(self, marking: Marking | None = None) -> AnalyticContext:
-        # every record written through this context — the primary record AND
-        # its companions (transitions, review items, warnings) — is stamped
-        # with `marking`. When operating on an existing subject the caller
-        # passes the SUBJECT's marking so a derived record can never be less
-        # restricted than the state it is about; `self.marking` (the actor's
-        # PUBLIC default) is used only for genuinely new top-level records.
+        # Everything written through this context carries `marking`, including
+        # companion records such as transitions and review items. Pass the
+        # subject's marking when working on an existing record; the actor's
+        # default belongs only to genuinely new ones.
         return AnalyticContext(store=self.store, actor=self.actor,
                                marking=marking or self.marking, now_fn=self.now_fn)
 
@@ -254,13 +237,12 @@ class CommandContext:
                                 now_fn=self.now_fn)
 
     def require_visible_marking(self) -> None:
-        """An actor may only author records it could itself view — a command
-        can never create state above its own access."""
+        """An actor may only write records it could read itself."""
         if not can_view(self.marking, self.context):
             raise PermissionError("actor cannot write records outside its own access")
 
 
-# ---- annotations -------------------------------------------------------------
+# ---- annotations ----
 
 def annotate(ctx: CommandContext, *, target_kind: str, target_id: str,
              kind: str, text: str, reply_to: str = "",
@@ -268,9 +250,8 @@ def annotate(ctx: CommandContext, *, target_kind: str, target_id: str,
     ctx.require_visible_marking()
     projection = ctx.projection()
     _validate_inbound(projection, refs=(anchor_ref, reply_to), texts=(text,))
-    # the annotation inherits the most restrictive of its TARGET's and its
-    # ANCHOR's markings: discussion of compartmented state is compartmented,
-    # through EITHER reference field, never PUBLIC-by-default
+    # An annotation is at least as restricted as the record it targets or
+    # anchors to.
     subject_markings = []
     tgt = annotations_module.target_marking(projection, target_kind, target_id)
     if isinstance(tgt, dict):
@@ -303,7 +284,7 @@ def resolve_annotation(ctx: CommandContext, annotation_id: str, *,
         raise Conflict(str(error)) from error
 
 
-# ---- mission workflow (requirements / tasks) --------------------------------
+# ---- mission workflow (requirements / tasks) ----
 
 def open_requirement(ctx: CommandContext, *, question: str, priority: str,
                      mission_context: str, rationale: str,
@@ -315,25 +296,20 @@ def open_requirement(ctx: CommandContext, *, question: str, priority: str,
     projection = ctx.projection()
     _validate_inbound(projection, refs=affected_ids,
                       texts=(question, rationale, mission_context, closure_criteria))
-    # a requirement citing compartmented affected state is itself compartmented
+    # A requirement is at least as restricted as the records it names.
     write_marking = _reference_marking(ctx, projection, refs=affected_ids,
                                        compartments=compartments)
     requirement_id = digest_id("req", question, mission_context)
-    existing = None
-    for record in ctx.store.records_of("information_requirement"):
-        if record["requirement_id"] == requirement_id:
-            existing = record
+    existing = ctx.store.latest_by_id(
+        "information_requirement", "requirement_id").get(requirement_id)
     if existing is not None and not can_view(existing.get("marking"), ctx.context):
-        # a requirement with this exact question already exists outside the
-        # caller's access: refuse without echoing anything about it. (The
-        # caller authored the colliding question themselves; refusing is the
-        # minimal disclosure — folding would declassify, returning it would
-        # disclose.)
+        # The same question already exists outside the caller's access.
+        # Folding would declassify it and returning it would disclose it, so
+        # refuse without saying anything about it.
         raise PermissionError("cannot open this requirement in your context")
     if existing is not None:
-        # the fold keeps the existing requirement's marking while widening its
-        # affected set: it must not fold in a reference more restricted than
-        # that marking can hold
+        # Widening the existing requirement keeps its marking, so it must not
+        # take in anything above that.
         _guard_reference_floor(projection, marking_from_record(existing["marking"]),
                                tuple(affected_ids))
     workflow = MissionWorkflow(ctx.store)
@@ -382,30 +358,26 @@ def transition_workflow(ctx: CommandContext, *, subject_kind: str, subject_id: s
     visible = projection.base_view[view_key]
     subject = next((r for r in visible if r[id_field] == subject_id), None)
     if subject is None:
-        # invisible and nonexistent are the same refusal
         raise NotFound(f"unknown {subject_kind}: {subject_id}")
-    # "answering requires evidence" must mean evidence that RESOLVES:
-    # a transition cannot be closed on fabricated or invisible references
+    # Closing on evidence means evidence that resolves; invented or unseen
+    # references do not count.
     _validate_inbound(projection, refs=evidence_refs, texts=(note,))
-    # the transition keeps the subject's marking; cited evidence must not be
-    # more restricted than the subject can hold
+    # The transition keeps its subject's marking, so cited evidence has to fit
+    # under it.
     _guard_reference_floor(projection, _record_marking(subject), tuple(evidence_refs))
     workflow = MissionWorkflow(ctx.store)
-    # the transition inherits its subject's marking — it can never be less
-    # restricted than the requirement/task it moves
     return workflow.transition(
         subject_kind, subject_id, to_status, actor_id=ctx.actor,
         actor_kind=ctx.actor_kind, evidence_refs=evidence_refs, note=note,
         recorded_time=ctx.now_fn(), marking=_record_marking(subject))
 
 
-# ---- review ------------------------------------------------------------------
+# ---- review ----
 
 def resolve_review_item(ctx: CommandContext, item_id: str, *,
                         expected_version: int, status: str, note: str) -> dict:
-    """Disposition a contradiction/stale-basis/processing review item.
-    DISMISSED keeps the item and its note in history — dismissal never erases
-    the contradiction."""
+    """Close a review item. DISMISSED keeps the item and its note in the log:
+    dismissing a contradiction never erases it."""
     if ctx.actor_kind != "HUMAN":
         raise PermissionError("review disposition is a human act")
     if status not in ("RESOLVED", "DISMISSED"):
@@ -426,7 +398,7 @@ def resolve_review_item(ctx: CommandContext, item_id: str, *,
         subject_id=raw["subject_id"], detail=raw["detail"],
         evidence_refs=tuple(raw["evidence_refs"]), status=status,
         resolution_note=note, recorded_time=ctx.now_fn(),
-        # a disposition never re-classifies the item it dispositions
+        # Closing an item never re-marks it.
         marking=marking_from_record(raw["marking"]),
         version=raw["version"] + 1)
     try:
@@ -443,7 +415,7 @@ def resolve_model_proposal(ctx: CommandContext, proposal_id: str, *,
     latest = ctx.store.latest_by_id("analytical_proposal", "proposal_id").get(proposal_id)
     if latest is None or not can_view(latest.get("marking"), ctx.context):
         raise NotFound(f"unknown analytical proposal: {proposal_id}")
-    # the resolution and every companion record inherit the proposal's marking
+    # The resolution and its companion records carry the proposal's marking.
     return resolve_candidate(ctx.analytic(_record_marking(latest)), proposal_id,
                              accept=accept, actor_id=ctx.actor,
                              actor_kind=ctx.actor_kind, note=note)
@@ -453,12 +425,9 @@ def request_model_proposal(ctx: CommandContext, *, task: str, target_kind: str,
                            input_refs: tuple[str, ...]) -> dict:
     """Ask the configured provider for one analytical candidate.
 
-    The analyst chooses the evidence; the provider sees only records this
-    actor can already view, so a proposal request can never be used to read
-    around the access lattice. A record the actor cannot see is reported as
-    unknown, exactly as elsewhere — visibility must not be an existence
-    oracle. The provider's answer becomes a PROPOSED candidate that only a
-    human can accept; this command grants no authority beyond asking.
+    The analyst chooses the evidence, and the provider only ever sees records
+    this actor could already read, so asking cannot be used to read around
+    access. The answer comes back as a proposal that only a human can accept.
     """
     assist = assist_from_environment()
     if assist is None or not assist.available():
@@ -488,23 +457,19 @@ def request_model_proposal(ctx: CommandContext, *, task: str, target_kind: str,
 
 def decide_recommendation(ctx: CommandContext, recommendation_id: str, *,
                           state: str, rationale: str) -> dict:
-    # visibility gate: a recommendation the actor cannot see is neither
-    # decidable nor an existence oracle (unknown and forbidden are identical)
-    recommendation = None
-    for record in ctx.store.records_of("recommendation"):
-        if record["recommendation_id"] == recommendation_id:
-            recommendation = record
+    # A recommendation the actor cannot see is simply unknown.
+    recommendation = ctx.store.latest_by_id(
+        "recommendation", "recommendation_id").get(recommendation_id)
     if recommendation is None or not can_view(recommendation.get("marking"), ctx.context):
         raise NotFound(f"unknown recommendation: {recommendation_id}")
     _validate_inbound(ctx.projection(), texts=(rationale,))
     engine = WorkflowEngine(ctx.store)
-    # the decision inherits the recommendation's marking
     return engine.decide(recommendation_id, context=ctx.context, state=state,
                          rationale=rationale, recorded_time=ctx.now_fn(),
                          marking=_record_marking(recommendation))
 
 
-# ---- hypotheses --------------------------------------------------------------
+# ---- hypotheses ----
 
 def create_hypothesis(ctx: CommandContext, *, statement: str, case_id: str,
                       assumptions: tuple[str, ...] = (),
@@ -520,12 +485,10 @@ def create_hypothesis(ctx: CommandContext, *, statement: str, case_id: str,
 
 def assess_hypothesis(ctx: CommandContext, hypothesis_id: str, *,
                       expected_version: int, status: str, rationale: str) -> dict:
-    """A recorded analyst assessment: re-appends the hypothesis with the
-    assessed status and an attributable history entry. Disagreement from
-    another analyst is dissent (an annotation), never an overwrite."""
+    """Record an analyst's assessment as a new version of the hypothesis.
+    An analyst who disagrees files dissent instead of overwriting this."""
     if ctx.actor_kind != "HUMAN":
         raise PermissionError("hypothesis assessment is a human act")
-    from curunir_semantic.contracts import HYPOTHESIS_STATUSES, HypothesisRecord
     if status not in HYPOTHESIS_STATUSES:
         raise CommandError(f"invalid hypothesis status: {status}")
     if not rationale.strip():
@@ -562,7 +525,7 @@ def assess_hypothesis(ctx: CommandContext, hypothesis_id: str, *,
     return event["record"]
 
 
-# ---- forecasts ---------------------------------------------------------------
+# ---- forecasts ----
 
 def author_forecast(ctx: CommandContext, *, question: str, outcome_semantics: str,
                     horizon_time: str, probability: float, probability_basis: str,
@@ -570,8 +533,8 @@ def author_forecast(ctx: CommandContext, *, question: str, outcome_semantics: st
                     resolution: Mapping[str, Any], domain: str,
                     assumption_ids: tuple[str, ...] = (),
                     compartments: tuple[str, ...] = ()) -> dict:
-    """An authored probability: the workbench offers no machine-derived
-    numbers and no recalculation. Provenance is the human analyst."""
+    """A probability a person states; the workbench derives none and
+    recalculates none."""
     if ctx.actor_kind != "HUMAN":
         raise PermissionError("a forecast probability is authored by a human "
                               "(or enters as a gated model candidate, not here)")
@@ -579,7 +542,7 @@ def author_forecast(ctx: CommandContext, *, question: str, outcome_semantics: st
     forecast_refs = assumption_ids + tuple(r[1] for r in proposition_refs)
     _validate_inbound(projection, refs=forecast_refs,
                       texts=(question, outcome_semantics, probability_basis))
-    # a forecast citing compartmented assumptions/propositions is compartmented
+    # A forecast is at least as restricted as what it cites.
     forecast_marking = _reference_marking(ctx, projection, refs=forecast_refs,
                                           compartments=compartments)
     rule = resolution if isinstance(resolution, ResolutionRule) else ResolutionRule(
@@ -611,8 +574,8 @@ def move_forecast(ctx: CommandContext, forecast_id: str, *, expected_version: in
     if current["version"] != expected_version:
         raise Conflict(f"forecast is at version {current['version']}, "
                        f"you saw {expected_version}")
-    # the movement and its recorded transition inherit the forecast's marking;
-    # cited evidence must not be more restricted than the forecast can hold
+    # The movement keeps the forecast's marking, so cited evidence has to fit
+    # under it.
     forecast_marking = _record_marking(ctx.store.current_forecasts()[forecast_id])
     _guard_reference_floor(projection, forecast_marking, tuple(evidence_refs))
     try:
@@ -646,16 +609,15 @@ def resolve_forecast(ctx: CommandContext, forecast_id: str, *, outcome: str,
 
 def link_hypothesis_claim(ctx: CommandContext, hypothesis_id: str, *,
                           claim_id: str, stance: str, rationale: str) -> dict:
-    from curunir_semantic.hypotheses import link_claim
     projection = ctx.projection()
     if projection.get("hypothesis", hypothesis_id) is None:
         raise NotFound(f"unknown hypothesis: {hypothesis_id}")
     if projection.get("semantic_claim", claim_id) is None:
         raise NotFound(f"unknown claim: {claim_id}")
     _validate_inbound(projection, texts=(rationale,))
-    # the hypothesis keeps its own marking (a re-append never re-classifies),
-    # so it must not take on a claim more restricted than it can hold — that
-    # claim id and the rationale about it would sit under-classified
+    # The hypothesis keeps its own marking, so it cannot take on a claim above
+    # that; the claim id and the rationale about it would end up
+    # under-classified.
     hyp_marking = _record_marking(ctx.store.current_hypotheses()[hypothesis_id])
     _guard_reference_floor(projection, hyp_marking, (claim_id,))
     return link_claim(ctx.store, hypothesis_id, claim_id, stance,
@@ -665,24 +627,21 @@ def link_hypothesis_claim(ctx: CommandContext, hypothesis_id: str, *,
 
 def project_forecast_warning(ctx: CommandContext, forecast_id: str, *,
                              objective_id: str) -> dict:
-    """Project a forecast onto an objective through the canonical warning
-    engine — the tier comes from the named rule, never from the caller."""
-    from curunir_analytic.warning import project_warning
+    """Project a forecast onto an objective; the tier comes from the named rule,
+    never from the caller."""
     projection = ctx.projection()
     if projection.get("analytic_forecast", forecast_id) is None:
         raise NotFound(f"unknown forecast: {forecast_id}")
     if projection.get("mission_objective", objective_id) is None:
         raise NotFound(f"unknown objective: {objective_id}")
-    # a warning discloses its forecast's probability/band/tier — it inherits
-    # the most restrictive of the forecast's and objective's markings so it
-    # can never be less protected than either
+    # A warning reveals its forecast's probability and tier, so it takes
+    # whichever of the two markings is more restrictive.
     forecast_marking = _record_marking(ctx.store.current_forecasts()[forecast_id])
     objective_marking = _record_marking(ctx.store.current_objectives()[objective_id])
     warning_marking = most_restrictive([forecast_marking, objective_marking])
     if not can_view(warning_marking, ctx.context):
-        # the join of a forecast and objective the actor can each view may be
-        # above the actor's own access (split releasability); refuse rather
-        # than strand an un-viewable warning
+        # Two records the actor can each read may combine to something they
+        # cannot; refuse rather than write a warning they could not open.
         raise PermissionError(
             "the warning would be classified above your own access; you "
             "cannot project this forecast onto this objective")
@@ -690,22 +649,19 @@ def project_forecast_warning(ctx: CommandContext, forecast_id: str, *,
                            objective_id=objective_id)
 
 
-# ---- collection --------------------------------------------------------------
+# ---- collection ----
 
 def launch_route(ctx: CommandContext, route_id: str, *,
                  transports: Mapping[str, Any] | None = None) -> dict:
-    """Execute one automatable EIV-ranked collection route through the OSINT
-    fabric — acquisition, custody, semantic understanding, hypothesis and
-    analytic refresh — exactly the canonical path, no research script."""
+    """Run one collection route through the fabric: acquire, take custody,
+    understand, and refresh the hypotheses and analytics that follow."""
     projection = ctx.projection()
     if projection.get("collection_route", route_id) is None:
         raise NotFound(f"unknown collection route: {route_id}")
     route = ctx.store.latest_by_id("collection_route", "route_id")[route_id]
-    # every record this launch writes — the route re-append, the discriminator
-    # update, review items, AND the acquired evidence — inherits the route's
-    # marking. A compartmented tasking never lands PUBLIC records; open-source
-    # evidence acquired in service of it is over-classified to the route's
-    # marking (the safe direction), never under-classified.
+    # Everything this launch writes, the acquired evidence included, carries the
+    # route's marking. A restricted tasking must not produce public records, so
+    # open evidence ends up over-classified rather than under.
     pipeline = ctx.pipeline(_record_marking(route))
     registry = load_registry(ctx.store)
     return execute_route(pipeline, registry, route, transports=transports)
@@ -721,24 +677,21 @@ def assign_route(ctx: CommandContext, route_id: str, *, assigned_actor: str) -> 
                               marking=_record_marking(route))
 
 
-# ---- watches -----------------------------------------------------------------
+# ---- watches ----
 
 def create_watch(ctx: CommandContext, *, need_id: str, target_kind: str,
                  target_ref: str, source_id: str, operation: str,
                  query_value: str, cadence_seconds: int,
                  blind_spots: tuple[str, ...] = (),
                  compartments: tuple[str, ...] = ()) -> dict:
-    from curunir_fabric.contracts import WatchDefinition
-    # need_id is a loose association (a fabric need id or absent); target_ref
-    # and query_value are EXTERNAL identifiers (an LEI, a URL, a phrase), not
-    # internal record ids — none is strict-validated. Only the free-text
-    # blind-spot notes and REDACTED/hidden leakage are checked.
+    # need_id, target_ref and query_value usually name things outside the store
+    # — an LEI, a URL, a phrase — so they need not resolve. Only leaked hidden
+    # ids and the free-text notes are checked.
     projection = ctx.projection()
     _soft_reject(projection, (need_id, target_ref, query_value))
     _validate_inbound(projection, texts=tuple(blind_spots))
-    # target_ref/query_value are external identifiers, but if either resolves
-    # to a visible internal record (a watch ON a compartmented object), the
-    # watch — its cadence, target and run history — inherits that marking
+    # If one of them does name a record here, the watch inherits its marking:
+    # the target, cadence and run history all describe that record.
     write_marking = _reference_marking(ctx, projection,
                                        refs=(need_id, target_ref, query_value),
                                        compartments=compartments)
@@ -747,8 +700,8 @@ def create_watch(ctx: CommandContext, *, need_id: str, target_kind: str,
     raw = ctx.store.latest_by_id("fabric_watch", "watch_id").get(watch_id)
     if raw is not None:
         if not can_view(raw.get("marking"), ctx.context):
-            # collision with a watch outside the caller's access: refuse
-            # without echoing the id or confirming what exists
+            # A watch with this id exists outside the caller's access; refuse
+            # without confirming it.
             raise PermissionError("cannot create this watch in your context")
         raise Conflict(f"watch {watch_id} already exists; change its state "
                        "through pause/resume, never by re-creation")
@@ -764,13 +717,12 @@ def create_watch(ctx: CommandContext, *, need_id: str, target_kind: str,
 
 def set_watch_active(ctx: CommandContext, watch_id: str, *, active: bool,
                      expected_active: bool | None = None) -> dict:
-    """Pause/resume by re-appending the definition; the scheduler (fabric
-    tick) reads the latest state — the workbench never bypasses it. The
-    caller states the state it believes it is changing FROM; a concurrent
-    change surfaces as a conflict instead of silent last-write-wins.
-    Authorship, creation time and marking are preserved — the act itself is
-    attributed through the event log."""
-    from curunir_fabric.contracts import WatchDefinition
+    """Pause or resume a watch by re-appending its definition, which is what the
+    scheduler reads.
+
+    The caller says which state it believes it is changing from, so a concurrent
+    change becomes a conflict rather than a silent overwrite. Author, creation
+    time and marking are kept; the event log attributes the act."""
     projection = ctx.projection()
     if projection.get("fabric_watch", watch_id) is None:
         raise NotFound(f"unknown watch: {watch_id}")
@@ -793,24 +745,20 @@ def set_watch_active(ctx: CommandContext, watch_id: str, *, active: bool,
 def save_view(ctx: CommandContext, *, title: str, view_kind: str,
               definition: Mapping[str, Any],
               compartments: tuple[str, ...] = ()) -> dict:
-    """Persist an investigation layout (filters/focus/window). Presentation
-    state only — never analytical truth."""
-    import json as _json
-    from .contracts import SavedViewRecord
+    """Save a layout of filters and focus; presentation only, never truth."""
     ctx.require_visible_marking()
     validate_interchange(definition)
     projection = ctx.projection()
     _validate_inbound(projection,
-                      texts=(title, _json.dumps(definition, default=str)))
+                      texts=(title, json.dumps(definition, default=str)))
     now = ctx.now_fn()
     view_id = digest_id("savedview", ctx.actor, view_kind, title)
     existing = ctx.store.latest_by_id("workbench_saved_view", "view_id").get(view_id)
-    # a saved view whose focus/filters name compartmented objects is
-    # compartmented (its definition embeds those ids)
+    # A view is at least as restricted as the records its definition names.
     definition_refs = _definition_refs(definition)
     if existing is not None:
-        # a re-save keeps the view's original marking; it must not now embed a
-        # reference more restricted than that marking can hold
+        # A re-save keeps the original marking, so it cannot take in anything
+        # above that.
         view_marking = marking_from_record(existing["marking"])
         _guard_reference_floor(projection, view_marking, definition_refs)
     else:
@@ -829,7 +777,7 @@ def save_view(ctx: CommandContext, *, title: str, view_kind: str,
     return event["record"]
 
 
-# ---- reports -----------------------------------------------------------------
+# ---- reports ----
 
 def _section_refs(sections: list[Mapping[str, Any]]) -> tuple:
     refs: list[str] = []
@@ -854,7 +802,7 @@ def _validate_sections(projection: MissionProjection,
 
 
 def _validate_section_shapes(sections: Any) -> None:
-    """Validate the free-form report carrier before domain construction."""
+    """Check the shape of incoming sections before building records from them."""
     if not isinstance(sections, list):
         raise ValueError("sections must be a list")
     for section in sections:
@@ -892,7 +840,7 @@ def create_report(ctx: CommandContext, *, title: str, question: str,
     projection = ctx.projection()
     _validate_inbound(projection, texts=(title, question))
     _validate_sections(projection, sections)
-    # a report that cites compartmented basis is itself compartmented
+    # A report is at least as restricted as everything it cites.
     write_marking = _reference_marking(ctx, projection,
                                        refs=_section_refs(sections),
                                        compartments=compartments)
@@ -912,9 +860,9 @@ def edit_report(ctx: CommandContext, report_id: str, *, expected_version: int,
         raise NotFound(f"unknown report: {report_id}")
     _validate_inbound(projection, texts=tuple(t for t in (title, question, change_note) if t))
     _validate_sections(projection, sections)
-    # an edit re-append preserves the report's own marking (never re-classifies),
-    # so it must not introduce a reference MORE restricted than the report can
-    # hold — that prose would sit in an under-classified record. Refuse it.
+    # An edit keeps the report's own marking, so it must not bring in a
+    # reference above that; the prose around it would sit in an
+    # under-classified record.
     report_marking = _record_marking(current)
     ref_marking = _reference_marking(ctx, projection, refs=_section_refs(sections))
     if most_restrictive([report_marking, ref_marking]).to_record() != report_marking.to_record():

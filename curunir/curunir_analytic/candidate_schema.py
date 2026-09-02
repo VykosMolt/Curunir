@@ -1,24 +1,11 @@
-"""Structured-output schemas for model-proposed analytical candidates.
+"""JSON Schemas for model-proposed analytical candidates.
 
-One source of truth. ``substrate.CANDIDATE_BINDING_KEYS`` already declares, per
-analytical kind, the fields a candidate must bind before ``record_candidate``
-will accept it, and ``contracts`` already declares the closed vocabularies those
-fields draw from. This module turns both into a JSON Schema, so the shape a
-provider is *constrained* to emit is generated from the shape the human review
-path *enforces* — they cannot drift apart, because there is only one of them.
-
-Two properties this buys:
-
-* A candidate missing a binding field is close to unproducible, and
-  ``record_candidate`` still refuses it if a provider emits one anyway.
-* A candidate may only cite identifiers it was shown. ``unresolvable_ids``
-  checks emitted identifiers against the ids present in the request payload;
-  the backends treat a violation as a provider error, so a hallucinated claim
-  id is retained as an INVALID inference rather than becoming a plausible
-  proposal a human has to catch by eye.
-
-Kinds whose binding fields are machine-computed are refused here rather than
-misrepresented — see ``NOT_MODEL_PROPOSABLE``.
+The shape a provider is constrained to emit is generated from the shape the
+human review path enforces — `substrate.CANDIDATE_BINDING_KEYS` and the closed
+vocabularies in `contracts` — so the two cannot drift apart. `unresolvable_ids`
+additionally checks that a candidate cites only identifiers the request showed
+it. Kinds whose binding fields are machine-computed are refused here rather
+than misrepresented; see `NOT_MODEL_PROPOSABLE`.
 """
 from __future__ import annotations
 
@@ -29,10 +16,8 @@ from .contracts import (INDICATOR_KINDS, INFLUENCE_KINDS,
                         STAKEHOLDER_CONTEXT_KINDS, VARIANT_RELATIONS)
 from .substrate import CANDIDATE_BINDING_KEYS
 
-# `impact_path` binds `edge_chain`, which is impact.edge_chain_fingerprint():
-# an ordered digest over each edge's content. A language model cannot compute
-# it, and inviting one to emit the field would invite a fabricated digest that
-# binds a human's acceptance to nothing. The path stays machine-built.
+# Kinds a model may not propose, and why. A proposed digest would bind a
+# human's acceptance to a value the proposer invented.
 NOT_MODEL_PROPOSABLE: Mapping[str, str] = {
     "impact_path": ("binds `edge_chain`, a machine-computed fingerprint over the "
                     "causal chain; a proposed digest would bind acceptance to a "
@@ -46,11 +31,14 @@ _IDS = {"type": "array", "items": {"type": "string", "minLength": 1},
 def _enum(values: Iterable[str]) -> dict[str, Any]:
     return {"type": "string", "enum": list(values)}
 
-# Field shapes, keyed by (kind, field) where a kind narrows it, else by field.
+# Field shapes by field name; _KIND_FIELD_SHAPES narrows them per kind.
 _FIELD_SHAPES: Mapping[str, Any] = {
     "supporting_claim_ids": _IDS, "claim_ids": _IDS, "forecast_ids": _IDS,
     "claims": _IDS,
-    "probability": {"type": "number", "minimum": 0.0, "maximum": 1.0},
+    # strictly inside (0,1): the contract rejects certainty, so the emitted
+    # shape must reject it too
+    "probability": {"type": "number", "exclusiveMinimum": 0.0,
+                    "exclusiveMaximum": 1.0},
     "horizon_time": {"type": "string",
                      "description": "RFC3339 timestamp with an explicit UTC offset"},
 }
@@ -63,6 +51,10 @@ _KIND_FIELD_SHAPES: Mapping[tuple[str, str], Any] = {
 
 # Fields that name an existing record rather than carrying free text.
 _ID_FIELD = re.compile(r"(^|_)(id|ids)$")
+
+
+def _is_id_key(key: str) -> bool:
+    return bool(_ID_FIELD.search(key)) or key == "claims"
 
 
 def proposable_kinds() -> tuple[str, ...]:
@@ -95,8 +87,8 @@ def candidate_schema(target_kind: str) -> dict[str, Any]:
         "type": "object",
         "properties": {key: field_shape(target_kind, key) for key in keys},
         "required": list(keys),
-        # A provider may not invent fields. The human reviews exactly the
-        # binding content; anything else would be unreviewed cargo.
+        # The human reviews exactly the binding content, so extra fields
+        # would arrive unreviewed.
         "additionalProperties": False,
     }
 
@@ -104,26 +96,29 @@ def candidate_schema(target_kind: str) -> dict[str, Any]:
 def id_fields(target_kind: str) -> tuple[str, ...]:
     """Binding fields of this kind that name existing records."""
     return tuple(k for k in CANDIDATE_BINDING_KEYS.get(target_kind, ())
-                 if _ID_FIELD.search(k) or k == "claims")
+                 if _is_id_key(k))
 
 
 def available_ids(payload: Any, *, _depth: int = 0) -> frozenset[str]:
     """Every identifier-shaped string reachable in a request payload.
 
     This is what the provider was shown, and therefore the only thing it is
-    allowed to cite back. Collected structurally rather than by field name so a
-    record nested anywhere in the payload still counts as shown.
+    allowed to cite back. A string only counts when it sits under an
+    identifier-shaped key, directly or as an element of that key's list; free
+    text the payload happened to carry is not an identifier the provider may
+    cite. The search is structural, so a record nested anywhere still counts.
     """
     if _depth > 64:
         return frozenset()
     found: set[str] = set()
-    if isinstance(payload, str):
-        if payload:
-            found.add(payload)
-    elif isinstance(payload, Mapping):
+    if isinstance(payload, Mapping):
         for key, value in payload.items():
-            if isinstance(key, str) and _ID_FIELD.search(key) and isinstance(value, str):
-                found.add(value)
+            if isinstance(key, str) and _is_id_key(key):
+                if isinstance(value, str):
+                    if value:
+                        found.add(value)
+                elif isinstance(value, (list, tuple)):
+                    found |= {v for v in value if isinstance(v, str) and v}
             found |= available_ids(value, _depth=_depth + 1)
     elif isinstance(payload, (list, tuple)):
         for item in payload:

@@ -1,7 +1,6 @@
-"""Forecast-plane integration locks: one semantic change drives indicator →
-pre-authorized update → warning escalation → alert through the normal
-propagation pass; uncertainty becomes collection through the existing
-machinery; everything replays; interrupted creation completes."""
+"""The forecast plane end to end: one change in the evidence fires an indicator,
+moves the forecast, escalates the warning and raises an alert; open questions
+turn into collection needs; the whole plane replays from the log."""
 from __future__ import annotations
 
 import pytest
@@ -18,8 +17,7 @@ from curunir_analytic.store import AnalyticStore
 from curunir_analytic.warning import project_warning
 from curunir_semantic.worldmodel import world_object_id
 
-from analytic_support import (GLEIF_ACME, GLEIF_ACME_SUSPENDED, MARK, T0,
-                              make_analytic)
+from analytic_support import GLEIF_ACME_SUSPENDED, make_analytic, seed_acme
 from semantic_support import plant_manifestation
 
 pytestmark = pytest.mark.no_db
@@ -27,16 +25,6 @@ pytestmark = pytest.mark.no_db
 HORIZON = "2026-08-17T18:00:00+00:00"
 ACME = "LEI:ACMELEI000000000001"
 ACME_OBJECT = world_object_id(ACME)
-
-
-def _seed(pipeline, ctx):
-    plant_manifestation(pipeline, source_id="gleif",
-                        native_id="lei/ACMELEI000000000001",
-                        body=GLEIF_ACME, media_type="application/json",
-                        retrieval_time=T0)
-    pipeline.process_new_evidence()
-    return {c["predicate"]: c["claim_id"] for c in ctx.store.current_claims().values()
-            if c["subject_ref"] == ACME}
 
 
 def _forecast(ctx, by_predicate, probability=0.35, expected="INACTIVE",
@@ -59,8 +47,7 @@ def _forecast(ctx, by_predicate, probability=0.35, expected="INACTIVE",
 
 
 def _stand_up_the_plane(pipeline, ctx, by_predicate):
-    """Objective + impact path + forecast + pre-authorized indicator +
-    warning: the full chain, armed and quiet."""
+    """Build the whole chain — objective, path, forecast, indicator, warning."""
     objective = create_objective(
         ctx, mission_context="m1",
         statement="Maintain visibility of Acme's legal standing",
@@ -89,41 +76,38 @@ def _stand_up_the_plane(pipeline, ctx, by_predicate):
                                authorized_by="jan", authorized_kind="HUMAN"))
     warning = project_warning(ctx, forecast_id=forecast["forecast_id"],
                               objective_id=objective["objective_id"])
-    assert warning["tier"] == "ATTENTION"  # HIGH x POSSIBLE, NEAR horizon
+    assert warning["tier"] == "ATTENTION"  # a HIGH objective at a near horizon
     return objective, forecast, indicator, warning
 
 
 def test_one_evidence_change_drives_the_whole_chain(tmp_path):
     pipeline, ctx = make_analytic(tmp_path)
-    by_predicate = _seed(pipeline, ctx)
+    by_predicate = seed_acme(pipeline, ctx)
     objective, forecast, indicator, warning = _stand_up_the_plane(
         pipeline, ctx, by_predicate)
-    # quiet pass first: nothing pending appends nothing
     propagate_semantic_changes(ctx)
     quiet = ctx.store.head()["event_count"]
     propagate_semantic_changes(ctx)
     assert ctx.store.head()["event_count"] == quiet, \
         "a quiet propagation pass appends nothing"
-    # the world changes once
+    # The world changes once; everything below follows from that.
     plant_manifestation(pipeline, source_id="gleif",
                         native_id="lei/ACMELEI000000000001",
                         body=GLEIF_ACME_SUSPENDED, media_type="application/json",
                         retrieval_time=ctx.now_fn())
     pipeline.process_new_evidence()
     outcomes = propagate_semantic_changes(ctx)
-    # indicator fired and executed the analyst's recorded judgment
     assert ctx.store.current_indicators()[indicator["indicator_id"]]["status"] \
         == "FIRED"
     moved = ctx.store.current_forecasts()[forecast["forecast_id"]]
     assert moved["probability"] == 0.62, "exactly the pre-authorized target"
-    # the warning escalated through the named rule, with an alert
     escalated = ctx.store.current_warnings()[warning["warning_id"]]
     assert escalated["tier"] == "PRIORITY"
     assert escalated["status"] == "ESCALATED"
     plane = next(o for o in outcomes if o["changeset"] == "forecast-plane")
     assert ("strategic_warning", "ESCALATED") in plane["transitions"]
     assert plane["alerts"], "an escalation reaches the mission workflow"
-    # the whole cascade is idempotent
+    # Running the cascade again must add nothing.
     after = ctx.store.head()["event_count"]
     propagate_semantic_changes(ctx)
     assert ctx.store.head()["event_count"] == after
@@ -131,8 +115,8 @@ def test_one_evidence_change_drives_the_whole_chain(tmp_path):
 
 def test_forecast_uncertainty_becomes_collection(tmp_path):
     pipeline, ctx = make_analytic(tmp_path)
-    by_predicate = _seed(pipeline, ctx)
-    # a single-family forecast wants independent corroboration
+    by_predicate = seed_acme(pipeline, ctx)
+    # One source family only, so the forecast asks for independent support.
     forecast = _forecast(ctx, by_predicate, probability=0.35,
                          horizon="2026-09-10T12:00:00+00:00")
     needs = analytic_collection_needs(ctx.store)
@@ -140,7 +124,7 @@ def test_forecast_uncertainty_becomes_collection(tmp_path):
                       if n["source_id"] == forecast["forecast_id"]]
     assert forecast_needs and forecast_needs[0]["independence_required"]
     assert forecast_needs[0]["desired_attribute"] == "entity_status"
-    # a coverage-blocked resolution asks for exactly the declared sources
+    # A resolution blocked on coverage asks for exactly the declared sources.
     blocked = _forecast(ctx, by_predicate, probability=0.20,
                         expected="NEVER_SO", horizon="2026-08-17T12:04:00+00:00")
     refresh_forecast(ctx, blocked["forecast_id"], caused_by="tick")
@@ -148,7 +132,7 @@ def test_forecast_uncertainty_becomes_collection(tmp_path):
     coverage_needs = [n for n in needs if n["source_id"] == blocked["forecast_id"]
                       and "coverage-blocked" in n["question"]]
     assert coverage_needs and "gleif" in coverage_needs[0]["question"]
-    # an armed absence indicator asks for its coverage before the deadline
+    # An absence indicator asks someone to look before its deadline.
     indicator = arm_indicator(
         ctx, description=f"no INACTIVE status appears for {ACME}",
         forecast_ids=(forecast["forecast_id"],),
@@ -162,7 +146,6 @@ def test_forecast_uncertainty_becomes_collection(tmp_path):
     indicator_needs = [n for n in needs
                        if n["source_id"] == indicator["indicator_id"]]
     assert indicator_needs and "someone looked" in indicator_needs[0]["question"]
-    # the needs open real discriminators and requirements, idempotently
     opened = open_analytic_requirements(ctx, mission_context="m1")
     assert opened
     before = ctx.store.head()["event_count"]
@@ -174,7 +157,7 @@ def test_forecast_uncertainty_becomes_collection(tmp_path):
 def test_forecast_plane_replays_without_network(tmp_path, monkeypatch):
     import socket
     pipeline, ctx = make_analytic(tmp_path)
-    by_predicate = _seed(pipeline, ctx)
+    by_predicate = seed_acme(pipeline, ctx)
     _stand_up_the_plane(pipeline, ctx, by_predicate)
     plant_manifestation(pipeline, source_id="gleif",
                         native_id="lei/ACMELEI000000000001",
@@ -205,7 +188,7 @@ def test_forecast_plane_replays_without_network(tmp_path, monkeypatch):
 
 def test_interrupted_forecast_creation_completes_on_rerun(tmp_path):
     pipeline, ctx = make_analytic(tmp_path)
-    by_predicate = _seed(pipeline, ctx)
+    by_predicate = seed_acme(pipeline, ctx)
 
     real_append = ctx.store.append
 
@@ -225,7 +208,6 @@ def test_interrupted_forecast_creation_completes_on_rerun(tmp_path):
     assert completed["version"] == 1, "no duplicate version from completion"
     assert [t["transition_type"]
             for t in ctx.store.transitions_for(forecast_id)] == ["CREATED"]
-    # and a third run changes nothing
     _forecast(ctx, by_predicate, probability=0.35)
     assert len(ctx.store.analytic_versions("analytic_forecast",
                                            forecast_id)) == 1

@@ -1,5 +1,5 @@
-"""Projection: current vs as-of state, late data, freshness, access filtering
-without leakage, changes-since, explanations."""
+"""Projection: current versus as-of state, late arrivals, freshness, per-context
+filtering, changes since a point, and explanations."""
 from __future__ import annotations
 
 import json
@@ -19,7 +19,7 @@ pytestmark = pytest.mark.no_db
 PROV = ProvenanceSummary(mode="OPERATIONAL", source_ids=("src-logsys",), ingestion_ids=("ing-1",),
                          transformation_ids=("tf-1",))
 
-SECRET_LABEL = "Kestrel Array"  # restricted object label; must never leak into low views
+SECRET_LABEL = "Kestrel Array"  # a restricted label; it must never reach a low view
 
 
 def build_store(tmp_path):
@@ -40,10 +40,10 @@ def build_store(tmp_path):
 
     store.append("OBJECT_VERSION_APPENDED", version("stock-fuel", 1, 0.0, "1200l"), recorded_time=t(0), actor="pipe")
     store.append("OBJECT_VERSION_APPENDED", version("stock-fuel", 2, 6.0, "900l"), recorded_time=t(6), actor="pipe")
-    # late arrival: older validity recorded later — must not displace current state
+    # A late arrival: older validity, recorded later. It must not become current.
     store.append("OBJECT_VERSION_APPENDED", version("stock-fuel", 3, 3.0, "1000l", recorded_time=t(8)),
                  recorded_time=t(8), actor="pipe")
-    # correction of the 900l report (same validity, higher version)
+    # A correction of the 900l report: same validity, higher version.
     store.append("OBJECT_VERSION_APPENDED",
                  version("stock-fuel", 4, 6.0, "950l", recorded_time=t(9), epistemic_state="CORRECTED",
                          correction_of="stock-fuel@v2", correction_reason="clerical unit error"),
@@ -72,7 +72,7 @@ def test_current_state_late_data_and_correction(tmp_path):
 
 def test_as_of_recorded_time(tmp_path):
     store = build_store(tmp_path)
-    seq_after_two = 3  # source + v1 + v2
+    seq_after_two = 3  # the source record plus two object versions
     projection = Projection(store, as_of_seq=seq_after_two, snapshot_time=t(6))
     assert projection.objects["stock-fuel"]["current"]["version"] == 2
     assert projection.objects["stock-fuel"]["current"]["attributes"]["status"] == "900l"
@@ -95,11 +95,11 @@ def test_access_views_differ_without_leakage(tmp_path):
     high_ids = {o["object_id"] for o in high["objects"]}
     low_ids = {o["object_id"] for o in low["objects"]}
     assert "obs-kestrel" in high_ids and "obs-kestrel" not in low_ids
-    assert low["counts"]["objects_total"] == len(low["objects"])  # counts from filtered set only
+    assert low["counts"]["objects_total"] == len(low["objects"])
     assert high["counts"]["objects_total"] == low["counts"]["objects_total"] + 1
     low_json = canonical_line(low)
     assert "obs-kestrel" not in low_json and SECRET_LABEL not in low_json
-    assert not low["relationships"]  # hidden endpoint removes the relationship entirely
+    assert not low["relationships"]  # one hidden endpoint drops the whole relationship
     assert any(r["source_object_id"] == "obs-kestrel" for r in high["relationships"])
     assert projection_hash(high) != projection_hash(low)
 
@@ -135,5 +135,5 @@ def test_explain_and_markdown(tmp_path):
     assert "corrects stock-fuel@v2" in markdown and "LOGSYS" in markdown
     hidden = explain(projection, "obs-kestrel", LOW_CONTEXT)
     missing = explain(projection, "no-such-record", LOW_CONTEXT)
-    assert hidden == missing  # forbidden and unknown are indistinguishable
+    assert hidden == missing
     assert explain(projection, "obs-kestrel", HIGH_CONTEXT)["status"] == "AVAILABLE"

@@ -1,7 +1,7 @@
-"""Round-3 forecasting-review exploit locks: the consumption marker binds to
-the act that earned it, post-hoc forecasts cannot pose as calibration, the
-late-match item dies with its forecast, and short subject values cannot
-attribute the world's searches to one question."""
+"""Four ways a forecast could be gamed, and the refusals that close them: an
+indicator's authorization cannot be spent by a human update, a forecast written
+after its horizon scores nothing, a settled question leaves no review item, and
+a short identifier cannot claim unrelated searches."""
 from __future__ import annotations
 
 import pytest
@@ -16,24 +16,13 @@ from curunir_analytic.forecasts import (create_forecast, refresh_forecast,
                                         _subject_match_values)
 from curunir_analytic.indicators import arm_indicator, check_indicators
 
-from analytic_support import (GLEIF_ACME, GLEIF_ACME_SUSPENDED, MARK, T0,
-                              make_analytic)
+from analytic_support import GLEIF_ACME_SUSPENDED, make_analytic, seed_acme
 from semantic_support import plant_manifestation
 
 pytestmark = pytest.mark.no_db
 
 HORIZON = "2026-08-17T18:00:00+00:00"
 ACME = "LEI:ACMELEI000000000001"
-
-
-def _seed(pipeline, ctx):
-    plant_manifestation(pipeline, source_id="gleif",
-                        native_id="lei/ACMELEI000000000001",
-                        body=GLEIF_ACME, media_type="application/json",
-                        retrieval_time=T0)
-    pipeline.process_new_evidence()
-    return {c["predicate"]: c["claim_id"] for c in ctx.store.current_claims().values()
-            if c["subject_ref"] == ACME}
 
 
 def _rule(expected="INACTIVE"):
@@ -66,15 +55,13 @@ def _flip_to_suspended(pipeline, ctx):
     pipeline.process_new_evidence()
 
 
-# ---- R3-1: the marker binds to the act, not to a parameter -----------------
+# ---- an authorization belongs to the act that earned it --------------------
 
 
 def test_human_update_cannot_carry_an_indicator_id(tmp_path):
-    """The round-3 MAJOR: a human update carrying an indicator id burned the
-    consumption marker without a single indicator check, then the genuine
-    firing silently never executed. The confused call is now refused."""
+    """A person's own update may not spend an indicator's authorization."""
     pipeline, ctx = make_analytic(tmp_path)
-    by_predicate = _seed(pipeline, ctx)
+    by_predicate = seed_acme(pipeline, ctx)
     forecast = _forecast(ctx, by_predicate, probability=0.35)
     indicator = arm_indicator(
         ctx, description=f"entity_status for {ACME} reads INACTIVE",
@@ -92,7 +79,7 @@ def test_human_update_cannot_carry_an_indicator_id(tmp_path):
                            reason="my own reading", actor_id="jan",
                            actor_kind="HUMAN",
                            indicator_id=indicator["indicator_id"])
-    # no marker was burned: the genuine firing still executes
+    # Nothing was spent, so the real firing still executes later.
     _flip_to_suspended(pipeline, ctx)
     check_indicators(ctx)
     assert ctx.store.current_forecasts()[
@@ -100,19 +87,19 @@ def test_human_update_cannot_carry_an_indicator_id(tmp_path):
         "the analyst's pre-authorized judgment executes when its trigger fires"
 
 
-# ---- R3-2: a post-hoc 'forecast' is not calibration ------------------------
+# ---- a forecast written after the fact is not calibration ------------------
 
 
 def test_forecast_authored_after_its_horizon_feeds_no_aggregate(tmp_path):
     pipeline, ctx = make_analytic(tmp_path)
-    by_predicate = _seed(pipeline, ctx)
-    # authored at ~12:0x against a horizon already in the past — but one the
-    # seeded evidence (12:00:00) still predates, so machine TRUE is legal
+    by_predicate = seed_acme(pipeline, ctx)
+    # The horizon is already past, but the seeded evidence is older still, so
+    # the machine may legitimately resolve it TRUE.
     post_hoc = _forecast(ctx, by_predicate, probability=0.97,
                          expected="ACTIVE", tag="posthoc",
                          horizon="2026-08-17T12:00:30+00:00")
     resolved = try_machine_resolution(ctx, post_hoc["forecast_id"])
-    assert resolved["status"] == "RESOLVED_TRUE"  # evidence predates horizon
+    assert resolved["status"] == "RESOLVED_TRUE"  # the evidence is older
     board = scoreboard(ctx.store)
     row = next(r for r in board["rows"]
                if r["forecast_id"] == post_hoc["forecast_id"])
@@ -124,12 +111,12 @@ def test_forecast_authored_after_its_horizon_feeds_no_aggregate(tmp_path):
     assert board["coverage"]["scored"] == 0
 
 
-# ---- R3-3: the late-match item dies with its forecast ----------------------
+# ---- a settled question leaves nothing in the queue ------------------------
 
 
 def test_latematch_item_closes_when_the_forecast_settles(tmp_path):
     pipeline, ctx = make_analytic(tmp_path)
-    by_predicate = _seed(pipeline, ctx)
+    by_predicate = seed_acme(pipeline, ctx)
     forecast = _forecast(ctx, by_predicate, probability=0.30,
                          horizon="2026-08-17T12:04:00+00:00")
     refresh_forecast(ctx, forecast["forecast_id"], caused_by="tick")
@@ -148,7 +135,7 @@ def test_latematch_item_closes_when_the_forecast_settles(tmp_path):
         "a settled question leaves nothing in the queue"
 
 
-# ---- R3-4: short subject values cannot bind through URLs -------------------
+# ---- a short identifier cannot claim unrelated searches --------------------
 
 
 def test_short_subject_values_do_not_match_urls():
@@ -157,7 +144,7 @@ def test_short_subject_values_do_not_match_urls():
                  "request_url": "https://api.gleif.org/v1/lei-records/ZZZ"}
     assert not _execution_touches_subject(execution, values, {}), \
         "'v1' in every versioned API path attributes nothing"
-    # a real-length identifier still binds — and only when delimited
+    # A full-length identifier still binds, but only on its own.
     long_values = _subject_match_values(("LEI:ACMELEI000000000001",))
     hit = {"query_id": "q-y",
            "request_url": "https://api.gleif.org/api/v1/lei-records/"
@@ -168,6 +155,6 @@ def test_short_subject_values_do_not_match_urls():
     assert _execution_touches_subject(hit, long_values, {})
     assert not _execution_touches_subject(near_miss, long_values, {}), \
         "an identifier embedded in a longer token is a different identifier"
-    # short values can still bind through the exact plan-query join
+    # A short value can still bind through the exact plan-query join.
     assert _execution_touches_subject(
         {"query_id": "q-x", "request_url": ""}, values, {"q-x": "v1"})

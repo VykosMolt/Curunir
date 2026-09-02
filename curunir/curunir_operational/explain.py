@@ -1,10 +1,9 @@
-"""Explanation traversal: what a record is, where it came from, what supports
-and contradicts it, who touched it, and what stays unknown.
+"""What a record is, where it came from, what supports or contradicts it, who
+touched it, and what stays unknown.
 
-Access rule: a record the context cannot view yields the same NOT_AVAILABLE
-answer as a record that does not exist, so explanations cannot be used to
-probe for hidden objects. Provenance walks carry a visited set, so cyclic or
-self-referential lineage cannot recurse forever.
+A hidden record gives the same answer as a missing one, so an explanation
+cannot be used to probe for what the reader may not see. Provenance walks
+carry a visited set, so a cycle cannot recurse forever.
 """
 from __future__ import annotations
 
@@ -96,11 +95,19 @@ def explain(projection: Projection, record_id: str, context: AccessContext) -> d
     explanation["sources"] = _sources_for(projection, provenance, context)
     explanation["transformations"] = _transformations_for(projection, provenance, context, visited)
     explanation["evidence"] = [dict(e) for e in provenance.get("evidence", [])]
-    explanation["dependent_sources"] = [
-        {"group_id": group, "member_object_ids": members}
-        for group, members in projection.dependence_groups.items()
-        if record_id in members or any(e.get("dependence_group_id") == group for e in provenance.get("evidence", []))
-    ]
+    # Same rule as Projection.view: members the context cannot view are dropped,
+    # and a group with fewer than two survivors is not reported at all.
+    visible_ids = {object_id for object_id, entry in projection.objects.items()
+                   if can_view(entry["current"].get("marking"), context)}
+    dependent_sources = []
+    for group, members in projection.dependence_groups.items():
+        if record_id not in members \
+                and not any(e.get("dependence_group_id") == group for e in provenance.get("evidence", [])):
+            continue
+        visible_members = [m for m in members if m in visible_ids]
+        if len(visible_members) >= 2:
+            dependent_sources.append({"group_id": group, "member_object_ids": visible_members})
+    explanation["dependent_sources"] = dependent_sources
     conflicts = []
     for relationship in projection.relationships.values():
         current = relationship["current"]

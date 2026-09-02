@@ -1,22 +1,24 @@
-"""The 25 V2 mission questions, answered from system outputs across scenarios
-B (infrastructure cascade) and C (false corroboration + schema drift)."""
+"""The 25 mission questions for scenarios B and C, answered from system
+outputs."""
 from __future__ import annotations
 
+import pathlib
+import tempfile
 from typing import Any
 
-from curunir_operational.canonical import canonical_line
-from curunir_operational.projection import Projection, projection_hash
+from curunir_operational.projection import projection_hash
 
 from . import v2_config as v2
 
 
 def answer_v2_questions(b: dict[str, Any], c: dict[str, Any]) -> dict[str, Any]:
-    b_store = b["store"]; b_proj = b["projection"]
-    c_store = c["store"]; c_proj = c["projection"]
+    b_store = b["store"]
+    b_proj = b["projection"]
+    c_store = c["store"]
+    c_proj = c["projection"]
     joint = b_proj.view(v2.CONTEXTS["joint"])
     logistics = b_proj.view(v2.CONTEXTS["logistics"])
     civil = b_proj.view(v2.CONTEXTS["civil_protection"])
-    public = b_proj.view(v2.CONTEXTS["public_evidence"])
     cjoint = c_proj.view(v2.CONTEXTS["joint"])
     answers: list[dict[str, Any]] = []
 
@@ -28,8 +30,6 @@ def answer_v2_questions(b: dict[str, Any], c: dict[str, Any]) -> dict[str, Any]:
     add(1, "Which infrastructure objects are affected by the captured hazard data?", True,
         [t for t in hazard_targets if t.startswith("infra-")], "AFFECTS relationships (rule-hazard-impact, scenario B)")
 
-    depends = {r["source_object_id"]: r["target_object_id"] for r in joint["relationships"]
-               if r["relation_type"] == "DEPENDS_ON"}
     affected_routes = [t for t in hazard_targets if t.startswith("route-")]
     add(2, "Which logistics routes depend on those objects?", True,
         {"routes_directly_affected": affected_routes,
@@ -149,7 +149,6 @@ def answer_v2_questions(b: dict[str, Any], c: dict[str, Any]) -> dict[str, Any]:
         "quality dimensions, requirements, evidence review states")
 
     from curunir_operational.sovereignty import run_exit_test
-    import tempfile, pathlib
     tmp = pathlib.Path(tempfile.mkdtemp())
     exit_b = run_exit_test(b_store, tmp / "exp_b", tmp / "fresh_b", v2.CONTEXTS["joint"],
                            snapshot_time=b_proj.snapshot_time, staleness_hours=v2.STALENESS_HOURS)

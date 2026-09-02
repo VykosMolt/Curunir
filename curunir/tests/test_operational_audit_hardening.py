@@ -1,7 +1,6 @@
-"""Audit-driven hardening tests: chain tamper matrix, unmasked late-arrival,
-torn log lines, bounded valid-time as-of with contamination guards, provenance
-round-trip variants, state-token side-channel closure, COP structure, CLI
-battery."""
+"""Hardening checks: every kind of chain tampering is caught, a torn log line
+fails clearly, valid time and knowledge time stay independent, views expose a
+state token instead of a sequence number, and the CLI behaves."""
 from __future__ import annotations
 
 import json
@@ -40,7 +39,7 @@ def version(object_id, number, hours, status, recorded=None, **kw):
                          marking=kw.pop("marking", BASE_MARKING), provenance=kw.pop("provenance", PROV), **kw)
 
 
-# ---- F2: chain must detect direct record mutation ---------------------------
+# ---- the hash chain catches a mutated record ----
 
 def test_chain_detects_every_direct_field_mutation(tmp_path):
     store = make_store(tmp_path)
@@ -64,7 +63,7 @@ def test_chain_detects_every_direct_field_mutation(tmp_path):
         mutate(event)
         tampered = [original[0], canonical_line(event)]
         (tmp_path / "store" / "events.jsonl").write_text("\n".join(tampered) + "\n")
-        # the store now fails closed: a tampered chain refuses to open at all
+        # A tampered chain refuses to open at all.
         with pytest.raises(StoreError, match="hash chain broken"):
             MissionDataStore(tmp_path / "store")
     (tmp_path / "store" / "events.jsonl").write_text("\n".join(original) + "\n")
@@ -72,7 +71,7 @@ def test_chain_detects_every_direct_field_mutation(tmp_path):
 
 
 def test_chain_detects_decision_and_relationship_mutation(tmp_path):
-    # replay the V1 scenario store shape cheaply: craft decision + relationship events, mutate them
+    # A small store with the record shapes the mutations target.
     from curunir_operational.contracts import DecisionRecord, RelationshipVersion
     store = make_store(tmp_path)
     store.append("OBJECT_VERSION_APPENDED", version("a", 1, 0.0, "x"), recorded_time=t(0), actor="p")
@@ -93,36 +92,35 @@ def test_chain_detects_decision_and_relationship_mutation(tmp_path):
         tampered = list(lines)
         tampered[index] = canonical_line(event)
         (tmp_path / "store" / "events.jsonl").write_text("\n".join(tampered) + "\n")
-        # fail closed: the tampered chain refuses to open
         with pytest.raises(StoreError, match="hash chain broken"):
             MissionDataStore(tmp_path / "store")
     (tmp_path / "store" / "events.jsonl").write_text("\n".join(lines) + "\n")
 
 
-# ---- F3: unmasked late arrival (no subsequent correction) -------------------
+# ---- a late arrival on its own ----
 
 def test_late_arrival_alone_does_not_displace_current(tmp_path):
     store = make_store(tmp_path)
     store.append("OBJECT_VERSION_APPENDED", version("stock-1", 1, 6.0, "900l"), recorded_time=t(6), actor="p")
     store.append("OBJECT_VERSION_APPENDED", version("stock-1", 2, 3.0, "1000l", recorded=t(8)),
-                 recorded_time=t(8), actor="p")  # late version is the LAST recorded one
+                 recorded_time=t(8), actor="p")  # recorded last, but valid earlier
     projection = Projection(store, snapshot_time=t(9))
     assert projection.objects["stock-1"]["current"]["attributes"]["status"] == "900l"
     assert projection.objects["stock-1"]["history_count"] == 2
 
 
-# ---- F5: torn final line ----------------------------------------------------
+# ---- a torn final line ----
 
 def test_torn_final_line_fails_clearly(tmp_path):
     store = make_store(tmp_path)
     store.append("OBJECT_VERSION_APPENDED", version("stock-1", 1, 0.0, "100l"), recorded_time=t(0), actor="p")
     with (tmp_path / "store" / "events.jsonl").open("a", encoding="utf-8") as handle:
-        handle.write('{"seq": 2, "event_type": "OBJECT_VER')  # simulated crash mid-append
+        handle.write('{"seq": 2, "event_type": "OBJECT_VER')  # as if the process died mid-append
     with pytest.raises(StoreError, match="torn line"):
         MissionDataStore(tmp_path / "store")
 
 
-# ---- F11: bounded valid-time as-of with contamination guards ----------------
+# ---- valid time and knowledge time ----
 
 def test_valid_at_and_knowledge_as_of_are_independent(tmp_path):
     store = make_store(tmp_path)
@@ -133,25 +131,25 @@ def test_valid_at_and_knowledge_as_of_are_independent(tmp_path):
                  version("stock-1", 3, 6.0, "950l", recorded=t(9), epistemic_state="CORRECTED",
                          correction_of="stock-1@v2", correction_reason="unit error"),
                  recorded_time=t(9), actor="p")
-    # world-validity question: what was valid at t(3)? → v1 only
+    # What was true in the world at t(3)?
     valid_projection = Projection(store, snapshot_time=t(9), valid_at=t(3.0))
     assert valid_projection.objects["stock-1"]["current"]["version"] == 1
-    # knowledge question: what did we believe at seq before the correction? → v2, uncontaminated by v3
+    # What did we believe just before the correction arrived?
     knowledge = Projection(store, as_of_seq=seq_before_correction, snapshot_time=t(9))
     assert knowledge.objects["stock-1"]["current"]["version"] == 2
     assert knowledge.objects["stock-1"]["current"]["attributes"]["status"] == "900l"
-    # combined: believed-at-seq AND valid-at t(3) → v1
+    # Both questions at once.
     combined = Projection(store, as_of_seq=seq_before_correction, snapshot_time=t(9), valid_at=t(3.0))
     assert combined.objects["stock-1"]["current"]["version"] == 1
-    # future decisions/corrections must not appear in the knowledge view
+    # A later correction must not show up in an earlier knowledge view.
     assert not knowledge.objects["stock-1"]["corrected_version_ids"]
-    # object with no validity before valid_at disappears entirely from the view
+    # An object with no validity that early is absent, not empty.
     early = Projection(store, snapshot_time=t(9), valid_at=t(-5.0))
     assert "stock-1" not in early.objects
     assert early.view(HIGH_CONTEXT)["counts"]["objects_total"] == 0
 
 
-# ---- provenance round-trip variants (§6.7) ---------------------------------
+# ---- provenance round-trips ----
 
 def test_provenance_roundtrip_variants(tmp_path):
     store = make_store(tmp_path)
@@ -200,7 +198,7 @@ def test_provenance_roundtrip_variants(tmp_path):
     assert explain(projection, "obs-restricted", LOW_CONTEXT) == explain(projection, "no-such", LOW_CONTEXT)
 
 
-# ---- F1: state token replaces sequence in non-privileged surfaces -----------
+# ---- state token instead of sequence number ----
 
 def test_no_sequence_side_channel_in_views_reports_bundles(tmp_path):
     from curunir_operational.sitrep import build_situation_report, render_text
@@ -223,12 +221,12 @@ def test_no_sequence_side_channel_in_views_reports_bundles(tmp_path):
     assert "since_seq" not in json.dumps(changes) and re.fullmatch(r"[0-9a-f]{16}", changes["until_state"])
 
 
-# ---- F8: COP structure ------------------------------------------------------
+# ---- COP page structure ----
 
 def test_cop_structure_responsive_and_collision_free(tmp_path):
     store = make_store(tmp_path)
     from curunir_operational.geometry import Geometry
-    # two nearly coincident points → labels must not overlap
+    # Two points almost on top of each other; their labels must not overlap.
     store.append("OBJECT_VERSION_APPENDED",
                  version("infra-A", 1, 0.0, "OPERATIONAL", object_type="INFRASTRUCTURE",
                          geometry=Geometry("POINT", (-30.100, 45.200))), recorded_time=t(0), actor="p")
@@ -244,16 +242,16 @@ def test_cop_structure_responsive_and_collision_free(tmp_path):
     html_out = render_cop_html(WorkbenchRenderer(Projection(store, snapshot_time=t(2)))
                                .render(definition, HIGH_CONTEXT), title="T")
     assert '<meta name="viewport"' in html_out
-    assert "height:auto" in html_out  # responsive svg
+    assert "height:auto" in html_out  # the map scales with the page
     assert "<title>" in html_out and 'aria-label' in html_out
     anchors = [(float(m.group(1)), float(m.group(2)))
                for m in re.finditer(r'<text x="([0-9.]+)" y="(-?[0-9.]+)" class="lbl"', html_out)]
     assert len(anchors) == 2
     (x1, y1), (x2, y2) = anchors
-    assert abs(x1 - x2) >= 110 or abs(y1 - y2) >= 13  # de-collided
+    assert abs(x1 - x2) >= 110 or abs(y1 - y2) >= 13  # pushed apart
 
 
-# ---- F4: CLI battery --------------------------------------------------------
+# ---- the CLI ----
 
 def cli(*args, cwd=ROOT):
     return subprocess.run([sys.executable, "-m", "curunir_operational.cli", *args],
@@ -273,7 +271,7 @@ def test_cli_battery(tmp_path):
     store_dir = tmp_path / "store"
     made = cli("init", "--store", str(store_dir), "--store-id", "cli-test", "--time", T0)
     assert made.returncode == 0 and "head_hash" in made.stdout
-    assert cli("init", "--store", str(store_dir), "--store-id", "cli-test", "--time", T0).returncode == 2  # no destructive re-init
+    assert cli("init", "--store", str(store_dir), "--store-id", "cli-test", "--time", T0).returncode == 2  # re-init would destroy the store
     missing = cli("project", "--store", str(tmp_path / "nope"), "--context", str(context_file))
     assert missing.returncode == 2 and "error:" in missing.stderr
     project = cli("project", "--store", str(store_dir), "--context", str(context_file))

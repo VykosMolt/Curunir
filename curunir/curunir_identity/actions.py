@@ -1,4 +1,4 @@
-"""Canonical verification and durable attribution for signed actions."""
+"""Verify a signed action, then record it once the action has succeeded."""
 from __future__ import annotations
 
 import dataclasses
@@ -35,7 +35,7 @@ class SignatureRejected(PermissionError):
 
 @dataclass
 class VerifiedAction:
-    """Verified authorization awaiting a successful command outcome."""
+    """A verified action that has not been recorded yet."""
 
     session: Session
     record: SignedActionRecord
@@ -82,7 +82,7 @@ def verify_action(store, registry: KeyRegistry, sessions: SessionManager, *,
                   expected_target_kind: str, expected_target_id: str,
                   current_version_token: str, mission_id: str,
                   marking: Marking) -> VerifiedAction:
-    """Verify the historic V6.7 refusal sequence without committing state."""
+    """Check a signed action in a fixed order. Nothing is written here."""
     if not isinstance(payload, Mapping):
         raise SignatureRejected(INVALID_SIGNATURE, "signed payload is not an object")
     try:
@@ -151,7 +151,7 @@ def verify_action(store, registry: KeyRegistry, sessions: SessionManager, *,
 
 def commit_action(store, verified: VerifiedAction, *, record_actor: str,
                   recorded_time: str | None = None) -> dict[str, Any]:
-    """Append attribution only after the authorized command has committed."""
+    """Record the signed action. Call this only after the command itself succeeded."""
     if recorded_time is not None:
         verified.record = dataclasses.replace(
             verified.record, recorded_time=recorded_time)

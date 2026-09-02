@@ -1,13 +1,8 @@
-"""Common source/connector acquisition boundary.
+"""Base class and record types shared by all connectors.
 
-A connector translates one typed ``ConnectorRequest`` into one bounded
-retrieval against its source family and returns a ``ConnectorResponse`` that
-always carries: the native raw bytes (for custody), the request/final URLs,
-transport facts, a classified status, and typed per-record results with
-source-native identifiers and timestamps. Connectors never write stores,
-never consult policy (the executor gates access before invoking them), and
-receive their transport injected so unit tests run offline against recorded
-bytes while the product path uses the real public-web transport.
+A connector turns one request into one bounded retrieval. It never writes the
+store and never checks policy; the executor does both. The transport is
+injected so tests can run offline.
 """
 from __future__ import annotations
 
@@ -19,7 +14,7 @@ from typing import Any, Callable, Mapping
 from ..contracts import OPERATIONS
 from ..transport import retrieve_public_bytes
 
-# transport: (url, headers, timeout, max bytes) -> transport dict (body/status/…)
+# transport(url, headers, timeout, max bytes) -> dict with body, status, headers, error
 Transport = Callable[..., Mapping[str, Any]]
 
 RESPONSE_STATUS = ("OK", "EMPTY", "FAILED", "ACCESS_RESTRICTED", "NOT_SUPPORTED")
@@ -31,7 +26,7 @@ DEFAULT_MAXIMUM_BYTES = 40_000_000
 
 
 def scrub_surrogates(value: object) -> str | None:
-    """Coerce a source scalar to valid Unicode at the acquisition boundary."""
+    """Make a value from a source safe Unicode text."""
     if value is None:
         return None
     return str(value).encode("utf-8", "replace").decode("utf-8")
@@ -128,7 +123,7 @@ class ConnectorError(ValueError):
 
 
 class SourceConnector:
-    """Base class: one connector per acquisition shape, stateless, injectable transport."""
+    """One connector per acquisition shape. Stateless."""
 
     connector_id = ""
     connector_version = "0.1"

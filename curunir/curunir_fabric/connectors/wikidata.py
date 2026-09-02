@@ -1,10 +1,4 @@
-"""Wikidata — multilingual entity lookup and identifier pivots.
-
-SEARCH resolves names (in any language) to entity candidates; LOOKUP expands
-one entity into labels, aliases and external identifiers across languages —
-the raw material for transliteration/local-language query variants and for
-pivots into registry sources (LEI → GLEIF, CIK → EDGAR, domains → web).
-"""
+"""Wikidata: SEARCH resolves names to entities; LOOKUP expands one entity."""
 from __future__ import annotations
 
 import json
@@ -14,7 +8,7 @@ from .base import ConnectorRequest, ConnectorResponse, NativeResult, SourceConne
 
 API_ENDPOINT = "https://www.wikidata.org/w/api.php"
 
-# common external-id properties worth naming; anything else keeps wikidata:PNNN
+# External-id properties with a known scheme. Others keep the wikidata:PNNN name.
 IDENTIFIER_PROPERTIES = {
     "P1278": "LEI",
     "P5531": "SEC_CIK",

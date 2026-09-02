@@ -1,4 +1,4 @@
-"""Discovery planner and multilingual variant generation — offline."""
+"""The discovery planner and the name variants it plans over, offline."""
 from __future__ import annotations
 
 import pytest
@@ -89,14 +89,14 @@ def test_identifier_routing_binds_known_schemes(registry):
     domains = by_family.get("DOMAIN", [])
     assert any(q.source_id == "wayback" and q.operation == "HISTORICAL_ENUMERATE" for q in domains)
     assert any(q.source_id == "live-web" and q.operation == "FETCH" for q in domains)
-    # unknown scheme survives as an unbound lookup, likely unmatched — never dropped
+    # An unknown identifier scheme is kept as an unrouted query, never dropped.
     mystery = [q for q in plan.queries if q.value == "123"]
     assert mystery and mystery[0].source_id == ""
     assert mystery[0].query_id in plan.unmatched_query_ids
 
 
 def test_unmatched_queries_are_recorded_not_dropped(registry):
-    # SEARCH queries match wikidata/gleif/edgar; a FETCH on plain text matches nothing
+    # No source can FETCH plain text, so this query matches nothing.
     fetch_query = QuerySpec(query_id="q-fetch", family="EXACT_NAME", value="plain text",
                             language="", script="", operation="FETCH", source_id="",
                             time_bounds=(None, None), origin="HUMAN", origin_detail="test",
@@ -128,4 +128,4 @@ def test_search_queries_match_search_capable_sources(registry):
     search_query = next(q for q in plan.queries if q.operation == "SEARCH")
     sources = set(eligible_sources(search_query, registry))
     assert "wikidata" in sources
-    assert "wayback" not in sources  # wayback cannot run text search
+    assert "wayback" not in sources  # it cannot run a text search

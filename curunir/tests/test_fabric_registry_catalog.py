@@ -1,4 +1,4 @@
-"""Global source registry: capability queries over durable replayed state."""
+"""The source registry: what each source can do, answered from the replayed log."""
 from __future__ import annotations
 
 import pytest
@@ -36,7 +36,7 @@ def test_historical_question_finds_archive_capable_sources(store):
     assert "wayback" in historical
     assert "sec-edgar" in historical
     assert "live-web" not in historical
-    assert "gleif" not in historical  # current-only registry
+    assert "gleif" not in historical  # a registry of the present only
 
 
 def test_operation_and_capability_queries(store):
@@ -51,7 +51,7 @@ def test_monitorable_sources_respect_latency_ceiling(store):
     view = load_registry(store)
     daily = {d.source_id for d in view.monitorable_sources(max_latency="DAILY")}
     assert "federal-register-feed" in daily
-    assert "wayback" not in daily  # IRREGULAR is slower than DAILY
+    assert "wayback" not in daily  # IRREGULAR is slower than daily
     hourly = {d.source_id for d in view.monitorable_sources(max_latency="HOURLY")}
     assert "federal-register-feed" not in hourly
 
@@ -103,7 +103,7 @@ def test_descriptor_updates_are_bitemporal_not_overwrites(store):
     register_source(store, updated, profile, recorded_time=LATER, actor="t")
     view = load_registry(store)
     assert view.descriptor("gleif").rate_metadata == "observed throttling at 60 rpm"
-    assert len(view.registry.versions("gleif")) == 2  # history preserved
+    assert len(view.registry.versions("gleif")) == 2  # the old version remains
 
 
 def test_profile_vocabulary_is_validated():

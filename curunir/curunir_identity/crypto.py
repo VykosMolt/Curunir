@@ -1,4 +1,4 @@
-"""The only Curunír module that touches raw Ed25519 cryptography."""
+"""The only module that touches raw Ed25519 primitives."""
 from __future__ import annotations
 
 import hashlib
@@ -47,12 +47,9 @@ def normalize_public_key(public_key_hex: str) -> str:
         raise ValueError("public key must be hexadecimal text")
     normalized = public_key_hex.strip().lower()
     try:
-        raw = bytes.fromhex(normalized)
-        Ed25519PublicKey.from_public_bytes(raw)
+        Ed25519PublicKey.from_public_bytes(bytes.fromhex(normalized))
     except ValueError as exc:
         raise ValueError("public key must be a 32-byte Ed25519 key") from exc
-    if len(raw) != 32:
-        raise ValueError("public key must be a 32-byte Ed25519 key")
     return normalized
 
 
@@ -73,7 +70,7 @@ def sign(private_pem: str, payload: Mapping[str, Any]) -> str:
 
 def verify(public_key_hex: str, signature_hex: str,
            payload: Mapping[str, Any]) -> bool:
-    """Return one fail-closed boolean for malformed and invalid signatures."""
+    """True only for a valid signature; malformed input is False, never an error."""
     try:
         public = Ed25519PublicKey.from_public_bytes(
             bytes.fromhex(normalize_public_key(public_key_hex)))

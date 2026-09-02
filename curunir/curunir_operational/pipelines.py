@@ -1,19 +1,19 @@
-"""Configuration-driven mission pipelines: connector → validation → mapping →
-operational objects, relationships and transformation lineage.
+"""Mission pipelines: connector, validation, mapping, then objects,
+relationships and transformation lineage.
 
-Pipeline definitions are strict data (unknown keys rejected, no code from
-configuration). The executor is generic: object identity, relationship rules,
-markings and epistemic defaults all come from the registered definition, so a
-new feed means a new schema + mapping + pipeline, never an edit to this module.
+A pipeline definition is strict data — unknown keys are rejected and no code
+comes from configuration. The executor is generic, so a new feed means a new
+schema, mapping and pipeline rather than an edit here.
 """
 from __future__ import annotations
 
 from typing import Any, Mapping
 
 from .access import Marking, marking_from_record
-from .argus_adapter import evidence_ref_from_bundle
+from .argus_adapter import ArgusEvidenceConnector, evidence_ref_from_bundle
 from .canonical import digest_id, sha256
-from .connectors import MissionDataConnector, source_watermark
+from .connectors import (CsvFeedConnector, GeoJsonConnector, JsonFeedConnector,
+                         MissionDataConnector, source_watermark)
 from .contracts import (EPISTEMIC_STATES, LIFECYCLES, OBJECT_TYPES, RELATION_TYPES, ExternalRef, ObjectVersion,
                         ProvenanceSummary, RelationshipVersion, TransformationRecord)
 from .geometry import geometry_from_geojson
@@ -28,8 +28,6 @@ IMPLEMENTATION_VERSION = "1.0"
 
 
 def build_connector(kind: str, connector_id: str, schema_id: str, event_id_field: str | None = None):
-    from .argus_adapter import ArgusEvidenceConnector
-    from .connectors import CsvFeedConnector, GeoJsonConnector, JsonFeedConnector
     classes = {"json": JsonFeedConnector, "csv": CsvFeedConnector, "geojson": GeoJsonConnector,
                "argus_evidence": ArgusEvidenceConnector}
     if kind not in classes:
@@ -38,7 +36,7 @@ def build_connector(kind: str, connector_id: str, schema_id: str, event_id_field
 
 
 def executor_with_registered_connectors(store: MissionDataStore, registry: SchemaRegistry) -> "PipelineExecutor":
-    """Rebuild an executor purely from registered pipeline definitions."""
+    """Rebuild an executor from the registered pipeline definitions alone."""
     connectors = {}
     for definition in store.records_of("pipeline_definition"):
         connectors[definition["connector_id"]] = build_connector(
@@ -95,7 +93,7 @@ def validate_pipeline_definition(definition: Mapping[str, Any]) -> dict[str, Any
             raise SchemaError("observation pipelines need observation.target_field")
         if ("prefix_map" in observation) != ("prefix_map_field" in observation):
             raise SchemaError("prefix_map and prefix_map_field go together")
-    marking_from_record(definition["marking"])  # validates
+    marking_from_record(definition["marking"])  # refuse an invalid marking
     result = dict(definition)
     result["record_type"] = "pipeline_definition"
     result.setdefault("relationships", [])
@@ -156,8 +154,10 @@ class PipelineExecutor:
         }
         if outcome.status != "ACCEPTED":
             return result
+        mappings = [self.registry.get_mapping(ref["mapping_id"], ref["version"])
+                    for ref in definition["mappings"]]
         for unit in self._units(definition, outcome.payload):
-            self._process_unit(definition, unit, ingestion, marking, recorded_time, actor, result)
+            self._process_unit(definition, mappings, unit, ingestion, marking, recorded_time, actor, result)
         return result
 
     def _units(self, definition: Mapping[str, Any], payload: Any) -> list[dict[str, Any]]:
@@ -167,7 +167,8 @@ class PipelineExecutor:
             return [{**(f.get("properties") or {}), "__geometry": f.get("geometry")} for f in payload["features"]]
         return [payload]
 
-    def _process_unit(self, definition: Mapping[str, Any], unit: Mapping[str, Any], ingestion: Mapping[str, Any],
+    def _process_unit(self, definition: Mapping[str, Any], mappings: list[Mapping[str, Any]],
+                      unit: Mapping[str, Any], ingestion: Mapping[str, Any],
                       marking: Marking, recorded_time: str, actor: str, result: dict[str, Any]) -> None:
         config = definition["object"]
         mode = definition["mode"]
@@ -183,8 +184,7 @@ class PipelineExecutor:
         merged: dict[str, Any] = {"attributes": {}, "quality": dict(definition.get("quality_defaults", {})),
                                   "labels": [], "warnings": [], "lossy_operations": []}
         mapping_ids: list[str] = []
-        for ref in definition["mappings"]:
-            mapping = self.registry.get_mapping(ref["mapping_id"], ref["version"])
+        for ref, mapping in zip(definition["mappings"], mappings):
             applied = apply_mapping(mapping, unit)
             merged["attributes"].update(applied["attributes"])
             merged["quality"].update(applied["quality"])
@@ -214,8 +214,7 @@ class PipelineExecutor:
         quality = dict(merged["quality"])
         quality.setdefault("schema_validity", "VALID")
         quality.setdefault("synchronization_state", "SYNCHRONIZED")
-        entries = [e for ref in definition["mappings"]
-                   for e in self.registry.get_mapping(ref["mapping_id"], ref["version"])["entries"]]
+        entries = [e for mapping in mappings for e in mapping["entries"]]
         present = sum(1 for e in entries if unit.get(e["source_field"]) is not None)
         quality.setdefault("completeness", round(present / len(entries), 3) if entries else "UNKNOWN")
         if evidence_bundle is not None:

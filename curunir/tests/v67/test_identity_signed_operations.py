@@ -1,14 +1,9 @@
-"""V6.7 historical signed-operation and composition exploit corpus.
+"""Signing a report approval, end to end.
 
-Cryptographic actor identity end-to-end on a load-bearing
-workbench action (report approval).
-
-Actor A authenticates by key possession, signs an approval bound to the report's
-exact target and version, and it is applied and recorded only after the act
-commits. A service actor's signature is refused by the human-only gate; the
-author cannot self-approve (four-eyes); an expired session, a tampered payload,
-and a stale target version are all refused; after B rotates its key, new actions
-verify and the historical signed action still verifies on replay.
+An analyst proves it holds its key, signs an approval bound to the report's
+exact version, and the signature is recorded only after the act commits. A
+service key, a self-approval, a tampered payload, a stale version and an expired
+session are all refused, and a rotated key leaves old signatures verifiable.
 """
 from __future__ import annotations
 
@@ -158,8 +153,8 @@ def test_signed_report_approval_end_to_end(tmp_path):
     pem_b, pub_b = generate_keypair()
     registry.enroll(actor_id="analyst-b", actor_kind="HUMAN", public_key_hex=pub_b)
 
-    # four-eyes: the author (A) cannot approve its own report, even with a valid
-    # signature — and the refused act mints no signed-action record
+    # The author cannot approve its own report, valid signature or not, and the
+    # refusal leaves no signed-action record.
     session_a = _login(ops, registry, sessions, "analyst-a", pem_a)
     with pytest.raises(PermissionError):
         _approve(ops, session_a, pem_a, report_id=report_id, version=version, nonce="a1",
@@ -168,7 +163,7 @@ def test_signed_report_approval_end_to_end(tmp_path):
     assert not store.records_of("signed_action"), \
         "a refused act must not leave a signed-action record"
 
-    # a different human (B) signs the approval → applied and recorded
+    # A second analyst signs the approval, which is applied and recorded.
     session_b = _login(ops, registry, sessions, "analyst-b", pem_b)
     out = _approve(ops, session_b, pem_b, report_id=report_id, version=version, nonce="b1",
                    apply_fn=lambda ctx: commands.approve_report(
@@ -179,10 +174,11 @@ def test_signed_report_approval_end_to_end(tmp_path):
 
 
 def test_signed_approval_interrupted_before_commit_is_exactly_one(tmp_path, monkeypatch):
-    # V6.7 §4/§5: a crash between the approval command committing and the
-    # signed-action attribution being appended (the documented F-06 window) must
-    # leave EXACTLY ONE outcome: the approval took effect once, no GENUINE
-    # signed-action record was fabricated, and a restart+retry cannot double it.
+    """A crash between the approval and its signature leaves one outcome.
+
+    The approval took effect once, no signature was invented for it, and a
+    retry after restart cannot approve it a second time.
+    """
     root, store, clock, claim_id, actors_path = _mission(tmp_path)
     ops, registry, sessions, authz = _ops(store, root, clock, actors_path)
     report_id, version = _report(store, root, authz, clock, claim_id)
@@ -190,7 +186,7 @@ def test_signed_approval_interrupted_before_commit_is_exactly_one(tmp_path, monk
     registry.enroll(actor_id="analyst-b", actor_kind="HUMAN", public_key_hex=pub_b)
     session_b = _login(ops, registry, sessions, "analyst-b", pem_b)
 
-    # kill the process AFTER the command commits, BEFORE the signed-action append
+    # Die after the command commits but before the signature is appended.
     import curunir_workbench.signed_ops as signed_ops_module
 
     def _crash(*args, **kwargs):
@@ -201,16 +197,15 @@ def test_signed_approval_interrupted_before_commit_is_exactly_one(tmp_path, monk
                  apply_fn=lambda ctx: commands.approve_report(
                      ctx, report_id, expected_version=version, note="sound"))
 
-    # restart: the durable log is authoritative
+    # On restart the log is what counts.
     reopened = WorkbenchStore(root / "store")
     report = reopened.current_reports()[report_id]
-    assert report["status"] in ("APPROVED", "APPROVED_WITH_DISSENT")  # took effect ONCE
+    assert report["status"] in ("APPROVED", "APPROVED_WITH_DISSENT")
     assert not reopened.records_of("signed_action"), (
-        "the crash left the act unattributed by crypto (F-06, safe direction) — "
-        "never a fabricated GENUINE non-repudiation record for a partial act")
+        "the crash left the act unsigned, which is the safe direction; a "
+        "signature must never be invented for a partial act")
 
-    # a restart + retry cannot double-approve: the target has moved, so the same
-    # signed approval is refused (STALE_VERSION), and the report stays approved once.
+    # The target has moved on, so the same signed approval is now stale.
     monkeypatch.undo()
     ops2, registry2, sessions2, authz2 = _ops(reopened, root, clock, actors_path)
     session_b2 = _login(ops2, registry2, sessions2, "analyst-b", pem_b)
@@ -224,11 +219,8 @@ def test_signed_approval_interrupted_before_commit_is_exactly_one(tmp_path, monk
 
 
 def test_full_mission_survives_signed_approval_crash_recovery_and_restore(tmp_path):
-    # V6.7 §14/§9 composition: a whole mission — acquisition + semantic + a
-    # claim-bound dossier + a cryptographically-signed human approval — survives
-    # a crash, torn-tail recovery, backup, restore and replay with its hash
-    # chain, signatures, report state and actor-key history all intact, and with
-    # NO network or providers.
+    """A whole mission survives a crash, a backup and a restore with its chain,
+    signatures, report state and key history intact, and with no network."""
     root, store, clock, claim_id, actors_path = _mission(tmp_path)
     ops, registry, sessions, authz = _ops(store, root, clock, actors_path)
     report_id, version = _report(store, root, authz, clock, claim_id)
@@ -241,7 +233,7 @@ def test_full_mission_survives_signed_approval_crash_recovery_and_restore(tmp_pa
     assert out["result"]["status"] == "APPROVED"
     assert verify_all(store)["all_genuine"]
 
-    # crash mid a later append (torn tail), recover, then back up + restore
+    # Crash mid-append, recover the torn tail, then back up and restore.
     with (root / "store" / "events.jsonl").open("ab") as handle:
         handle.write(b'{"seq": 99999, "torn')
     recovery = WorkbenchStore.recover_torn_tail(root / "store")
@@ -252,22 +244,19 @@ def test_full_mission_survives_signed_approval_crash_recovery_and_restore(tmp_pa
     restored = WorkbenchStore.import_from(backup, tmp_path / "restored")
 
     assert restored.verify_chain()["valid"]
-    replay = verify_all(restored)                      # re-verify signatures from the log alone
+    replay = verify_all(restored)  # signatures re-checked from the log alone
     assert replay["all_genuine"] and replay["count"] >= 1
     assert restored.current_reports()[report_id]["status"] in ("APPROVED", "APPROVED_WITH_DISSENT")
     assert any(r["actor_id"] == "analyst-b" for r in restored.records_of("actor_key"))
-    # the claim the dossier rests on survived with its marking
     assert claim_id in restored.current_claims()
 
 
 def test_four_eyes_survives_a_crash_that_loses_the_submitted_disposition(tmp_path, monkeypatch):
-    # review C-4/M-3 (CRITICAL/MAJOR): submit_report writes the IN_REVIEW version
-    # then the SUBMITTED disposition. A crash between them must NOT let the
-    # submitter self-approve — the version-transition event's actor (durable
-    # append #1) keeps the submitter in the separation-of-duties set.
+    """Losing the SUBMITTED record to a crash does not let the submitter approve
+    their own report: the version-transition event still names them."""
     root, store, clock, claim_id, actors_path = _mission(tmp_path)
     authz = ActorRegistry(actors_path)
-    # analyst-a drafts; analyst-b submits (a different actor)
+    # analyst-a drafts and analyst-b submits.
     ctx_a = _cc(store, root, authz, "analyst-a", clock)
     sections = [{"kind": "key_judgments", "title": "KJ", "sentences": [
         {"text": "Acme holds an ISSUED registration.", "status": "SUPPORTED",
@@ -275,7 +264,7 @@ def test_four_eyes_survives_a_crash_that_loses_the_submitted_disposition(tmp_pat
     report = commands.create_report(ctx_a, title="R", question="?", sections=sections)
     rid = report["report_id"]
 
-    # crash between submit's two appends: the SUBMITTED disposition is lost
+    # Crash between the two appends, losing the SUBMITTED record.
     import curunir_workbench.reports as reports_mod
 
     def _crash_disposition(*args, **kwargs):
@@ -287,9 +276,8 @@ def test_four_eyes_survives_a_crash_that_loses_the_submitted_disposition(tmp_pat
     monkeypatch.undo()
 
     reopened = WorkbenchStore(root / "store")
-    assert reopened.current_reports()[rid]["status"] == "IN_REVIEW"        # submission took effect
-    assert not reopened.report_dispositions(rid)                            # but no disposition record
-    # analyst-b (the submitter) still cannot approve their own submission
+    assert reopened.current_reports()[rid]["status"] == "IN_REVIEW"
+    assert not reopened.report_dispositions(rid)
     ctx_b2 = _cc(reopened, root, authz, "analyst-b", clock)
     with pytest.raises(PermissionError, match="separation of duties"):
         commands.approve_report(ctx_b2, rid, expected_version=2)
@@ -318,7 +306,6 @@ def test_expired_session_and_tamper_and_stale_version_refused(tmp_path):
     registry.enroll(actor_id="analyst-b", actor_kind="HUMAN", public_key_hex=pub_b)
     session = _login(ops, registry, sessions, "analyst-b", pem_b)
 
-    # tampered payload
     signed = sign_action(pem_b, actor_id="analyst-b", actor_kind="HUMAN",
                         action_type="approve_report", target_kind="workbench_report",
                         target_id=report_id, target_version_token=_vtoken(report_id, version),
@@ -332,12 +319,10 @@ def test_expired_session_and_tamper_and_stale_version_refused(tmp_path):
                          current_version_token=_vtoken(report_id, version),
                          target_marking=MARK, apply=lambda ctx: None)
 
-    # stale target version
     with pytest.raises(SignatureRejected):
         _approve(ops, session, pem_b, report_id=report_id, version=version, nonce="t2",
                  current=_vtoken(report_id, version + 5), apply_fn=lambda ctx: None)
 
-    # expired session
     clock.advance(sessions.session_ttl + 1)
     with pytest.raises(SignatureRejected):
         _approve(ops, session, pem_b, report_id=report_id, version=version, nonce="t3",
@@ -346,14 +331,13 @@ def test_expired_session_and_tamper_and_stale_version_refused(tmp_path):
 
 
 def test_actor_kind_mismatch_between_key_and_registry_refused(tmp_path):
-    # the enrolled key kind and the authz-registry kind must agree, so a SERVICE
-    # key listed HUMAN (or vice versa) cannot slip past a kind-gated command
-    # with a mis-attributed record (adversarial-review minor finding)
+    """The enrolled key's actor kind must match the registry's, so a service key
+    cannot pass a human-only gate."""
     root, store, clock, claim_id, actors_path = _mission(tmp_path)
     ops, registry, sessions, authz = _ops(store, root, clock, actors_path)
     report_id, version = _report(store, root, authz, clock, claim_id)
     pem, pub = generate_keypair()
-    # analyst-b is HUMAN in the workbench registry, but enrolled as SERVICE here
+    # analyst-b is HUMAN in the workbench registry but enrolled as SERVICE.
     registry.enroll(actor_id="analyst-b", actor_kind="SERVICE", public_key_hex=pub)
     session = _login(ops, registry, sessions, "analyst-b", pem)
     with pytest.raises(SignatureRejected) as e:
@@ -383,14 +367,13 @@ def test_key_rotation_preserves_historical_verification(tmp_path):
 
 
 def test_pending_challenge_flood_evicts_flooders_own_not_the_victim(tmp_path):
-    # review B-5: a challenge flood must evict the FLOODER's own oldest pending
-    # challenge, not another actor's live one (denying it authentication) — the
-    # round-4 own-actor eviction of _prune_sessions, applied to the pending map.
+    """A challenge flood evicts the flooder's own oldest challenge, never another
+    actor's live one."""
     from curunir_identity.sessions import SessionManager, MAX_PENDING_CHALLENGES
     sm = SessionManager(now_fn=lambda: "2026-08-17T12:00:00+00:00")
     victim = sm.issue_challenge("analyst-b")["nonce"]
     for _ in range(MAX_PENDING_CHALLENGES + 50):
         sm.issue_challenge("watch-service")
-    assert victim in sm._pending                          # victim's live challenge survives
+    assert victim in sm._pending
     assert sm._pending[victim]["actor_id"] == "analyst-b"
-    assert len(sm._pending) <= MAX_PENDING_CHALLENGES     # flooder's footprint is self-bounded
+    assert len(sm._pending) <= MAX_PENDING_CHALLENGES

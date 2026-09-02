@@ -1,5 +1,5 @@
-"""Association: conservative outcomes, proposals, reversibility, no
-destructive merge."""
+"""Association: cautious outcomes, human-resolved proposals, and merges that can
+be reversed without losing anything."""
 from __future__ import annotations
 
 import pytest
@@ -81,7 +81,7 @@ def test_rejections():
     assert decide(negative)[0] == "REJECT_ASSOCIATION"
     teleport = compute_features(movement("mv-a", lon=-30.0).to_record(),
                                 movement("mv-b", lon=-25.0, hours=0.5, prov=PROV_B).to_record())
-    assert decide(teleport)[0] == "REJECT_ASSOCIATION"  # ~390 km in 30 minutes
+    assert decide(teleport)[0] == "REJECT_ASSOCIATION"  # about 390 km in half an hour
 
 
 def test_accept_then_reverse_is_non_destructive(tmp_path):
@@ -97,7 +97,7 @@ def test_accept_then_reverse_is_non_destructive(tmp_path):
                    rationale="second convoy confirmed by later checkpoint", recorded_time=t(4), marking=BASE_MARKING)
     projection = Projection(store)
     assert projection.cluster_of["mv-a"] != projection.cluster_of["mv-b"]
-    # nothing destroyed: every object version and relationship version retained
+    # Both versions and both relationships are still on the log.
     assert {v["object_id"] for v in store.records_of("object_version")} == {"mv-a", "mv-b"}
     same_as = [r for r in store.records_of("relationship_version") if r["relation_type"] == "SAME_AS"]
     assert [r["status"] for r in same_as] == ["ACTIVE", "RETIRED"]

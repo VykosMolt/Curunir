@@ -1,4 +1,4 @@
-"""Thin command layer for the OSINT fabric.
+"""Command line for the fabric.
 
     python -m curunir_fabric.cli create-store --store /path
     python -m curunir_fabric.cli seed-catalog --store /path
@@ -24,8 +24,10 @@ from curunir_operational.access import Marking
 from argus.source_intelligence.custody import SourceCustodyStore
 from argus.source_intelligence.models import digest_id
 
+from curunir_operational.access import marking_from_record
+
 from .catalog import seed_starter_catalog
-from .contracts import WatchDefinition
+from .contracts import InformationNeed, WatchDefinition
 from .coverage import assess_coverage, coverage_summary, unsearched_families
 from .executor import ExecutionContext, execute_plan
 from .mission_bridge import open_requirement_with_need
@@ -65,9 +67,7 @@ def _need_record(store: FabricStore, need_id: str) -> dict:
     return records[-1]
 
 
-def _need_from_record(record: dict):
-    from .contracts import InformationNeed
-    from curunir_operational.access import marking_from_record
+def _need_from_record(record: dict) -> InformationNeed:
     data = {k: v for k, v in record.items() if k != "record_type"}
     data["entities"] = tuple(data["entities"])
     data["identifiers"] = tuple((s, v) for s, v in data["identifiers"])

@@ -1,6 +1,5 @@
-// Byte-exact browser half of Curunír's signed-payload contract.
-// It intentionally refuses values that JavaScript and Python can serialize
-// differently instead of producing a signature the server cannot reproduce.
+// Canonical JSON bytes for signing, matching the server byte for byte.
+// Values that JavaScript and Python could serialize differently are refused.
 
 function codePointCompare(a, b) {
   const left = Array.from(a), right = Array.from(b);

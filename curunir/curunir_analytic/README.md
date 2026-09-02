@@ -230,7 +230,7 @@ with `socket` disabled to prove it.
 
 ```bash
 cd curunir
-# five-phase live exercise (real public sources; separate processes = restarts)
+# six-phase live exercise (real public sources; separate processes = restarts)
 .venv/bin/python -m curunir_analytic.demo --root /tmp/analytic-demo --phase 1
 .venv/bin/python -m curunir_analytic.demo --root /tmp/analytic-demo --phase 2 --operator you
 .venv/bin/python -m curunir_analytic.demo --root /tmp/analytic-demo --phase 3 --operator you
@@ -301,9 +301,8 @@ provider sees only records the requesting actor can already view.
 
 ## Deferred
 
-The analyst workbench GUI (V6.6), report/dossier generation (structured
-projections exist; rendering does not), EVENT_OCCURRED machine resolution
-against activity records (the rule kind is typed and validated; the matcher
-ships when a real activity-producing exercise needs it), and
-mission-package impact taxonomies (core carries only the propagation
-machinery).
+EVENT_OCCURRED machine resolution against activity records (the rule kind is
+typed and validated; the matcher ships when a real activity-producing exercise
+needs it), and mission-package impact taxonomies (core carries only the
+propagation machinery). The analyst GUI and report rendering live in
+`curunir_workbench`.

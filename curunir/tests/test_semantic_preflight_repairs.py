@@ -1,6 +1,6 @@
-"""Regression locks for the semantic-plane preflight findings (C1/C2/C3):
-last-append-wins concurrency, multi-append crash recovery, and
-idempotency-by-existence discarding caller state."""
+"""Three ways the semantic plane could lose work, each now refused: a writer
+working from an old view overwriting a newer one, an interrupted sequence of
+writes left half done, and a repeat call throwing away what the caller brought."""
 from __future__ import annotations
 
 import pytest
@@ -40,8 +40,7 @@ def fake_gleif_transport(body: bytes):
 
 
 def _second_writer(tmp_path, start_minute=30):
-    """A second SemanticStore instance on the same root — a concurrent
-    writer with its own in-memory replay."""
+    """A second pipeline on the same store, with its own view of it."""
     store = SemanticStore(tmp_path / "store")
     return SemanticPipeline(store=store, custody_root=tmp_path / "custody",
                             actor="w2", marking=MARK, now_fn=clock(start_minute))
@@ -57,7 +56,7 @@ def _seed_claim(pipeline):
                 if c["predicate"] == "registration_status")
 
 
-# ---- CLASS 1: stale writers raise instead of shadowing --------------------
+# ---- a writer on an old view is refused, not silently applied --------------
 
 
 def test_c1_1_concurrent_hypothesis_link_cannot_clobber(tmp_path):
@@ -67,11 +66,11 @@ def test_c1_1_concurrent_hypothesis_link_cannot_clobber(tmp_path):
         pipeline.store, statement="registered", case_id="c",
         analyst_or_provider="a", now=pipeline.now_fn(), actor="a", marking=MARK)
     writer_2 = _second_writer(tmp_path)
-    # both writers hold the same snapshot; A links first
+    # Both writers hold the same view; A links first.
     link_claim(pipeline.store, hypothesis["hypothesis_id"], claim["claim_id"],
                "supporting", rationale="A", now=pipeline.now_fn(), actor="a",
                marking=MARK)
-    # B's stale re-append must raise, not silently erase A's link + history
+    # B must not be able to erase A's link by writing over it.
     with pytest.raises(StoreError, match="next version"):
         link_claim(writer_2.store, hypothesis["hypothesis_id"], claim["claim_id"],
                    "contradicting", rationale="B", now=writer_2.now_fn(),
@@ -90,17 +89,17 @@ def test_c1_2_c1_3_satisfied_discriminator_never_regresses(tmp_path):
         desired_subject_ref=claim["subject_ref"],
         desired_attribute="registration_status",
         now=pipeline.now_fn(), actor="a", marking=MARK)
-    stale_snapshot = dict(discriminator)  # caller keeps the OPEN mapping
-    writer_2 = _second_writer(tmp_path, start_minute=40)  # replayed BEFORE update
+    stale_snapshot = dict(discriminator)  # the caller keeps the OPEN copy
+    writer_2 = _second_writer(tmp_path, start_minute=40)  # read before the update
     satisfied = update_discriminator(store, discriminator, {"status": "SATISFIED"},
                                      now=pipeline.now_fn(), actor="a", marking=MARK)
     assert satisfied["status"] == "SATISFIED"
-    # C1-3: a stale in-process snapshot must not regress SATISFIED
+    # Passing the old copy back in must not undo SATISFIED.
     outcome = requirement_for_discriminator(
         store, stale_snapshot, mission_context="m",
         now=pipeline.now_fn(), actor="a", marking=MARK)
     assert outcome["discriminator"]["status"] == "SATISFIED"
-    # C1-2: a concurrent stale writer raises instead of shadowing
+    # Nor may another writer do it from its old view.
     with pytest.raises(StoreError, match="next version"):
         update_discriminator(writer_2.store, stale_snapshot,
                              {"status": "REQUESTED"},
@@ -117,7 +116,7 @@ def test_c1_4_resolved_review_item_cannot_be_reopened_by_stale_writer(tmp_path):
                       marking=MARK)
     store.append("REVIEW_ITEM_RECORDED", item, recorded_time=item.recorded_time,
                  actor="svc")
-    writer_2 = _second_writer(tmp_path, start_minute=40)  # holds OPEN snapshot
+    writer_2 = _second_writer(tmp_path, start_minute=40)  # still sees it OPEN
     resolved = ReviewItem(item_id="item-1", kind="CONTRADICTED",
                           subject_kind="semantic_claim", subject_id="c1",
                           detail="d", evidence_refs=(), status="RESOLVED",
@@ -157,10 +156,9 @@ def test_c1_5_route_task_binding_cannot_be_lost(tmp_path):
                                     requirement_id=opened["discriminator"]["requirement_id"],
                                     now=pipeline.now_fn(), actor="p", marking=MARK)
     route = routes[0]
-    writer_2 = _second_writer(tmp_path, start_minute=45)  # stale route snapshot
+    writer_2 = _second_writer(tmp_path, start_minute=45)  # sees the old route
     assign_human_route(store, route, assigned_actor="analyst-1",
                        now=pipeline.now_fn(), actor="a", marking=MARK)
-    # the stale writer's re-append of the pre-assignment route raises
     from curunir_semantic.contracts import CollectionRoute
     stale = CollectionRoute(**{
         **{k: v for k, v in route.items() if k != "record_type"},
@@ -173,7 +171,7 @@ def test_c1_5_route_task_binding_cannot_be_lost(tmp_path):
         route["route_id"]]["task_id"]
 
 
-# ---- CLASS 2: interrupted flows complete on re-run ------------------------
+# ---- an interrupted sequence of writes finishes on the next run ------------
 
 
 def _crash_once_on(store, event_type, predicate=None):
@@ -215,7 +213,7 @@ def test_c2_1_interrupted_propagation_completes(tmp_path):
         interpret_change(pipeline.context(), prior["manifestation_id"],
                          current["manifestation_id"], current_text=text)
     restore()
-    # change records exist, the tail was lost; the identical re-run completes
+    # The changes landed but the tail was lost; the same call finishes it.
     interpret_change(pipeline.context(), prior["manifestation_id"],
                      current["manifestation_id"], current_text=text)
     corrected = [claim_id for claim_id in pipeline.store.current_claims()
@@ -255,7 +253,7 @@ def test_c2_2_interrupted_route_accounting_recovers_without_reacquisition(tmp_pa
     with pytest.raises(OSError):
         execute_route(pipeline, registry, gleif_route, transports=transports)
     restore()
-    # the gap is durable state, not silence
+    # The gap is recorded, not passed over in silence.
     failures = [r for r in store.open_review_items()
                 if r["kind"] == "PROCESSING_FAILED"
                 and r["subject_kind"] == "collection_route"]
@@ -274,7 +272,7 @@ def test_c2_3_claim_standing_review_survives_crash(tmp_path):
     pipeline = make_pipeline(tmp_path)
     claim = _seed_claim(pipeline)
     store = pipeline.store
-    # an analyst marked the claim DISPUTED; then the source updates it
+    # An analyst disputes the claim, and then the source updates it.
     disputed = ClaimStateRecord(
         state_id="st-d", claim_id=claim["claim_id"], state="DISPUTED",
         reason="analyst dispute", caused_by="a", superseded_by="",
@@ -322,7 +320,7 @@ def test_c2_4_identity_ambiguity_queueing_completes(tmp_path):
         "every recorded equivalence proposal must be queued for a human"
 
 
-# ---- CLASS 3: exists paths fold, never silently discard --------------------
+# ---- a repeat call folds what the caller brought, never drops it -----------
 
 
 def test_c3_1_independence_requirement_cannot_be_downgraded_by_cache(tmp_path):
@@ -352,7 +350,7 @@ def test_c3_1_independence_requirement_cannot_be_downgraded_by_cache(tmp_path):
     linked = store.current_hypotheses()[hypothesis["hypothesis_id"]]
     assert strong["discriminator_id"] in linked["discriminator_ids"], \
         "the new hypothesis link is folded, not discarded"
-    # and the epistemic consequence holds: the same-family route scores zero
+    # And it has teeth: a route back to the same source now scores zero.
     opened = requirement_for_discriminator(store, strong, mission_context="m",
                                            now=pipeline.now_fn(), actor="a",
                                            marking=MARK)
@@ -382,7 +380,7 @@ def test_c3_2_requirement_escalation_is_folded(tmp_path):
         recorded_time=pipeline.now_fn(), marking=MARK, actor="x")
     assert escalated["priority"] == "HIGH"
     assert set(escalated["affected_ids"]) == {"a", "b", "c"}
-    # and never de-escalates
+    # A later, milder call must not lower it again.
     calmed = workflow.open_requirement(
         mission_context="m", question="q?", affected_ids=("a",),
         priority="LOW", rationale="r", required_evidence_type="E",
@@ -406,7 +404,7 @@ def test_c3_3_hypothesis_assumptions_are_folded(tmp_path):
     assert merged["unknowns"] == ["u1"]
 
 
-# ---- verification-round findings (R1–R8) ----------------------------------
+# ---- further findings from the same reading --------------------------------
 
 
 def test_r1_analytic_store_protects_semantic_families(tmp_path):
@@ -418,7 +416,7 @@ def test_r1_analytic_store_protects_semantic_families(tmp_path):
     root = tmp_path / "store"
     AnalyticStore.create(root, "t", T0)
     store_a = AnalyticStore(root)
-    store_b = AnalyticStore(root)  # concurrent writer
+    store_b = AnalyticStore(root)  # a second writer on the same store
     item = ReviewItem(item_id="i1", kind="CONTRADICTED", subject_kind="semantic_claim",
                       subject_id="c", detail="d", evidence_refs=(), status="OPEN",
                       resolution_note="", recorded_time="2026-08-17T12:01:00+00:00",
@@ -491,7 +489,7 @@ def test_r3_completion_never_restamps_human_adjudication(tmp_path):
     changed_claim = next(
         (claim_id for claim_id in store.current_claims()
          if store.claim_state(claim_id) == "STALE"), None)
-    if changed_claim is None:  # value advanced; pick the affected claim
+    if changed_claim is None:  # the value advanced instead; take that claim
         change = next(c for c in store.records_of("semantic_change")
                       if c["affected_claim_ids"])
         changed_claim = change["affected_claim_ids"][0]
@@ -502,7 +500,7 @@ def test_r3_completion_never_restamps_human_adjudication(tmp_path):
         recorded_time=pipeline.now_fn(), marking=MARK)
     store.append("SEMANTIC_CLAIM_STATE_RECORDED", disputed,
                  recorded_time=disputed.recorded_time, actor="jan")
-    # the completion re-scan must not re-stamp the human's judgment
+    # Re-running the scan must not write over what the person decided.
     interpret_change(pipeline.context(), prior["manifestation_id"],
                      current["manifestation_id"])
     assert store.claim_state(changed_claim) == "DISPUTED", \
@@ -520,7 +518,7 @@ def test_r4_r5_requirement_fold_preserves_workflow_and_versions(tmp_path):
         priority="MEDIUM", rationale="r", required_evidence_type="E",
         owning_role="ANALYST", closure_criteria="c", due_time=None,
         recorded_time=pipeline.now_fn(), marking=MARK, actor="x")
-    writer_2 = _second_writer(tmp_path, start_minute=50)  # pre-escalation view
+    writer_2 = _second_writer(tmp_path, start_minute=50)  # view before the raise
     workflow.request_evidence(requirement["requirement_id"],
                               request_kind="ANALYST_REVIEW", detail="d",
                               affected_ids=(), due_time=None,
@@ -538,7 +536,7 @@ def test_r4_r5_requirement_fold_preserves_workflow_and_versions(tmp_path):
         "the fold must not reset the projected workflow status"
     assert entry["transitions"], "the fold must not wipe the audit trail"
     assert entry["record"]["priority"] == "HIGH"
-    # R5: a stale concurrent fold raises instead of de-escalating
+    # A writer on the older view cannot lower the priority.
     with pytest.raises(StoreError, match="next version"):
         MissionWorkflow(writer_2.store).open_requirement(
             mission_context="m", question="q?", affected_ids=("z",),
@@ -559,7 +557,7 @@ def test_r6_noop_reintegration_leaves_standing_untouched(tmp_path):
                         retrieval_time="2026-08-17T13:00:00+00:00")
     pipeline.process_new_evidence()
     assert store.current_claims()[claim["claim_id"]]["version"] == 2
-    # a HUMAN retracts AFTER the advance
+    # A person retracts the claim after it advanced.
     retracted = ClaimStateRecord(
         state_id="st-r", claim_id=claim["claim_id"], state="RETRACTED",
         reason="human retraction", caused_by="analyst", superseded_by="",
@@ -571,7 +569,7 @@ def test_r6_noop_reintegration_leaves_standing_untouched(tmp_path):
     states_before = len(store.records_of("semantic_claim_state"))
     integration = IntegrationContext(store=store, actor="t", marking=MARK,
                                      now_fn=pipeline.now_fn)
-    integrate_all(integration)  # pure no-op re-entry over all evidence
+    integrate_all(integration)  # re-run over all evidence; nothing is new
     assert store.claim_state(claim["claim_id"]) == "RETRACTED"
     assert len(store.records_of("semantic_claim_state")) == states_before
     assert len(store.records_of("review_item")) == items_before, \
@@ -597,7 +595,7 @@ def test_r7_stale_route_mapping_cannot_resurrect_old_state(tmp_path):
                                     requirement_id=opened["discriminator"]["requirement_id"],
                                     now=pipeline.now_fn(), actor="p", marking=MARK)
     gleif_route = next(r for r in routes if r["source_id"] == "gleif")
-    stale_mapping = dict(gleif_route)  # caller keeps pre-assignment state
+    stale_mapping = dict(gleif_route)  # the caller keeps the pre-assignment copy
     assign_human_route(store, gleif_route, assigned_actor="analyst-1",
                        now=pipeline.now_fn(), actor="a", marking=MARK)
     result = execute_route(pipeline, registry, stale_mapping,
@@ -618,7 +616,7 @@ def test_r8_stale_claim_version_raises(tmp_path):
                         body=GLEIF_RECORD_LAPSED,
                         media_type="application/vnd.api+json",
                         retrieval_time="2026-08-17T13:00:00+00:00")
-    pipeline.process_new_evidence()  # claim advances to v2
+    pipeline.process_new_evidence()  # the claim advances to version 2
     from curunir_semantic.contracts import SemanticClaim
     shadow = SemanticClaim(**{
         **{k: v for k, v in claim.items() if k != "record_type"},
@@ -633,9 +631,7 @@ def test_r8_stale_claim_version_raises(tmp_path):
 
 
 def test_n1_superseded_change_never_restales_a_current_claim(tmp_path):
-    """Second-verification N1: completion must be gap-detection — an old
-    change's staleness verdict cannot be re-stamped onto a claim that later
-    evidence has advanced past it."""
+    """An older change cannot stale a claim that newer evidence has moved past."""
     from semantic_support import PAGE_V1, PAGE_V2_SEMANTIC
     from curunir_fabric.contracts import ChangeObservation
     pipeline = make_pipeline(tmp_path)
@@ -679,9 +675,8 @@ def test_n1_superseded_change_never_restales_a_current_claim(tmp_path):
 
 
 def test_n3_n4_standing_time_gate_is_offset_safe(tmp_path):
-    """Final-round N6 lock: the standing-vs-advance gate compares parsed
-    times, so a non-UTC offset can neither let a post-advance standing be
-    machine-reset nor block a legitimate pre-advance repair."""
+    """Times are compared as instants, so a non-UTC offset cannot make a later
+    record look earlier."""
     from curunir_semantic.worldmodel import IntegrationContext, integrate_all
     pipeline = make_pipeline(tmp_path)
     store = pipeline.store
@@ -691,11 +686,11 @@ def test_n3_n4_standing_time_gate_is_offset_safe(tmp_path):
                         body=GLEIF_RECORD_LAPSED,
                         media_type="application/vnd.api+json",
                         retrieval_time="2026-08-17T13:00:00+00:00")
-    pipeline.process_new_evidence()  # claim advances to v2
+    pipeline.process_new_evidence()  # the claim advances to version 2
     advance_time = next(c for c in reversed(store.records_of("semantic_claim"))
                         if c["claim_id"] == claim["claim_id"])["recorded_time"]
-    # a standing recorded AFTER the advance, written with a non-UTC offset
-    # that lexically sorts BEFORE the advance's UTC timestamp
+    # A state recorded after the advance, but stamped with an offset that
+    # makes the text sort before it.
     from curunir_operational.canonical import parse_time
     from datetime import timedelta, timezone
     later = (parse_time(advance_time) + timedelta(minutes=30)).astimezone(
@@ -712,16 +707,15 @@ def test_n3_n4_standing_time_gate_is_offset_safe(tmp_path):
     states_before = len(store.records_of("semantic_claim_state"))
     integration = IntegrationContext(store=store, actor="t", marking=MARK,
                                      now_fn=pipeline.now_fn)
-    integrate_all(integration)  # no-op re-entry
+    integrate_all(integration)  # a re-run with nothing new
     assert store.claim_state(claim["claim_id"]) == "SUPERSEDED", \
         "a post-advance standing must never be machine-reset, whatever its offset"
     assert len(store.records_of("semantic_claim_state")) == states_before
 
 
 def test_n5_first_pass_backlog_cannot_stale_a_current_claim(tmp_path):
-    """Final-round N5: even on the FIRST interpretation pass, a change whose
-    manifestation is older than the evidence the claim already rests on must
-    not stamp staleness — the ordering axis is the evidence, not the log."""
+    """What orders a change is the evidence it rests on, not its place in the
+    log: an old change never stales a claim built on newer evidence."""
     from semantic_support import PAGE_V1, PAGE_V2_SEMANTIC
     pipeline = make_pipeline(tmp_path)
     store = pipeline.store
@@ -740,13 +734,12 @@ def test_n5_first_pass_backlog_cannot_stale_a_current_claim(tmp_path):
                              body=page_v3, media_type="text/html",
                              retrieval_time="2026-08-17T12:40:00+00:00",
                              prior_manifestation_id=v2["manifestation_id"])
-    # integration first: the claim advances to the newest value BEFORE any
-    # change is interpreted (the demo driver ordering)
+    # Integrate first, so the claim already holds the newest value.
     pipeline.process_new_evidence()
     claim = next(c for c in store.current_claims().values()
                  if c["object_or_value"] == "Per Berg")
-    # now the backlog is interpreted oldest-first — the v1→v2 change is the
-    # NEWEST record in the log but carries the OLDEST evidence
+    # Now work through the backlog oldest first: this change was logged last
+    # but rests on the oldest evidence.
     interpret_change(pipeline.context(), v1["manifestation_id"],
                      v2["manifestation_id"])
     assert store.claim_state(claim["claim_id"]) == "CURRENT", \

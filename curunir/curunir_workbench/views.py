@@ -1,14 +1,14 @@
-"""Typed workbench views over one MissionProjection.
+"""The workbench screens, each built from one filtered projection.
 
-Every view here is a pure function of the access-filtered projection: it can
-only narrow or rearrange what the context is already entitled to see, never
-widen it. Current state and historical state stay distinct; observed and
-inferred stay distinct; NOT_SEARCHED never renders as absence.
+A view can only narrow or rearrange what the context may already see, never
+widen it. Current and historical state stay apart, so do observed and inferred,
+and "not searched yet" never renders as "nothing there".
 """
 from __future__ import annotations
 
 from typing import Any, Mapping
 
+from curunir_analytic.substrate import CANDIDATE_BINDING_KEYS
 from curunir_operational.canonical import parse_time
 
 from .projections import MissionProjection, _base_id, record_time
@@ -24,16 +24,17 @@ def _claims_about(projection: MissionProjection, object_id: str) -> list[dict]:
             or any(_base_id(ref) == object_id for ref in c.get("world_refs", ()))]
 
 
-def _claim_state(projection: MissionProjection, claim_id: str) -> dict | None:
-    latest: dict | None = None
+def _latest_claim_states(projection: MissionProjection) -> dict[str, dict]:
+    """The newest visible state record for each claim."""
+    latest: dict[str, dict] = {}
     for state in projection.family("semantic_claim_state"):
-        if state["claim_id"] == claim_id:
-            if latest is None or state["recorded_time"] >= latest["recorded_time"]:
-                latest = state
+        known = latest.get(state["claim_id"])
+        if known is None or state["recorded_time"] >= known["recorded_time"]:
+            latest[state["claim_id"]] = state
     return latest
 
 
-# ---- entity / event dossiers -------------------------------------------------
+# ---- entity / event dossiers ----
 
 def entity_list(projection: MissionProjection) -> list[dict]:
     rows = []
@@ -69,6 +70,7 @@ def entity_dossier(projection: MissionProjection, object_id: str) -> dict | None
                           if object_id in (p["left_object_id"], p["right_object_id"])]
     contradictions = [r for r in projection.family("review_item")
                       if r["subject_id"] in claim_ids or r["subject_id"] == object_id]
+    claim_states = _latest_claim_states(projection)
 
     def _touches(record: Mapping[str, Any], keys: tuple[str, ...]) -> bool:
         for key in keys:
@@ -95,10 +97,10 @@ def entity_dossier(projection: MissionProjection, object_id: str) -> dict | None
                         + tuple(f.get("basis", {}).get("contradicting_claim_ids", ())))]
     return {
         "current": current,
-        "history": history,          # every version visible to this context
+        "history": history,          # every version this context may see
         "relationships": relationships,
         "events": events,
-        "claims": [{**c, "state": (_claim_state(projection, c["claim_id"]) or {}).get("state", "ACTIVE")}
+        "claims": [{**c, "state": claim_states.get(c["claim_id"], {}).get("state", "ACTIVE")}
                    for c in claims],
         "identity_proposals": identity_proposals,   # ambiguity stays visible
         "contradictions": contradictions,
@@ -143,15 +145,16 @@ def event_dossier(projection: MissionProjection, activity_id: str) -> dict | Non
     }
 
 
-# ---- timeline ---------------------------------------------------------------
+# ---- timeline ----
 
 def timeline(projection: MissionProjection, *, axis: str = "valid",
              kinds: tuple[str, ...] = (), t_from: str | None = None,
              t_to: str | None = None) -> dict[str, Any]:
-    """Integrated mission timeline. axis="valid" places items at their
-    world-validity point where one exists; axis="knowledge" places items at
-    the time Curunír recorded them. Items with no valid point appear only on
-    the knowledge axis — absence of a valid time is shown, not invented."""
+    """One timeline for the mission.
+
+    The "valid" axis places an item when it happened in the world, the
+    "knowledge" axis when Curunír learned of it. An item with no world time
+    appears only on the knowledge axis; a missing time is shown, not guessed."""
     if axis not in ("valid", "knowledge"):
         raise ValueError(f"unknown timeline axis: {axis}")
     entries: list[dict] = []
@@ -266,15 +269,14 @@ def timeline(projection: MissionProjection, *, axis: str = "valid",
     return {"axis": axis, "entries": entries}
 
 
-# ---- relationship graph ------------------------------------------------------
+# ---- relationship graph ----
 
 def graph(projection: MissionProjection, *, focus: str | None = None,
           depth: int = 2, relation_types: tuple[str, ...] = (),
           include_proposals: bool = True) -> dict[str, Any]:
-    """Typed graph over visible entities/relations. Edge lines distinguish
-    observed relationships from analytical inference and open proposals;
-    identity ambiguity (POSSIBLY_SAME_AS, open association proposals) stays
-    visible as such."""
+    """A graph of the visible entities and their relations, drawing observed
+    links, inferred links and open proposals differently so that unsettled
+    identity stays visibly unsettled."""
     objects = {o["object_id"]: o for o in projection.visible_objects()}
     edges = []
     for record in projection.base_view["relationships"]:
@@ -335,11 +337,11 @@ def graph(projection: MissionProjection, *, focus: str | None = None,
             "association_proposals": proposals, "focus": focus}
 
 
-# ---- map --------------------------------------------------------------------
+# ---- map ----
 
 def map_view(projection: MissionProjection) -> dict[str, Any]:
-    """Evidence-backed geography only: objects with recorded geometry render;
-    objects without coordinates are listed as unlocated, never geocoded."""
+    """Only geography that is in the records: an object without coordinates is
+    listed as unlocated rather than placed by guesswork."""
     features = []
     unlocated = []
     for record in projection.visible_objects():
@@ -364,12 +366,12 @@ def map_view(projection: MissionProjection) -> dict[str, Any]:
             "unlocated": unlocated}
 
 
-# ---- source independence -----------------------------------------------------
+# ---- source independence ----
 
 def source_independence(projection: MissionProjection, *, claim_ids: tuple[str, ...]) -> dict[str, Any]:
-    """The dependence arithmetic behind a set of claims: manifestation count
-    vs unique sources vs independent origin families. 47 derivative articles
-    and 5 independent sources must look different."""
+    """How much independent support a set of claims really has: documents,
+    distinct sources and independent origins counted separately, so 47 copies of
+    one story cannot look like 47 sources."""
     claims = [c for c in projection.family("semantic_claim") if c["claim_id"] in set(claim_ids)]
     observation_ids: set[str] = set()
     dependence_groups: set[str] = set()
@@ -402,14 +404,13 @@ def source_independence(projection: MissionProjection, *, claim_ids: tuple[str, 
     }
 
 
-# ---- hypothesis comparison / evidence matrix --------------------------------
+# ---- hypothesis comparison / evidence matrix ----
 
 def hypothesis_matrix(projection: MissionProjection, *,
                       hypothesis_ids: tuple[str, ...] = ()) -> dict[str, Any]:
-    """Projected — never manually maintained — hypothesis/evidence matrix.
-    Cells derive from actual claim links; a claim contradicting one hypothesis
-    and supporting another appears in both columns with its dependence family
-    visible, and unresolved stays '?' rather than becoming a soft plus."""
+    """Claims against hypotheses, computed from the recorded links rather than
+    kept by hand. One claim may support one hypothesis and contradict another,
+    and unresolved stays "?" instead of drifting into faint support."""
     hypotheses = [h for h in projection.family("hypothesis")
                   if not hypothesis_ids or h["hypothesis_id"] in set(hypothesis_ids)]
     claim_rows: dict[str, dict[str, str]] = {}
@@ -419,17 +420,18 @@ def hypothesis_matrix(projection: MissionProjection, *,
         for claim_id in hypothesis.get("contradicting_claim_ids", ()):
             claim_rows.setdefault(claim_id, {})[hypothesis["hypothesis_id"]] = "CONTRADICTS"
     claims = {c["claim_id"]: c for c in projection.family("semantic_claim")}
+    claim_states = _latest_claim_states(projection)
     rows = []
     for claim_id in sorted(claim_rows):
         claim = claims.get(claim_id)
         if claim is None and claim_id != "REDACTED":
-            continue  # hidden basis never renders
+            continue  # hidden support never renders
         rows.append({
             "claim_id": claim_id,
             "statement": claim["statement"] if claim else "",
             "independent_basis_count": claim.get("independent_basis_count", 0) if claim else 0,
             "dependence_group_ids": claim.get("dependence_group_ids", ()) if claim else (),
-            "state": (_claim_state(projection, claim_id) or {}).get("state", "ACTIVE"),
+            "state": claim_states.get(claim_id, {}).get("state", "ACTIVE"),
             "cells": {h["hypothesis_id"]: claim_rows[claim_id].get(h["hypothesis_id"], "UNRESOLVED")
                       for h in hypotheses},
         })
@@ -449,12 +451,12 @@ def hypothesis_matrix(projection: MissionProjection, *,
     }
 
 
-# ---- coverage matrix ---------------------------------------------------------
+# ---- coverage matrix ----
 
 def coverage_matrix(projection: MissionProjection, *,
                     need_id: str | None = None) -> dict[str, Any]:
-    """Source-family coverage per information need. NOT_SEARCHED is a state,
-    never rendered as absence of a gap."""
+    """Which source families have been searched for each information need;
+    "not searched" is a state of its own, never an absent gap."""
     assessments = projection.family("fabric_coverage")
     if need_id:
         assessments = [a for a in assessments if a["need_id"] == need_id]
@@ -480,12 +482,11 @@ def coverage_matrix(projection: MissionProjection, *,
     return {"rows": rows}
 
 
-# ---- unified review queue ----------------------------------------------------
+# ---- unified review queue ----
 
 def review_queue(projection: MissionProjection) -> dict[str, Any]:
-    """One surface for everything awaiting human judgment: semantic review
-    items (contradictions, stale assumptions), model analytical proposals,
-    identity/association proposals, and reports in review."""
+    """Everything waiting on a person: review items, model proposals, identity
+    proposals and reports in review."""
     items = []
     for record in projection.family("review_item"):
         items.append({"queue": "SEMANTIC", "kind": record["kind"], "id": record["item_id"],
@@ -518,13 +519,10 @@ def review_queue(projection: MissionProjection) -> dict[str, Any]:
         target_kind = content.get("target_kind", "")
         subject_id = ""
         if target_kind:
-            try:
-                from curunir_analytic.substrate import CANDIDATE_BINDING_KEYS
-                for key in CANDIDATE_BINDING_KEYS.get(target_kind, ()):
-                    if content.get(key):
-                        subject_id = str(content[key]); break
-            except ImportError:
-                pass
+            for key in CANDIDATE_BINDING_KEYS.get(target_kind, ()):
+                if content.get(key):
+                    subject_id = str(content[key])
+                    break
         items.append({"queue": "MODEL_PROPOSAL", "kind": record.get("proposal_type", ""),
                       "id": record["proposal_id"],
                       "subject_kind": target_kind,

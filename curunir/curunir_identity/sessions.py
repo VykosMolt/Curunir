@@ -1,4 +1,4 @@
-"""Bounded challenge-response authentication and short-lived sessions."""
+"""Challenge-response sign-in and short-lived sessions, both bounded in number."""
 from __future__ import annotations
 
 import secrets
@@ -141,9 +141,8 @@ class SessionManager:
             try:
                 self._prune_sessions(now, actor_id)
             except AuthError:
-                # Authentication succeeded, but capacity admission did not.
-                # Preserve the verified one-time challenge so a retry after
-                # capacity becomes available does not require a new nonce.
+                # The signature was good but there was no room. Keep the challenge
+                # so the same nonce works once space frees up.
                 self._pending[nonce] = pending
                 raise
             session = Session(

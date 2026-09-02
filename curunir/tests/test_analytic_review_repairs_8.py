@@ -1,6 +1,6 @@
-"""Round-4 forecasting-review exploit locks: the hindsight clock is the
-evidence record, not just the horizon; an open human adjudication blocks
-EVERY machine verdict; a pre-authorization is never silently superseded."""
+"""A forecast whose answer was already on the record scores nothing, even inside
+its horizon; while a person's decision is pending the machine states no verdict;
+and re-arming an indicator never quietly changes what it was authorized to do."""
 from __future__ import annotations
 
 import pytest
@@ -14,23 +14,13 @@ from curunir_analytic.forecasts import (create_forecast, refresh_forecast,
 from curunir_analytic.indicators import arm_indicator
 
 from analytic_support import (GLEIF_ACME, GLEIF_ACME_SUSPENDED, MARK, T0,
-                              make_analytic)
-from semantic_support import plant_manifestation
+                              make_analytic, seed_acme)
+from semantic_support import advance_clock_past, plant_manifestation
 
 pytestmark = pytest.mark.no_db
 
 HORIZON = "2026-08-17T18:00:00+00:00"
 ACME = "LEI:ACMELEI000000000001"
-
-
-def _seed(pipeline, ctx):
-    plant_manifestation(pipeline, source_id="gleif",
-                        native_id="lei/ACMELEI000000000001",
-                        body=GLEIF_ACME, media_type="application/json",
-                        retrieval_time=T0)
-    pipeline.process_new_evidence()
-    return {c["predicate"]: c["claim_id"] for c in ctx.store.current_claims().values()
-            if c["subject_ref"] == ACME}
 
 
 def _rule(expected="INACTIVE"):
@@ -63,15 +53,14 @@ def _flip(pipeline, ctx, body=GLEIF_ACME_SUSPENDED):
     pipeline.process_new_evidence()
 
 
-# ---- R4-1: the answer-in-hand clock is the evidence record -----------------
+# ---- was the answer already on the record when it was written? -------------
 
 
 def test_forecast_resolved_by_prior_evidence_feeds_no_aggregate(tmp_path):
-    """The round-4 MAJOR: authored two minutes after the claim that resolves
-    it, resolved off that same claim — brier ~0, and previously aggregated
-    as calibration because the horizon lay comfortably ahead."""
+    """A forecast written after the claim that settles it scores nothing,
+    however far off its horizon is."""
     pipeline, ctx = make_analytic(tmp_path)
-    by_predicate = _seed(pipeline, ctx)
+    by_predicate = seed_acme(pipeline, ctx)
     posed = _forecast(ctx, by_predicate, probability=0.97, expected="ACTIVE",
                       tag="already-answered")
     resolved = try_machine_resolution(ctx, posed["forecast_id"])
@@ -82,7 +71,7 @@ def test_forecast_resolved_by_prior_evidence_feeds_no_aggregate(tmp_path):
     assert row["resolved_by_prior_evidence"] is True, \
         "the resolving claim was on the record before the number was written"
     assert row["authored_after_horizon"] is False, \
-        "the horizon flag alone would have missed this shape"
+        "the horizon alone would not have caught this"
     assert board["overall"]["count"] == 0
     assert board["coverage"]["resolved_by_prior_evidence"] == 1
     assert board["coverage"]["scored"] == 0
@@ -90,7 +79,7 @@ def test_forecast_resolved_by_prior_evidence_feeds_no_aggregate(tmp_path):
 
 def test_genuinely_forward_resolution_still_scores(tmp_path):
     pipeline, ctx = make_analytic(tmp_path)
-    by_predicate = _seed(pipeline, ctx)
+    by_predicate = seed_acme(pipeline, ctx)
     forecast = _forecast(ctx, by_predicate, probability=0.35, tag="forward")
     _flip(pipeline, ctx)  # NEW evidence, recorded after authoring
     assert try_machine_resolution(
@@ -103,37 +92,35 @@ def test_genuinely_forward_resolution_still_scores(tmp_path):
         "a question settled by evidence that arrived later is real calibration"
 
 
-# ---- R4-2: an open human adjudication blocks EVERY machine verdict ---------
+# ---- a pending human decision blocks every machine verdict -----------------
 
 
 def test_machine_false_cannot_settle_over_an_open_latematch_item(tmp_path):
     pipeline, ctx = make_analytic(tmp_path)
-    by_predicate = _seed(pipeline, ctx)
+    by_predicate = seed_acme(pipeline, ctx)
     forecast = _forecast(ctx, by_predicate, probability=0.30,
                          horizon="2026-08-17T12:04:00+00:00")
     refresh_forecast(ctx, forecast["forecast_id"], caused_by="tick")
-    _flip(pipeline, ctx)  # expected value appears — post-horizon evidence
+    _flip(pipeline, ctx)  # the expected value appears, after the horizon
     try_machine_resolution(ctx, forecast["forecast_id"])
     assert [r for r in ctx.store.open_review_items()
             if r["kind"] == "EXPECTED_NOT_OBSERVED"
             and r["subject_id"] == forecast["forecast_id"]], "human question open"
-    _flip(pipeline, ctx, body=GLEIF_ACME)  # the claim flips BACK
+    _flip(pipeline, ctx, body=GLEIF_ACME)  # and flips back again
     still = try_machine_resolution(ctx, forecast["forecast_id"])
     assert still["status"] == "HORIZON_PASSED", \
-        "the machine may not assert what the claim read at a horizon it " \
-        "never saw, in either direction, while its own record says a human " \
-        "must decide"
+        "while a person must decide, the machine states no verdict either way"
     assert [r for r in ctx.store.open_review_items()
             if r["subject_id"] == forecast["forecast_id"]], \
         "and the human question survives"
 
 
-# ---- R4-5: a pre-authorization is never silently superseded ----------------
+# ---- re-arming never quietly changes what was authorized -------------------
 
 
 def test_rearming_with_a_different_effect_is_refused(tmp_path):
     pipeline, ctx = make_analytic(tmp_path)
-    by_predicate = _seed(pipeline, ctx)
+    by_predicate = seed_acme(pipeline, ctx)
     forecast = _forecast(ctx, by_predicate)
 
     def _arm(target):
@@ -155,12 +142,12 @@ def test_rearming_with_a_different_effect_is_refused(tmp_path):
         _arm(0.90)
     assert ctx.store.current_indicators()[
         armed["indicator_id"]]["effect"]["target_probability"] == 0.62
-    # identical re-arm (crash-recovery) still completes quietly
+    # Re-arming with the same effect still completes, for crash recovery.
     again = _arm(0.62)
     assert again["indicator_id"] == armed["indicator_id"]
 
 
-# ---- R4-4: delimiters are Unicode-aware ------------------------------------
+# ---- a name inside a longer word is a different name -----------------------
 
 
 def test_url_binding_treats_non_ascii_letters_as_token_characters():
@@ -174,15 +161,14 @@ def test_url_binding_treats_non_ascii_letters_as_token_characters():
     assert _execution_touches_subject(exact, values, {})
 
 
-# ---- R4-3: the diagnostic separates 'never looked' from 'could not
-#            attribute' -----------------------------------------------------
+# ---- "never looked" and "looked but could not attribute" are different -----
 
 
 def test_coverage_diagnostic_names_the_real_gap(tmp_path):
     from curunir_analytic.forecasts import _absence_coverage_satisfied
     from curunir_fabric.contracts import ExecutionRecord
     pipeline, ctx = make_analytic(tmp_path)
-    _seed(pipeline, ctx)
+    seed_acme(pipeline, ctx)
     execution = ExecutionRecord(
         execution_id="exec-someone-else", plan_id="", query_id="q-z",
         source_id="gleif", connector_id="c", connector_version="1",
@@ -205,13 +191,13 @@ def test_coverage_diagnostic_names_the_real_gap(tmp_path):
         "'never looked' is stated as such"
 
 
-# ---- R5 minors: the flag's coverage, its over-reach, the field set ---------
+# ---- what the flag covers, and what it must not ----------------------------
 
 
 def test_citing_the_prior_observation_does_not_evade_the_flag(tmp_path):
     from curunir_analytic.forecasts import resolve_forecast_human
     pipeline, ctx = make_analytic(tmp_path)
-    by_predicate = _seed(pipeline, ctx)
+    by_predicate = seed_acme(pipeline, ctx)
     posed = _forecast(ctx, by_predicate, probability=0.97, expected="ACTIVE",
                       tag="obs-cited")
     observation_id = next(
@@ -231,10 +217,10 @@ def test_citing_the_prior_observation_does_not_evade_the_flag(tmp_path):
 
 def test_same_value_reversion_after_authoring_does_not_unflag(tmp_path):
     pipeline, ctx = make_analytic(tmp_path)
-    by_predicate = _seed(pipeline, ctx)
+    by_predicate = seed_acme(pipeline, ctx)
     posed = _forecast(ctx, by_predicate, probability=0.97, expected="ACTIVE",
                       tag="reversion")
-    # the SAME value re-enters from a fresh retrieval after authoring
+    # A later fetch returns the same value the record already held.
     plant_manifestation(pipeline, source_id="gleif",
                         native_id="lei/ACMELEI000000000001",
                         body=GLEIF_ACME, media_type="application/json",
@@ -254,11 +240,10 @@ def test_same_value_reversion_after_authoring_does_not_unflag(tmp_path):
 def test_honest_negative_forecasts_are_not_excluded(tmp_path):
     from curunir_analytic.forecasts import resolve_forecast_human
     pipeline, ctx = make_analytic(tmp_path)
-    by_predicate = _seed(pipeline, ctx)
+    by_predicate = seed_acme(pipeline, ctx)
     negative = _forecast(ctx, by_predicate, probability=0.03,
                          horizon="2026-08-17T12:30:00+00:00", tag="negative")
-    while ctx.now_fn() <= "2026-08-17T12:30:00+00:00":
-        pass
+    advance_clock_past(ctx.now_fn, "2026-08-17T12:30:00+00:00")
     resolve_forecast_human(ctx, negative["forecast_id"], outcome="FALSE",
                            evidence_refs=(by_predicate["entity_status"],),
                            note="nothing happened; the standing claim shows it",
@@ -274,7 +259,7 @@ def test_honest_negative_forecasts_are_not_excluded(tmp_path):
 
 def test_rearm_cannot_silently_retarget_the_watch(tmp_path):
     pipeline, ctx = make_analytic(tmp_path)
-    by_predicate = _seed(pipeline, ctx)
+    by_predicate = seed_acme(pipeline, ctx)
     forecast = _forecast(ctx, by_predicate)
 
     def _arm(attribute):
@@ -299,15 +284,14 @@ def test_rearm_cannot_silently_retarget_the_watch(tmp_path):
         "the watch fires on what the human aimed it at, nothing else"
 
 
-# ---- R6 closure: the flag is a fact about the resolution, forever ----------
+# ---- the flag describes the resolution, and never changes ------------------
 
 
 def test_flag_does_not_drift_when_the_claim_later_moves_on(tmp_path):
-    """A replayed calibration surface must not change because the world
-    changed AFTER the question settled — and 'wait for the claim to move'
-    must not be an un-flagging strategy."""
+    """The scoreboard must not change because the world moved on after the
+    question settled: waiting for that is no way to lose the flag."""
     pipeline, ctx = make_analytic(tmp_path)
-    by_predicate = _seed(pipeline, ctx)
+    by_predicate = seed_acme(pipeline, ctx)
     posed = _forecast(ctx, by_predicate, probability=0.97, expected="ACTIVE",
                       tag="drift")
     assert try_machine_resolution(
@@ -316,7 +300,7 @@ def test_flag_does_not_drift_when_the_claim_later_moves_on(tmp_path):
     assert next(r for r in board["rows"]
                 if r["forecast_id"] == posed["forecast_id"])
     assert board["overall"]["count"] == 0
-    # the claim flips long after the resolution
+    # The claim flips long after the question was settled.
     _flip(pipeline, ctx)
     board_after = scoreboard(ctx.store)
     row = next(r for r in board_after["rows"]
@@ -327,12 +311,11 @@ def test_flag_does_not_drift_when_the_claim_later_moves_on(tmp_path):
 
 
 def test_pre_horizon_human_false_on_prior_evidence_is_flagged(tmp_path):
-    """A FALSE called BEFORE the horizon closed nothing: citing evidence
-    already on the record at authoring is the answer in hand — the cheapest
-    way to farm the reputation surface, now refused."""
+    """Calling FALSE early on evidence that was already there is the answer in
+    hand, and is flagged like any other."""
     from curunir_analytic.forecasts import resolve_forecast_human
     pipeline, ctx = make_analytic(tmp_path)
-    by_predicate = _seed(pipeline, ctx)
+    by_predicate = seed_acme(pipeline, ctx)
     farmed = _forecast(ctx, by_predicate, probability=0.02,
                        horizon="2027-01-01T00:00:00+00:00", tag="farm")
     resolve_forecast_human(ctx, farmed["forecast_id"], outcome="FALSE",
@@ -344,5 +327,4 @@ def test_pre_horizon_human_false_on_prior_evidence_is_flagged(tmp_path):
                if r["forecast_id"] == farmed["forecast_id"])
     assert row["resolved_by_prior_evidence"] is True
     assert board["overall"]["count"] == 0
-    # while the honest post-horizon negative (locked above in
-    # test_honest_negative_forecasts_are_not_excluded) still scores
+    # An honest negative, settled after its horizon, still scores.

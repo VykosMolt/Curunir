@@ -1,12 +1,8 @@
-"""Global Source Registry — queryable knowledge of what sources can provide.
+"""The source registry: what each registered source can provide.
 
-Identity and policy metadata reuse the ARGUS Source Intelligence
-``SourceDescriptor`` (bitemporal, immutable versions); acquisition-shape
-facts live in the fabric ``CapabilityProfile``; operational health is an
-append-only stream of ``SourceStatusEvent``s. All three are persisted as
-events in the ``FabricStore`` and rebuilt by replay, so the registry answers
-questions like "which registered sources can establish historical company
-records?" from durable, attributable state.
+Identity comes from the kernel SourceDescriptor, capabilities from the fabric
+CapabilityProfile, and health from status events. All three are replayed from
+the store.
 """
 from __future__ import annotations
 
@@ -41,7 +37,7 @@ def register_source(store: FabricStore, descriptor: SourceDescriptor, profile: C
                     *, recorded_time: str, actor: str) -> None:
     if profile.source_id != descriptor.source_id:
         raise ValueError("profile does not belong to this source descriptor")
-    # validates capability vocabulary and bitemporal version conflicts before persisting
+    # The kernel registry validates the descriptor before anything is persisted.
     load_registry(store).registry.register(descriptor)
     store.append("FABRIC_SOURCE_DESCRIBED", _descriptor_record(descriptor),
                  recorded_time=recorded_time, actor=actor)
@@ -61,7 +57,7 @@ def record_source_status(store: FabricStore, *, source_id: str, connector_id: st
 
 @dataclass(frozen=True)
 class RegistryView:
-    """Replayed registry state with the capability query surface."""
+    """Registry state replayed from the store, with capability queries."""
     registry: SourceRegistry
     profiles: dict[str, dict]        # source_id -> latest profile record
     statuses: dict[str, list[dict]]  # source_id -> status records in order
@@ -90,11 +86,7 @@ class RegistryView:
     def capable_sources(self, *, operation: str | None = None, capability: str | None = None,
                         language: str | None = None, jurisdiction: str | None = None,
                         historical: bool | None = None) -> list[SourceDescriptor]:
-        """Sources whose declared descriptor + profile can serve the ask.
-
-        ``historical=True`` restricts to sources that provide historical rather
-        than merely current records (profile depth or historical operations).
-        """
+        """Sources whose descriptor and profile match the filters."""
         matches = []
         for descriptor in self.current_descriptors():
             profile = self.profiles.get(descriptor.source_id)
@@ -119,14 +111,15 @@ class RegistryView:
         return matches
 
     def monitorable_sources(self, *, max_latency: str) -> list[SourceDescriptor]:
-        """Sources whose update latency is at least as fast as ``max_latency``."""
+        """Sources that can be polled and update at least as fast as ``max_latency``."""
         ceiling = _LATENCY_RANK[max_latency]
         found = []
         for descriptor in self.current_descriptors():
             profile = self.profiles.get(descriptor.source_id)
-            if profile is None or "POLL" not in profile["supported_operations"] \
-                    and "FETCH" not in profile["supported_operations"] \
-                    and "SEARCH" not in profile["supported_operations"]:
+            if profile is None:
+                continue
+            operations = set(profile["supported_operations"])
+            if not operations & {"POLL", "FETCH", "SEARCH"}:
                 continue
             if _LATENCY_RANK.get(profile["update_latency"], len(UPDATE_LATENCIES)) <= ceiling:
                 found.append(descriptor)

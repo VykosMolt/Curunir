@@ -1,7 +1,6 @@
-"""V2 integration tests over the three-scenario orchestration: second
-workbench, shared object fabric, cross-workbench workflow, live-data handling,
-public-document evidence, provider evaluation, access, multi-scenario, mission
-questions. Runs the orchestration once per module."""
+"""Integration tests over the three-scenario run: a second workbench on the shared
+object fabric, cross-workbench workflow, live and document evidence, provider
+evaluation, access, and the mission questions. The run happens once per module."""
 from __future__ import annotations
 
 import json
@@ -22,27 +21,26 @@ def v2run(tmp_path_factory):
     return run_v2(base / "run", base / "out"), base / "out"
 
 
-# ---- second workbench + shared fabric --------------------------------------
+# ---- second workbench on the shared fabric ----
 
 def test_second_workbench_reuses_shared_fabric(v2run):
     result, _ = v2run
     jr = result["joint_report"]
     assert jr["shared_objects"], "both workbenches must consume shared objects"
     assert jr["infrastructure_object_count"] > 0 and jr["logistics_object_count"] > 0
-    # a shared bridge object appears in both workbench object sets
     assert any(o.startswith("infra-") for o in jr["shared_objects"])
 
 
 def test_no_second_domain_package_and_no_scenario_constants():
     core = Path("curunir_operational")
-    # scenario config lives only under scenario/; core modules stay constant-free
+    # Scenario names belong under scenario/, never in a core module.
     scenario_tokens = ("BR-7", "SUB-4", "RELIEF-", "Vessia", "GDACS", "hazard-9900001", "eng-ENG",
                        "CORRIDOR-OPS", "SENSITIVE-INFRA", "ENGINEERING-ASSESSMENT")
     for path in core.glob("*.py"):
         text = path.read_text(encoding="utf-8")
         for token in scenario_tokens:
             assert token not in text, f"scenario constant {token} leaked into core {path.name}"
-    # exactly one operational core; the second workbench is a definition, not a package
+    # The second workbench is a definition, not a second package.
     assert not (core / "infrastructure").exists() and not (core / "civil_protection").exists()
 
 
@@ -53,7 +51,7 @@ def test_infrastructure_workbench_validates_and_renders(v2run):
     assert definition["relationship_tables"][0]["relation_types"]
 
 
-# ---- cross-workbench behavior ----------------------------------------------
+# ---- cross-workbench behaviour ----
 
 def test_hazard_to_route_impact_and_dependency(v2run):
     result, _ = v2run
@@ -65,27 +63,24 @@ def test_hazard_to_route_impact_and_dependency(v2run):
 
 def test_shared_provenance_across_workbenches(v2run):
     result, out = v2run
-    # the joint report's cross-domain impacts reference shared object ids that
-    # both workbenches can explain from the same store
     jr = result["joint_report"]
     assert any(i["to"].startswith(("infra-", "route-")) for i in jr["cross_domain_impacts"])
 
 
 def test_cross_workbench_decision_preserves_provenance(v2run):
     result, out = v2run
-    # route-R1 restriction carries a decision_basis linking back to the decision
     projection = json.loads((out / "05_v2_workbenches" / "joint_coordinator_report.json").read_text())
     assert ("route-R1", "ACCEPTED") not in projection["decisions"] or projection["decisions"]
 
 
-# ---- live data + public-document evidence ----------------------------------
+# ---- live data and document evidence ----
 
 def test_live_vs_synthetic_distinct(v2run):
     live = json.loads(Path("artifacts/curunir_v1_audit_hardening_and_v2_multi_workbench_20260720/"
                            "03_v2_live_acquisition/live_acquisition_record.json").read_text())
     assert live["sources"][0]["kind"] == "structured_feed"
     assert live["sources"][0]["fixture_events"] <= live["sources"][0]["total_events_in_feed"]
-    # public document went through the SI chain, not a bare URL
+    # The public document came through the evidence chain, not a bare URL.
     doc = live["sources"][1]
     assert "si_chain" in doc and doc["si_chain"]["review_state"] == "AI_SECONDARY_REVIEW"
     assert doc["si_chain"]["content_object_id"] and doc["si_chain"]["evidence_basis_id"]
@@ -98,7 +93,7 @@ def test_public_document_evidence_in_scenario(v2run):
     assert all(e["review_state"] in ("UNREVIEWED", "AI_SECONDARY_REVIEW") for e in q[5]["answer"])
 
 
-# ---- provider evaluation ----------------------------------------------------
+# ---- provider evaluation ----
 
 def test_provider_evaluation(v2run):
     result, _ = v2run
@@ -111,7 +106,7 @@ def test_provider_evaluation(v2run):
     assert result["provider_eval"]["learned_model_comparison"] == "NOT_RUN"
 
 
-# ---- delta sync -------------------------------------------------------------
+# ---- delta sync ----
 
 def test_delta_sync_report(v2run):
     result, _ = v2run
@@ -124,25 +119,22 @@ def test_delta_sync_report(v2run):
     assert d["tamper_detected"] is True
 
 
-# ---- cross-workbench access -------------------------------------------------
+# ---- cross-workbench access ----
 
 def test_cross_workbench_access_no_leakage(v2run):
     result, _ = v2run
     matrix = result["access_matrix"]
     assert matrix["leakage_failures"] == 0
     views = matrix["views"]
-    # engineering compartment only visible to holders
+    # Only a holder of the engineering compartment sees its objects.
     assert not views["logistics"]["sees_engineering_objects"]
     assert not views["civil_protection"]["sees_engineering_objects"]
     assert views["joint"]["sees_engineering_objects"]
-    # public-evidence context sees only the public evidence object
     assert views["public_evidence"]["objects"] == 1
-    # a lower context sees the route but not its restricted reason is allowed;
-    # what must not leak is engineering ids/compartments (checked by leakage=0)
     assert not views["civil_protection"]["unauthorized_id_leaks"]
 
 
-# ---- multi-scenario generalization -----------------------------------------
+# ---- multiple scenarios on one core ----
 
 def test_three_scenarios_same_core(v2run):
     result, out = v2run

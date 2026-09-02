@@ -1,7 +1,7 @@
-"""Typed cross-object search over one authorized projection.
+"""Search across every family in one authorized projection.
 
-Results preserve object type and say what matched. Search only ever sees the
-access-filtered projection, so hidden objects can neither hit nor be counted.
+Each result keeps its type and names the fields that matched. Search sees only
+the filtered projection, so a hidden record can neither match nor be counted.
 """
 from __future__ import annotations
 
@@ -51,7 +51,7 @@ def search(projection: MissionProjection, query: str, *,
     wanted = set(types) if types else None
     results: list[dict] = []
 
-    # world-model objects and events come from the operational base view
+    # Objects and events come from the operational base view.
     if wanted is None or "object" in wanted:
         for record in projection.visible_objects():
             haystacks = {"labels": " ".join(record.get("labels", ())),

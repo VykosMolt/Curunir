@@ -1,6 +1,4 @@
-// API client: bearer token from sessionStorage, honest error surfaces.
-// The browser holds no mission truth — every read is an authorized
-// projection, every write is a named command.
+// API client. The bearer token lives in sessionStorage; errors carry the server's detail.
 
 export class ApiError extends Error {
   constructor(status, detail, payload) {

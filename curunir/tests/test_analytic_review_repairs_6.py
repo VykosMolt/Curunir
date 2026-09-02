@@ -1,6 +1,6 @@
-"""Round-2 forecasting-review exploit locks: consumption over value checks,
-subject-bound coverage, horizon discipline on both resolution and scoring,
-defeat tests that see the pre-arming world, and crash-completion everywhere."""
+"""More forecasting exploits, now refused: a firing is spent whatever the number
+now reads, coverage must be about this subject, "by the horizon" is part of the
+question, and every interrupted write completes rather than repeating."""
 from __future__ import annotations
 
 import pytest
@@ -19,25 +19,15 @@ from curunir_analytic.providers import AnalyticalAssist, analytical_assist_packa
 from curunir_analytic.substrate import resolve_candidate
 from curunir_fabric.contracts import ExecutionRecord
 
-from analytic_support import (GLEIF_ACME, GLEIF_ACME_SUSPENDED, MARK, T0,
-                              make_analytic)
-from semantic_support import plant_manifestation
+from analytic_support import (GLEIF_ACME_SUSPENDED, MARK, T0, make_analytic,
+                              seed_acme)
+from semantic_support import advance_clock_past, plant_manifestation
 
 pytestmark = pytest.mark.no_db
 
 HORIZON = "2026-08-17T18:00:00+00:00"
 ACME = "LEI:ACMELEI000000000001"
 ACME_URL = "https://api.gleif.org/api/v1/lei-records/ACMELEI000000000001"
-
-
-def _seed(pipeline, ctx):
-    plant_manifestation(pipeline, source_id="gleif",
-                        native_id="lei/ACMELEI000000000001",
-                        body=GLEIF_ACME, media_type="application/json",
-                        retrieval_time=T0)
-    pipeline.process_new_evidence()
-    return {c["predicate"]: c["claim_id"] for c in ctx.store.current_claims().values()
-            if c["subject_ref"] == ACME}
 
 
 def _rule(expected="INACTIVE"):
@@ -84,14 +74,14 @@ def _flip_to_suspended(pipeline, ctx):
     pipeline.process_new_evidence()
 
 
-# ---- R2-1: consumption, not a value check ----------------------------------
+# ---- a firing is spent, whatever the number now reads ----------------------
 
 
 def test_stale_firing_cannot_overwrite_later_human_judgment(tmp_path):
-    """The round-2 CRITICAL: after the human moves the number away from the
-    target, the long-fired indicator must NOT be redeemable again."""
+    """Moving the number away from the target does not make the firing
+    redeemable again."""
     pipeline, ctx = make_analytic(tmp_path)
-    by_predicate = _seed(pipeline, ctx)
+    by_predicate = seed_acme(pipeline, ctx)
     forecast = _forecast(ctx, by_predicate, probability=0.35)
     indicator = arm_indicator(
         ctx, description=f"entity_status for {ACME} reads INACTIVE",
@@ -120,24 +110,24 @@ def test_stale_firing_cannot_overwrite_later_human_judgment(tmp_path):
         "the analyst's later judgment stands"
 
 
-# ---- R2-2: coverage is about THIS question ---------------------------------
+# ---- coverage must be about this question ----------------------------------
 
 
 def test_declared_source_searched_about_someone_else_is_not_coverage(tmp_path):
     pipeline, ctx = make_analytic(tmp_path)
-    by_predicate = _seed(pipeline, ctx)
+    by_predicate = seed_acme(pipeline, ctx)
     forecast = _forecast(ctx, by_predicate, probability=0.20,
                          expected="NEVER_SO",
                          horizon="2026-08-17T12:04:00+00:00")
     refresh_forecast(ctx, forecast["forecast_id"], caused_by="tick")
-    # a real GLEIF search — about a DIFFERENT company
+    # A real search of the right registry, about a different company.
     _execution(ctx, execution_id="exec-other-lei",
                request_url="https://api.gleif.org/api/v1/lei-records/"
                            "SOMEOTHERLEI0000000001")
     still = try_machine_resolution(ctx, forecast["forecast_id"])
     assert still["status"] == "HORIZON_PASSED", \
         "a search of the right site about the wrong entity proves nothing here"
-    # the same search about THIS subject resolves it
+    # The same search about this subject does settle it.
     _execution(ctx, execution_id="exec-this-lei")
     resolved = try_machine_resolution(ctx, forecast["forecast_id"])
     assert resolved["status"] == "RESOLVED_FALSE"
@@ -146,7 +136,7 @@ def test_declared_source_searched_about_someone_else_is_not_coverage(tmp_path):
 
 def test_unattributable_executions_fail_safe(tmp_path):
     pipeline, ctx = make_analytic(tmp_path)
-    _seed(pipeline, ctx)
+    seed_acme(pipeline, ctx)
     _execution(ctx, execution_id="exec-anon", request_url="")
     satisfied, _, _ = _absence_coverage_satisfied(
         ctx.store, {"absence_required_source_ids": ("gleif",),
@@ -156,12 +146,12 @@ def test_unattributable_executions_fail_safe(tmp_path):
         "an execution attributable to no subject does not count for one"
 
 
-# ---- R2-3: APPLY effects name their subject --------------------------------
+# ---- an indicator that moves a number must name its subject ----------------
 
 
 def test_attribute_only_pattern_cannot_execute_a_number_move(tmp_path):
     pipeline, ctx = make_analytic(tmp_path)
-    by_predicate = _seed(pipeline, ctx)
+    by_predicate = seed_acme(pipeline, ctx)
     forecast = _forecast(ctx, by_predicate)
     with pytest.raises(ValueError, match="must name its subject"):
         arm_indicator(
@@ -174,7 +164,7 @@ def test_attribute_only_pattern_cannot_execute_a_number_move(tmp_path):
                                    target_probability=0.62,
                                    rationale="r", authorized_by="jan",
                                    authorized_kind="HUMAN"))
-    # attribute-only stays legal when it can only ask for review
+    # Without a subject it may still ask for review; it just cannot act.
     armed = arm_indicator(
         ctx, description="any entity_status reads INACTIVE (review)",
         forecast_ids=(forecast["forecast_id"],),
@@ -185,17 +175,17 @@ def test_attribute_only_pattern_cannot_execute_a_number_move(tmp_path):
     assert armed["status"] == "ARMED"
 
 
-# ---- R2-N2: a late flip is not a TRUE by the horizon -----------------------
+# ---- a change after the horizon is not an outcome by the horizon -----------
 
 
 def test_claim_flipping_after_the_horizon_does_not_resolve_true(tmp_path):
     pipeline, ctx = make_analytic(tmp_path)
-    by_predicate = _seed(pipeline, ctx)
+    by_predicate = seed_acme(pipeline, ctx)
     forecast = _forecast(ctx, by_predicate, probability=0.30,
                          expected="INACTIVE",
                          horizon="2026-08-17T12:04:00+00:00")
     refresh_forecast(ctx, forecast["forecast_id"], caused_by="tick")
-    # the flip arrives — with post-horizon evidence state
+    # The registry flips, but only after the horizon.
     _flip_to_suspended(pipeline, ctx)
     outcome = try_machine_resolution(ctx, forecast["forecast_id"])
     assert outcome["status"] == "HORIZON_PASSED", \
@@ -204,14 +194,14 @@ def test_claim_flipping_after_the_horizon_does_not_resolve_true(tmp_path):
              if r["kind"] == "EXPECTED_NOT_OBSERVED"
              and r["subject_id"] == forecast["forecast_id"]]
     assert items, "the ambiguity is routed to a human, visibly"
-    # propagation does not resolve it behind the reviewer's back either
+    # Propagation must not settle it quietly either.
     propagate_semantic_changes(ctx)
     assert ctx.store.current_forecasts()[
         forecast["forecast_id"]]["status"] == "HORIZON_PASSED"
     assert not scored_forecasts(ctx.store), "nothing corrupted the scoreboard"
 
 
-# ---- R2-N3: post-horizon moves are not 'the probability that stood' --------
+# ---- a move made after the horizon is not the probability that stood -------
 
 
 def test_post_horizon_update_is_not_scored_as_standing():
@@ -231,12 +221,12 @@ def test_post_horizon_update_is_not_scored_as_standing():
         "and the chase is surfaced, not hidden"
 
 
-# ---- R2-N4/N5: absence indicators see the whole window ---------------------
+# ---- an absence indicator sees the whole window ----------------------------
 
 
 def test_pre_deadline_search_cannot_cover_the_window_it_did_not_see(tmp_path):
     pipeline, ctx = make_analytic(tmp_path)
-    by_predicate = _seed(pipeline, ctx)
+    by_predicate = seed_acme(pipeline, ctx)
     forecast = _forecast(ctx, by_predicate, horizon="2026-09-10T12:00:00+00:00")
     deadline = "2026-08-17T12:20:00+00:00"
     indicator = arm_indicator(
@@ -249,8 +239,7 @@ def test_pre_deadline_search_cannot_cover_the_window_it_did_not_see(tmp_path):
         effect=IndicatorEffect(mode="REVIEW_ONLY"),
         deadline=deadline, coverage_required_source_ids=("gleif",))
     _execution(ctx, execution_id="exec-early")  # hours before the deadline
-    while ctx.now_fn() <= deadline:
-        pass
+    advance_clock_past(ctx.now_fn, deadline)
     check_indicators(ctx)
     assert ctx.store.current_indicators()[indicator["indicator_id"]]["status"] \
         == "COVERAGE_BLOCKED", \
@@ -263,7 +252,7 @@ def test_pre_deadline_search_cannot_cover_the_window_it_did_not_see(tmp_path):
 
 def test_absence_is_defeated_by_state_that_already_held_at_arming(tmp_path):
     pipeline, ctx = make_analytic(tmp_path)
-    # the watched state ALREADY holds before the indicator is armed
+    # The watched state already holds before the indicator is armed.
     plant_manifestation(pipeline, source_id="gleif",
                         native_id="lei/ACMELEI000000000001",
                         body=GLEIF_ACME_SUSPENDED, media_type="application/json",
@@ -283,8 +272,7 @@ def test_absence_is_defeated_by_state_that_already_held_at_arming(tmp_path):
         expected_value="INACTIVE",
         effect=IndicatorEffect(mode="REVIEW_ONLY"),
         deadline=deadline, coverage_required_source_ids=("gleif",))
-    while ctx.now_fn() <= deadline:
-        pass
+    advance_clock_past(ctx.now_fn, deadline)
     _execution(ctx, execution_id="exec-cov")
     check_indicators(ctx)
     assert ctx.store.current_indicators()[indicator["indicator_id"]]["status"] \
@@ -292,12 +280,12 @@ def test_absence_is_defeated_by_state_that_already_held_at_arming(tmp_path):
         "'we never saw it' cannot be asserted about a state that held all along"
 
 
-# ---- R2-N7/N8/N9: completion paths and status discipline -------------------
+# ---- interrupted writes complete, and status stays honest ------------------
 
 
 def test_crash_recovered_firing_still_closes_the_coverage_gap(tmp_path):
     pipeline, ctx = make_analytic(tmp_path)
-    by_predicate = _seed(pipeline, ctx)
+    by_predicate = seed_acme(pipeline, ctx)
     forecast = _forecast(ctx, by_predicate, horizon="2026-09-10T12:00:00+00:00")
     deadline = "2026-08-17T12:15:00+00:00"
     indicator = arm_indicator(
@@ -309,8 +297,7 @@ def test_crash_recovered_firing_still_closes_the_coverage_gap(tmp_path):
         expected_value="INACTIVE",
         effect=IndicatorEffect(mode="REVIEW_ONLY"),
         deadline=deadline, coverage_required_source_ids=("gleif",))
-    while ctx.now_fn() <= deadline:
-        pass
+    advance_clock_past(ctx.now_fn, deadline)
     check_indicators(ctx)  # blocks: gap opens
     assert any(r["subject_id"] == indicator["indicator_id"]
                for r in ctx.store.open_review_items())
@@ -343,7 +330,7 @@ def test_crash_recovered_firing_still_closes_the_coverage_gap(tmp_path):
 
 def test_model_update_crash_completes_instead_of_refusing(tmp_path):
     pipeline, ctx = make_analytic(tmp_path)
-    by_predicate = _seed(pipeline, ctx)
+    by_predicate = seed_acme(pipeline, ctx)
     forecast = _forecast(ctx, by_predicate, probability=0.35)
     assist = AnalyticalAssist(
         package=analytical_assist_package("test", "stub", "1.0"),
@@ -372,7 +359,7 @@ def test_model_update_crash_completes_instead_of_refusing(tmp_path):
                            inference_id=accepted["inference_id"],
                            proposal_id=accepted["proposal_id"])
     ctx.store.append = real_append
-    # the version landed without its transition; the retry COMPLETES it
+    # The version landed without its transition; the retry finishes it.
     completed = update_probability(
         ctx, forecast["forecast_id"], probability=0.7,
         reason="accepted model re-forecast", actor_id="",
@@ -390,7 +377,7 @@ def test_model_update_crash_completes_instead_of_refusing(tmp_path):
 
 def test_update_does_not_unpass_a_passed_horizon(tmp_path):
     pipeline, ctx = make_analytic(tmp_path)
-    by_predicate = _seed(pipeline, ctx)
+    by_predicate = seed_acme(pipeline, ctx)
     forecast = _forecast(ctx, by_predicate, probability=0.20,
                          expected="NEVER_SO",
                          horizon="2026-08-17T12:04:00+00:00")
@@ -403,14 +390,14 @@ def test_update_does_not_unpass_a_passed_horizon(tmp_path):
         "the horizon is a fact about the clock, not a review flag"
 
 
-# ---- R2-nit: indicators on settled questions expire ------------------------
+# ---- an indicator on a settled question expires ----------------------------
 
 
 def test_indicator_on_settled_questions_expires_and_stops_driving_collection(
         tmp_path):
     from curunir_analytic.collect import analytic_collection_needs
     pipeline, ctx = make_analytic(tmp_path)
-    by_predicate = _seed(pipeline, ctx)
+    by_predicate = seed_acme(pipeline, ctx)
     forecast = _forecast(ctx, by_predicate, probability=0.35)
     indicator = arm_indicator(
         ctx, description=f"no INACTIVE appears for {ACME}",

@@ -1,14 +1,9 @@
-"""Workbench actor registry: bearer token → access context.
+"""Actor registry: a bearer token or an actor id resolves to an access context.
 
-This is the V6.6 bounded authentication mechanism, stated honestly: a static
-registry file mapping opaque tokens to actor identity and access attributes.
-It gives every workbench action an attributable actor and a fail-closed
-access context; it is NOT production PKI, credential rotation, or the V6.7
-provider-security programme. Signatures on dispositions are the actor
-identity recorded through this registry plus the store's hash chain.
-
-The registry file lives OUTSIDE the mission store (it is deployment
-configuration, not mission truth) and is never exposed by the API.
+The registry is a static JSON file mapping opaque tokens to an actor and its
+access attributes, so every workbench action has a named actor and a
+fail-closed context. It lives outside the mission store, because it is
+deployment configuration rather than mission truth, and the API never serves it.
 """
 from __future__ import annotations
 
@@ -81,8 +76,7 @@ class ActorRegistry:
         return AccessContext(
             context_id=f"wb-{entry['actor_id']}",
             actor_id=entry["actor_id"],
-            # Missing migration-era metadata cannot silently gain human-only
-            # adjudication authority.
+            # An entry that does not say what it is must not become a human.
             actor_kind=entry.get("actor_kind", "SERVICE"),
             roles=tuple(entry.get("roles", ())),
             compartments=tuple(entry.get("compartments", ())),
@@ -98,7 +92,7 @@ class ActorRegistry:
             raise AuthError("actor registry unavailable") from exc
 
     def context_for_actor(self, actor_id: str) -> AccessContext:
-        """Resolve authorization for a cryptographically authenticated id."""
+        """The access context for an actor whose identity is already proven."""
         self._reload_if_changed()
         entry = self._by_actor.get(actor_id)
         if entry is None or not entry.get("enabled", True):
@@ -111,8 +105,8 @@ class ActorRegistry:
         if not token.isascii():
             raise AuthError("unknown or disabled actor")
         self._reload_if_changed()
-        # constant-time comparison over registered tokens; unknown token and
-        # disabled actor are indistinguishable
+        # Compare every token in constant time, and answer the same way for an
+        # unknown token as for a disabled actor.
         entry = None
         for known, candidate in self._by_token.items():
             if secrets.compare_digest(known, token):
@@ -123,8 +117,7 @@ class ActorRegistry:
 
 
 def write_registry(path: str | Path, actors: list[dict]) -> None:
-    """Write the bearer-token registry atomically at mode 0600 — the tokens
-    never exist at umask-default permissions, even momentarily."""
+    """Write the token registry atomically; the file is mode 0600 from creation."""
     path = Path(path)
     payload = {"format": "curunir-workbench-actors-v1", "actors": actors}
     validate_interchange(payload)
@@ -139,4 +132,4 @@ def write_registry(path: str | Path, actors: list[dict]) -> None:
     except BaseException:
         tmp.unlink(missing_ok=True)
         raise
-    os.replace(tmp, path)  # atomic; the destination is 0600 from creation
+    os.replace(tmp, path)

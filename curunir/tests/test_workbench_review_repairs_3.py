@@ -1,7 +1,6 @@
-"""Regression pins for the third adversarial review: plane re-append marking
-preservation, target-inherited annotation markings, author-declared
-compartments, uniform inbound reference validation (no existence oracle),
-report-scoped sentence ids, cluster integrity, dissent in exports."""
+"""Regression pins: re-appends keep their marking, an annotation inherits its
+target's, inbound references are all checked the same way, and dissent rides
+along into validation and exports."""
 from __future__ import annotations
 
 import json
@@ -32,7 +31,7 @@ def mission(tmp_path):
 
 
 def test_forecast_move_never_declassifies(mission):
-    """Round-3 C1: moving a compartmented forecast keeps its marking."""
+    """Moving a restricted forecast keeps it restricted."""
     ctx, seeded, cc = mission
     secret_forecast = commands.author_forecast(
         cc(CTX_A), question="Will the compartmented partner default by 2027?",
@@ -55,7 +54,7 @@ def test_forecast_move_never_declassifies(mission):
 
 
 def test_hypothesis_link_never_declassifies(mission):
-    """Round-3 C1: link_claim on a compartmented hypothesis keeps its marking."""
+    """Linking a claim to a restricted hypothesis keeps it restricted."""
     ctx, seeded, cc = mission
     secret_hypothesis = commands.create_hypothesis(
         cc(CTX_A), statement="The compartmented partner is a front",
@@ -69,7 +68,7 @@ def test_hypothesis_link_never_declassifies(mission):
 
 
 def test_annotation_inherits_target_marking(mission):
-    """Round-3 C2: a note about compartmented state is compartmented."""
+    """A note about a hidden record is hidden too."""
     ctx, seeded, cc = mission
     note = commands.annotate(cc(CTX_A), target_kind="analytic_assumption",
                              target_id=seeded["secret_assumption_id"],
@@ -78,11 +77,11 @@ def test_annotation_inherits_target_marking(mission):
     view_b = MissionProjection(ctx.store, CTX_B)
     assert view_b.get("workbench_annotation", note["annotation_id"]) is None
     assert "overstated" not in json.dumps(view_b.family("workbench_annotation"))
-    # public target -> public annotation, unchanged behavior
+    # A public target still gives a public annotation.
     public = commands.annotate(cc(CTX_A), target_kind="analytic_forecast",
                                target_id=seeded["forecast"]["forecast_id"],
                                kind="NOTE", text="public note")
-    assert view_b.store is ctx.store  # same store, fresh view below
+    assert view_b.store is ctx.store
     assert MissionProjection(ctx.store, CTX_B).get(
         "workbench_annotation", public["annotation_id"]) is not None
 
@@ -96,9 +95,8 @@ def test_author_declared_compartments_enforced(mission):
 
 
 def test_inbound_refs_uniformly_validated(mission):
-    """Round-3 M5/M6/M8: REDACTED echoes, hidden ids and nonexistent ids in
-    payloads are refused with the SAME error — no existence oracle, no
-    laundered damage."""
+    """A hidden id, a made-up id and an echoed REDACTED marker in a payload all get
+    the same refusal, so a caller cannot tell them apart."""
     ctx, seeded, cc = mission
     hidden_id = seeded["secret_assumption_id"]
     fake_id = "assumption-00000000000000000000"
@@ -122,8 +120,8 @@ def test_inbound_refs_uniformly_validated(mission):
 
 
 def test_sentence_ids_are_report_scoped(mission):
-    """Round-3 M7: identical text in two reports yields distinct sentence
-    ids; dissent on one never gates the other."""
+    """The same sentence in two reports gets two ids, so dissent on one leaves the
+    other approvable."""
     ctx, seeded, cc = mission
     claim_id = seeded["status_claim"]["claim_id"]
     sections = [{"kind": "key_judgments", "title": "KJ", "sentences": [
@@ -142,11 +140,11 @@ def test_sentence_ids_are_report_scoped(mission):
                                        expected_version=1)
     approved = commands.approve_report(cc(CTX_B), two["report_id"],
                                        expected_version=submitted["version"])
-    assert approved["status"] == "APPROVED"  # not blocked by report one's dissent
+    assert approved["status"] == "APPROVED"
 
 
 def test_validation_exposes_dissent_and_exports_carry_it(mission):
-    """Round-3 M9/M10: the dissent set rides validation and both exports."""
+    """Open dissent shows up in validation and in both export formats."""
     ctx, seeded, cc = mission
     claim_id = seeded["status_claim"]["claim_id"]
     report = commands.create_report(cc(CTX_A), title="dissent export", question="?",
@@ -170,8 +168,8 @@ def test_validation_exposes_dissent_and_exports_carry_it(mission):
 
 
 def test_cluster_never_merges_under_redaction(mission):
-    """Round-3 M4: hidden cluster anchors re-anchor on visible members and
-    flag partial hiding instead of collapsing to one REDACTED cluster."""
+    """When a cluster's anchor is hidden, the visible members keep separate
+    identities instead of collapsing into one redacted cluster."""
     ctx, seeded, cc = mission
     from curunir_operational.contracts import (ObjectVersion, ProvenanceSummary,
                                                RelationshipVersion)
@@ -209,6 +207,5 @@ def test_cluster_never_merges_under_redaction(mission):
     assert clusters["zzz-public-1"] != "REDACTED"
     assert clusters["zzz-public-1"] != clusters["zzz-public-2"] \
         or clusters["zzz-public-1"] in ("zzz-public-1", "zzz-public-2")
-    # the two public objects are not presented as one identity
     assert {clusters["zzz-public-1"], clusters["zzz-public-2"]} \
         == {"zzz-public-1", "zzz-public-2"}

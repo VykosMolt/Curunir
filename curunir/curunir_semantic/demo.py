@@ -1,17 +1,10 @@
-"""Live demonstration of the semantic loop over real preserved evidence.
+"""Run the semantic loop end to end over real preserved evidence.
 
     python -m curunir_semantic.demo --root DIR --phase 1|2|3 [--evidence FABRIC_ROOT]
 
-Phase 1: understand the OSINT foundation's real evidence (GLEIF, EDGAR,
-         Wikidata, Wayback 2008, feeds, the real captured content change):
-         Cases A–D of the tranche definition.
-Phase 2: (fresh process = restart) hypothesis → discriminators → ranked
-         collection routes → live execution through the fabric → world-model
-         and hypothesis update. The closed loop.
-Phase 3: (fresh process) export, replay into a fresh store, recover exact
-         evidence anchors from the replayed payloads.
-
-Every acquisition in phase 2 is a real network request. Nothing is mocked.
+Phase 1 understands evidence already in the store, phase 2 forms a hypothesis
+and collects against it, phase 3 exports and replays. Each phase runs in its own
+process, and every phase-2 retrieval is a real network request.
 """
 from __future__ import annotations
 
@@ -24,7 +17,7 @@ from pathlib import Path
 from curunir_fabric.registry import load_registry
 from curunir_operational.access import Marking
 
-from .collection import (assign_human_route, execute_route, plan_collection_routes,
+from .collection import (execute_route, plan_collection_routes,
                          requirement_for_discriminator)
 from .hypotheses import link_claim, propose_discriminator, record_hypothesis, refresh_hypothesis
 from .normalize import load_fields
@@ -56,7 +49,7 @@ def phase_1(root: Path, evidence_root: Path) -> dict:
     historical = pipeline.interpret_historical_discoveries()
     monitored = pipeline.process_fabric_changes()
 
-    # Case A — structured registry: exact field provenance
+    # A — a registry record, down to the exact field it came from
     claim = next(c for c in store.current_claims().values()
                  if c["subject_ref"] == f"LEI:{SEVERSTAL_LEI}" and c["predicate"] == "legal_name")
     observation = next(o for o in store.records_of("semantic_observation")
@@ -68,7 +61,7 @@ def phase_1(root: Path, evidence_root: Path) -> dict:
               "content_sha256": anchor["content_sha256"][:16],
               "independent_basis": claim["independent_basis_count"]}
 
-    # Case B — filings: events with source-native ids and day-precision time
+    # B — a filing recorded as an event, with the source's own id and date
     filing = next(a for a in store.records_of("activity")
                   if a["activity_type"] == "filing_published")
     case_b = {"event": filing["description"][:40], "valid_from": filing["valid_from"],
@@ -76,7 +69,7 @@ def phase_1(root: Path, evidence_root: Path) -> dict:
               "participants": filing["participants"],
               "evidence": filing["evidence_refs"][:1]}
 
-    # Case C — historical manifestation: valid time then, knowledge time now
+    # C — an archived state: true then, learned now
     historical_claim = next(c for c in store.current_claims().values()
                             if c["valid_from"] and c["valid_from"] < "2010-01-01")
     case_c = {"statement": historical_claim["statement"][:90],
@@ -84,7 +77,7 @@ def phase_1(root: Path, evidence_root: Path) -> dict:
               "knowledge_time": historical_claim["recorded_time"],
               "discoveries": sum(len(h["semantic_changes"]) for h in historical)}
 
-    # Case D — the real captured change, semantically interpreted
+    # D — a real captured change, read for what it means
     semantic_changes = store.records_of("semantic_change")
     real_change = next((c for c in semantic_changes
                         if c["fabric_change_id"] and c["change_class"] != "SEMANTICALLY_UNCHANGED"),
@@ -140,7 +133,7 @@ def phase_2(root: Path) -> dict:
 
     registry = load_registry(store)
 
-    # discriminator 1: independent corroboration (dependence-aware ranking)
+    # 1: can another publisher confirm this?
     d1 = propose_discriminator(
         store, question="Does an independent source family corroborate Severstal's "
                         "active registered status?",
@@ -158,7 +151,7 @@ def phase_2(root: Path) -> dict:
     executed_1 = execute_route(pipeline, registry, routes_1[0]) if routes_1 and \
         routes_1[0]["score"] > 0 else {"execution_outcome": "NO_VIABLE_ROUTE"}
 
-    # discriminator 2: source-family recheck (automatable, hint-weighted)
+    # 2: does the original source still say the same thing?
     d2 = propose_discriminator(
         store, question=f"Does GLEIF still show registration ISSUED for LEI {SEVERSTAL_LEI}?",
         hypothesis_ids=(hypothesis["hypothesis_id"],),
@@ -215,7 +208,7 @@ def phase_3(root: Path) -> dict:
         shutil.rmtree(replay_dir)
     replayed = SemanticStore.import_from(export_dir, replay_dir)
 
-    # recover an exact anchor from the replayed store alone
+    # recover an exact anchor using nothing but the replayed store
     claim = next(c for c in replayed.current_claims().values()
                  if c["subject_ref"] == f"LEI:{SEVERSTAL_LEI}"
                  and c["predicate"] == "legal_name")

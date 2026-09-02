@@ -1,10 +1,9 @@
-"""Governed model-assisted analytical proposals.
+"""The one boundary between an inference provider and analytical candidates.
 
-This module is the sole analytical-provider boundary. It derives the effective
-sensitivity from authoritative input records, refuses disallowed egress before
-invocation, records every attempted invocation, and admits a successful
-response only as a human-review candidate. Replay consumes the retained
-inference record and never calls a provider again.
+It derives the effective marking from the input records, refuses disallowed
+egress before invoking, retains every attempt as an inference record, and
+admits a successful response only as a candidate awaiting a human. Replay
+reads the retained record and never calls a provider again.
 """
 from __future__ import annotations
 
@@ -23,17 +22,15 @@ InferFn = Callable[[str, Mapping[str, Any]], Mapping[str, Any]]
 
 
 def _clean_text(value: object) -> str:
-    """Produce bounded, valid Unicode for an external diagnostic."""
+    """Bounded, valid Unicode for a diagnostic message."""
     return str(value)[:300].encode("utf-8", "replace").decode("utf-8")
 
 
 def _provider_json(value: Any, *, _depth: int = 0) -> Any:
-    """Normalize a provider response into the Curunir interchange domain.
+    """Normalize a provider response into the interchange domain, or raise.
 
-    JSON containers and finite scalar values retain their meaning. Strings are
-    repaired only for malformed Unicode. Unsupported Python objects,
-    non-string keys, non-finite numbers, and excessive nesting are rejected;
-    they must not be silently converted into a plausible analytical result.
+    Refuse rather than coerce: an unsupported object, a non-string key, a
+    non-finite number or excessive nesting must not become a plausible result.
     """
     if _depth > 256:
         raise ValueError("provider response exceeds maximum nesting depth")
@@ -73,7 +70,7 @@ def _effective_input_marking(
     inputs: Mapping[str, Any],
     input_refs: tuple[str, ...],
 ) -> tuple[Marking, tuple[str, ...], tuple[str, ...]]:
-    """Resolve declared and payload-carried record ids against raw state."""
+    """The marking the inputs actually carry, plus unresolved and resolved refs."""
     markings: list[Mapping[str, Any]] = []
     missing: list[str] = []
     resolved_refs: list[str] = []
@@ -114,18 +111,14 @@ def analytical_assist_package(provider: str, model_id: str, version: str) -> Mod
 
 @dataclass
 class AnalyticalAssist:
-    """The one governed gate between an inference provider and candidates."""
-
     package: ModelPackage | None = None
     infer_fn: InferFn | None = None
     provider_actor: str = "analytic-assist"
     allowed_input_marking: Marking | None = None
-    # A `model_backends.ModelBackend`. A real provider must know which
-    # analytical kind it is being asked for, because that determines the
-    # response schema it is constrained to; `InferFn` cannot carry it. Set
-    # this instead of `infer_fn` for such a provider. Held as an explicit
-    # field rather than sniffed from `infer_fn`, and typed loosely to keep
-    # this module free of a dependency on the backend package.
+    # A `model_backends.ModelBackend`, set instead of `infer_fn` when the
+    # provider needs the target kind (it picks the response schema), which
+    # `InferFn` cannot carry. Typed loosely so this module need not import
+    # the backend package.
     backend: Any = None
 
     def available(self) -> bool:
@@ -143,16 +136,13 @@ class AnalyticalAssist:
     def _egress_refusal(self, effective: Marking) -> str | None:
         ceiling = self.allowed_input_marking
         if ceiling is None:
-            # The legacy unconfigured mode remains public-releasable only.
+            # No declared policy means public-releasable only.
             if (effective.compartments or effective.min_role != "OBSERVER"
                     or "PUBLIC" not in effective.releasability):
                 return ("provider declares no egress policy; only "
                         "public-releasable evidence may be sent")
             return None
-        try:
-            joined = inherited_marking(ceiling, [effective])
-        except ValueError:
-            return "input marking is incompatible with provider policy"
+        joined = inherited_marking(ceiling, [effective])
         if joined.to_record() != ceiling.to_record():
             return "input is more restricted than this provider may receive"
         return None
@@ -167,7 +157,7 @@ class AnalyticalAssist:
     def propose(self, ctx: AnalyticContext, *, task: str, target_kind: str,
                 inputs: Mapping[str, Any],
                 input_refs: tuple[str, ...]) -> dict[str, Any]:
-        """Invoke once after egress admission and retain the complete outcome."""
+        """Invoke once after egress admission; retain the whole outcome either way."""
         if not self.available():
             return self.status()
         try:
@@ -204,7 +194,7 @@ class AnalyticalAssist:
             errors: tuple[str, ...] = ()
         except MemoryError:
             raise
-        except Exception as error:  # provider/data boundary, retained below
+        except Exception as error:  # retained below as an INVALID inference
             output = {}
             errors = (f"{type(error).__name__}: {_clean_text(error)}",)
 

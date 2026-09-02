@@ -67,7 +67,8 @@ class Projection:
                  valid_at: str | None = None):
         events = store.events(as_of_seq)
         self.store_id = store.meta["store_id"]
-        self.as_of_seq = events[-1]["seq"] if events else 0  # privileged diagnostic; never emitted in views
+        # Privileged diagnostic; never emitted in a view.
+        self.as_of_seq = events[-1]["seq"] if events else 0
         self.state_token = events[-1]["entry_hash"][:16] if events else "genesis"
         self.snapshot_time = snapshot_time or (events[-1]["recorded_time"] if events else store.meta["created_time"])
         self.staleness_hours = dict(staleness_hours or {})
@@ -188,9 +189,9 @@ class Projection:
                 entry["versions_all_recorded"] = entry["versions"]
                 entry["versions"] = qualifying
         for object_id, entry in self.objects.items():
-            # Current = latest validity; ties resolved by version number, so a
-            # late-arriving older report never displaces newer state, while a
-            # correction (same validity, higher version) supersedes.
+            # Current is the latest validity, ties broken by version, so a
+            # late older report never displaces newer state while a correction
+            # at the same validity does.
             current = max(entry["versions"], key=lambda v: (parse_time(self._valid_point(v)), v["version"]))
             entry["current"] = current
             entry["history_count"] = len(entry["versions"])
@@ -214,7 +215,7 @@ class Projection:
                     groups.setdefault(group, set()).add(object_id)
         self.dependence_groups = {k: sorted(v) for k, v in sorted(groups.items())}
 
-    # ---- access-aware views -------------------------------------------------
+    # ---- access-aware views ----
 
     def view(self, context: AccessContext) -> dict[str, Any]:
         def _visible_transitions(entry: Mapping[str, Any]) -> list[dict[str, Any]]:
@@ -275,10 +276,8 @@ class Projection:
         dependence_groups = [{"group_id": group, "member_object_ids": [m for m in members if m in visible_ids]}
                              for group, members in self.dependence_groups.items()]
         dependence_groups = [g for g in dependence_groups if len(g["member_object_ids"]) >= 2]
-        # A workflow record (requirement/task/evidence request) may be visible
-        # while some object it references is not: redact object references the
-        # context cannot view so a cross-compartment id never leaks through a
-        # record the context is otherwise entitled to see.
+        # A workflow record may be visible while an object it names is not,
+        # so redact those ids rather than let them ride along.
         hidden_object_ids = {oid for oid in self.objects if oid not in visible_ids}
 
         def _redact_refs(refs):
@@ -318,8 +317,8 @@ class Projection:
                 evidence_requests.append(_redact_record({**entry["record"], "status": status,
                                                          "transitions": transitions}))
         view = {
-            # meta carries an opaque state token, never the raw event sequence:
-            # a global seq is a hidden-activity side channel for lower contexts.
+            # An opaque token, not the raw sequence number: a global sequence
+            # would tell a lower context that hidden activity happened.
             "meta": {"store_id": self.store_id, "state_token": self.state_token,
                      "snapshot_time": self.snapshot_time, "valid_at": self.valid_at,
                      "context_id": context.context_id, "quality_summary_policy": QUALITY_SUMMARY_POLICY},
@@ -350,7 +349,7 @@ class Projection:
     def object_history(self, object_id: str, context: AccessContext) -> list[dict[str, Any]]:
         entry = self.objects.get(object_id)
         if entry is None or not can_view(entry["current"].get("marking"), context):
-            return []  # unknown and forbidden are indistinguishable
+            return []
         return [v for v in entry["versions"] if can_view(v.get("marking"), context)]
 
     def changes_since(self, seq: int, context: AccessContext, store: MissionDataStore) -> dict[str, Any]:

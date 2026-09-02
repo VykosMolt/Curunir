@@ -1,17 +1,11 @@
-"""Stakeholder / influence intelligence: contextual, temporal, evidence-bound.
+"""Stakeholders and influence: contextual, temporal, evidence-bound.
 
-A stakeholder assessment is always relative to a context (mission, theme,
-issue, objective, event) and a period — never a permanent global label. The
-contract layer already makes the worst category errors unrepresentable
-(an inferred interest can never be OBSERVED; a machine cannot stamp stance
-onto quoted text as observation); this engine adds the temporal discipline:
-positions change by supersession with both states retained, and open
+An assessment is always relative to a context and a period, never a permanent
+label. Positions change by supersession with both states retained, and open
 identity ambiguity travels with the assessment instead of being collapsed.
-
-Influence is typed and evidence-bound. Deterministic discovery derives only
-what the world model actually states (formal roles and ownership from typed
-ACTIVE relations); associations, inferred influence and interests enter as
-judgments with their author on record.
+Discovery derives only what the world model states — formal roles and
+ownership from ACTIVE typed relations; inferred influence and interests enter
+as judgments with their author on record.
 """
 from __future__ import annotations
 
@@ -26,7 +20,7 @@ from .substrate import (AnalyticContext, append_version, creation_authority,
                         ensure_transition, open_identity_caveats,
                         record_transition, require_accepted_candidate)
 
-# relation types the world model states directly → role wording
+# relation type -> how the derived role reads
 _ROLE_RELATIONS = {
     "HOLDS_ROLE": "holds a stated role at",
     "OWNS": "owns",
@@ -40,12 +34,13 @@ def assessment_id_for(entity_object_id: str, context_kind: str, context_id: str)
     return digest_id("stake", entity_object_id, context_kind, context_id)
 
 
-def _entity_label(store: AnalyticStore, object_id: str) -> str:
-    versions = [v for v in store.records_of("object_version")
-                if v["object_id"] == object_id]
-    if not versions:
+def _entity_label(store: AnalyticStore, object_id: str,
+                  latest_objects: Mapping[str, Mapping[str, Any]] | None = None) -> str:
+    if latest_objects is None:
+        latest_objects = store.latest_by_id("object_version", "object_id")
+    latest = latest_objects.get(object_id)
+    if latest is None:
         return object_id[:24]
-    latest = versions[-1]
     return latest.get("attributes", {}).get("name") \
         or (latest.get("labels") or (object_id[:24],))[0]
 
@@ -65,7 +60,7 @@ def create_assessment(ctx: AnalyticContext, *, entity_object_id: str,
                       supporting_claim_ids: Iterable[str] = (),
                       provenance_kind: str = "ANALYST", inference_id: str = "",
                       proposal_id: str = "", caused_by: str = "") -> dict[str, Any]:
-    """Create a stakeholder assessment (idempotent per entity+context)."""
+    """Create a stakeholder assessment, idempotent per entity and context."""
     store = ctx.store
     assessment_id = assessment_id_for(entity_object_id, context_kind, context_id)
     existing = store.current_stakeholder_assessments().get(assessment_id)
@@ -76,15 +71,16 @@ def create_assessment(ctx: AnalyticContext, *, entity_object_id: str,
                                  f"in {context_kind}:{context_id[:24]}",
                           caused_by=caused_by or assessment_id,
                           to_status=existing["status"])
-        # the fold path is not a side door around the candidate gate
+        # model provenance may only complete the materialization the human
+        # accepted, never modify an object under another or absent proposal
         if provenance_kind == "MODEL" and (not proposal_id or proposal_id
                                        != existing.get("proposal_id")):
             raise ValueError(
                 "an existing assessment cannot be modified under model "
                 "provenance with a different proposal: propose and accept a "
                 "new candidate")
-        # identity ambiguity opened since creation must not stay invisible,
-        # and evidence/positions the caller brought are folded, not discarded
+        # an ambiguity opened since creation must not stay invisible, and the
+        # caller's evidence and positions are folded in rather than discarded
         refreshed = refresh_assessment(ctx, assessment_id,
                                        caused_by=caused_by or assessment_id)
         known_position_ids = {_position_record(p)["position_id"]
@@ -139,10 +135,9 @@ def create_assessment(ctx: AnalyticContext, *, entity_object_id: str,
                       "context_id": context_id,
                       "role_in_context": role_in_context,
                       "claims": tuple(supporting_claim_ids)})
-    # provided positions pass the same evidence/attribution guard the
-    # add-position path enforces — creation is not a bypass, and the check is
-    # order-independent: each position is validated against ALL the others,
-    # so (public, interest) cannot slip what (interest, public) refuses
+    # Creation runs the same evidence guard as add_position, and each position
+    # is checked against all the others, so ordering cannot slip a position
+    # past a check that the reverse order refuses.
     for index, position in enumerate(positions):
         others = positions[:index] + positions[index + 1:]
         _check_public_position_evidence(
@@ -162,7 +157,8 @@ def create_assessment(ctx: AnalyticContext, *, entity_object_id: str,
         identity_caveats=caveats, basis=basis,
         status="ACTIVE", authority=authority,
         provenance_kind=provenance_kind, inference_id=inference_id,
-        proposal_id=proposal_id, change_reason="",
+        proposal_id=proposal_id if provenance_kind == "MODEL" else "",
+        change_reason="",
         history=(f"CREATED:{provenance_kind}",),
         recorded_time=ctx.now_fn(), marking=ctx.marking)
     appended = append_version(ctx, record)
@@ -179,7 +175,6 @@ def create_assessment(ctx: AnalyticContext, *, entity_object_id: str,
 def _reappend(ctx: AnalyticContext, assessment: Mapping[str, Any],
               updates: dict[str, Any], change_reason: str,
               history_note: str) -> dict[str, Any]:
-    from .contracts import BasisSummary
     merged = {k: v for k, v in assessment.items() if k != "record_type"}
     merged.update(updates)
     merged["version"] = ctx.store.next_analytic_version(
@@ -211,8 +206,8 @@ def _position_record(position: Mapping[str, Any] | StakeholderPosition) -> Mappi
     return position.to_record() if isinstance(position, StakeholderPosition) else position
 
 
-# relation types that convey publication control — attribution of a statement
-# to the entity — with the required direction (entity is the controlling end)
+# relation types that convey publication control, and which end must be the
+# entity for it to count
 _ATTRIBUTION_RELATIONS = {
     "OPERATES": "source",       # entity OPERATES the site/channel
     "OWNS": "source",           # entity OWNS the outlet
@@ -222,19 +217,17 @@ _ATTRIBUTION_RELATIONS = {
 
 def _attribution_linked(store: AnalyticStore, entity: str
                         ) -> tuple[set[str], set[str]]:
-    """(linked object ids, linked hosts) the entity has publication control
-    over. Only the LATEST version of each relationship counts, only ACTIVE
-    status, only publication-control relation types, only in the controlling
-    direction. Host-level attribution is granted only by site-ROOT references
-    (a DOMAIN ref or a URL whose path is '/'): a link to one deep page of a
-    multi-tenant host does not make every utterance on that host the
-    entity's own."""
+    """(linked object ids, linked hosts) the entity has publication control over.
+
+    Only the latest ACTIVE version of a publication-control relation counts, and
+    only in the controlling direction. A host counts only through a site-root
+    reference: one deep page on a shared host does not make every utterance
+    there the entity's own.
+    """
     from curunir_semantic.worldmodel import normalize_url_key
-    latest_relations: dict[str, Mapping[str, Any]] = {}
-    for relation in store.records_of("relationship_version"):
-        latest_relations[relation["relationship_id"]] = relation
     linked: set[str] = {entity}
-    for relation in latest_relations.values():
+    for relation in store.latest_by_id("relationship_version",
+                                       "relationship_id").values():
         if relation["status"] != "ACTIVE":
             continue
         controlling_end = _ATTRIBUTION_RELATIONS.get(relation["relation_type"])
@@ -243,10 +236,8 @@ def _attribution_linked(store: AnalyticStore, entity: str
         elif controlling_end == "target" and relation["target_object_id"] == entity:
             linked.add(relation["source_object_id"])
     linked_hosts: set[str] = set()
-    latest_objects: dict[str, Mapping[str, Any]] = {}
-    for version in store.records_of("object_version"):
-        latest_objects[version["object_id"]] = version
-    for object_id, version in latest_objects.items():
+    for object_id, version in store.latest_by_id("object_version",
+                                                 "object_id").items():
         if object_id not in linked or object_id == entity:
             continue
         for ref in version.get("external_refs", ()):
@@ -263,12 +254,13 @@ def _attribution_linked(store: AnalyticStore, entity: str
 def _check_public_position_evidence(store: AnalyticStore,
                                     assessment: Mapping[str, Any],
                                     position: StakeholderPosition) -> None:
-    """An OBSERVED public position must rest on evidence that actually is a
-    public statement attributable to the assessed entity — and it can never
-    be manufactured by relabelling an inferred interest's own claim set."""
-    # evidence ids on ANY position must resolve in the log: a formal role on a
-    # phantom relationship id would satisfy the contract's "requires evidence"
-    # invariant with nothing behind it
+    """Check a position's evidence.
+
+    An OBSERVED public position needs a statement attributable to the entity,
+    and no position may be minted by relabelling an inferred interest's claims.
+    """
+    # every cited id must resolve in the log, or "requires evidence" would be
+    # satisfied with nothing behind it
     claims = store.current_claims()
     known_relationships = {r["relationship_id"]
                            for r in store.records_of("relationship_version")}
@@ -304,9 +296,8 @@ def _check_public_position_evidence(store: AnalyticStore,
                 return normalize_url_key(value).split("/")[0] in linked_hosts
             return False
 
-        # at least one ATTRIBUTABLE claim outside every inferred interest's
-        # basis: padding an interest's claim set with an unattributable
-        # filler cannot mint an observed public position
+        # at least one attributable claim outside every inferred interest's
+        # basis, so filler cannot mint an observed public position
         if not any(_attributable(claim)
                    and claim["claim_id"] not in interest_claims
                    for claim in resolved):
@@ -358,9 +349,11 @@ def add_position(ctx: AnalyticContext, assessment_id: str,
 def supersede_position(ctx: AnalyticContext, assessment_id: str, position_id: str,
                        replacement: StakeholderPosition, *, caused_by: str,
                        rationale: str) -> dict[str, Any]:
-    """A position changed: the old one is closed (superseded, valid_to set),
-    the new one appended. 'A supported X' is never overwritten by 'A opposes
-    X' — both remain, bounded in time."""
+    """Replace a position: the old one is closed and the new one appended.
+
+    "A supported X" is never overwritten by "A opposes X" — both remain,
+    bounded in time.
+    """
     store = ctx.store
     assessment = store.current_stakeholder_assessments().get(assessment_id)
     if assessment is None:
@@ -400,7 +393,7 @@ def supersede_position(ctx: AnalyticContext, assessment_id: str, position_id: st
 
 def refresh_assessment(ctx: AnalyticContext, assessment_id: str, *,
                        caused_by: str) -> dict[str, Any]:
-    """Re-derive basis and identity caveats from live state."""
+    """Re-derive an assessment's basis and identity caveats from live state."""
     store = ctx.store
     assessment = store.current_stakeholder_assessments().get(assessment_id)
     if assessment is None:
@@ -459,15 +452,13 @@ def assert_influence(ctx: AnalyticContext, *, source_object_id: str,
                      valid_from: str | None = None,
                      provenance_kind: str = "ANALYST", inference_id: str = "",
                      proposal_id: str = "", caused_by: str = "") -> dict[str, Any]:
-    """Assert one typed influence relation (idempotent per pair+kind). The
-    contract layer enforces the evidence and authority discipline."""
+    """Assert one typed influence relation, idempotent per pair and kind."""
     store = ctx.store
     influence_id = digest_id("infl", source_object_id, target_object_id, kind)
     existing = store.current_influence_assertions().get(influence_id)
     if existing is not None and existing["status"] == "ACTIVE":
-        # crash-recovery completion: a MODEL re-call may only complete its own
-        # accepted materialization — the gate (with its consumption scan) is
-        # deliberately NOT re-entered here, or recovery would be impossible
+        # a MODEL re-call may only complete its own accepted materialization;
+        # the gate is not re-entered, or recovery would be impossible
         if provenance_kind == "MODEL" and (not proposal_id or proposal_id
                                            != existing.get("proposal_id")):
             raise ValueError(
@@ -494,7 +485,7 @@ def assert_influence(ctx: AnalyticContext, *, source_object_id: str,
         claim_ids=claim_ids, relationship_ids=relationship_ids,
         valid_from=valid_from, valid_to=None, status="ACTIVE",
         provenance_kind=provenance_kind, inference_id=inference_id,
-        proposal_id=proposal_id,
+        proposal_id=proposal_id if provenance_kind == "MODEL" else "",
         change_reason="reasserted" if version > 1 else "",
         history=prior_history + ((f"ASSERTED:{provenance_kind}",) if version == 1
                                  else (f"REASSERTED:v{version}",)),
@@ -508,8 +499,8 @@ def assert_influence(ctx: AnalyticContext, *, source_object_id: str,
                           evidence_refs=claim_ids[:5] or relationship_ids[:5],
                           to_status="ACTIVE")
     else:
-        # a re-assertion after supersession is its own recorded transition,
-        # never deduped away against the original assertion
+        # a re-assertion after supersession is its own transition, not deduped
+        # against the original
         record_transition(ctx, subject_kind="influence_assertion",
                           subject_id=influence_id, transition_type="ASSERTED",
                           detail=f"reasserted at v{version}: {kind} ({authority}): "
@@ -523,14 +514,13 @@ def assert_influence(ctx: AnalyticContext, *, source_object_id: str,
 
 def supersede_influence(ctx: AnalyticContext, influence_id: str, *, reason: str,
                         caused_by: str, valid_to: str | None = None) -> dict[str, Any]:
-    """An influence relation ended or its basis collapsed: close it as a new
-    version; the assertion history stays."""
+    """Close an influence relation as a new version; the history stays."""
     store = ctx.store
     existing = store.current_influence_assertions().get(influence_id)
     if existing is None:
         raise ValueError(f"unknown influence assertion: {influence_id}")
     if existing["status"] != "ACTIVE":
-        # already closed: complete the transition if missing, append nothing
+        # already closed: complete a missing transition, append nothing
         record_transition(ctx, subject_kind="influence_assertion",
                           subject_id=influence_id, transition_type="SUPERSEDED",
                           detail=reason[:300], caused_by=caused_by,
@@ -556,10 +546,11 @@ def supersede_influence(ctx: AnalyticContext, influence_id: str, *, reason: str,
 
 def refresh_identity_caveats(ctx: AnalyticContext, *, caused_by: str
                              ) -> list[dict[str, Any]]:
-    """Identity ambiguity opens at world-model integration and produces no
-    semantic change; this pass keeps every ACTIVE assessment's caveats in
-    step with the live review queue so an ambiguity opened after creation
-    cannot stay invisible."""
+    """Bring every active assessment's identity caveats up to date.
+
+    Ambiguity opens at world-model integration and produces no semantic change,
+    so nothing else would notice it.
+    """
     store = ctx.store
     refreshed = []
     for assessment in list(store.current_stakeholder_assessments().values()):
@@ -588,18 +579,18 @@ def refresh_identity_caveats(ctx: AnalyticContext, *, caused_by: str
 def discover_stakeholders(ctx: AnalyticContext, *, context_kind: str, context_id: str,
                           relevant_object_ids: Iterable[str],
                           caused_by: str = "") -> list[dict[str, Any]]:
-    """Derive stakeholder assessments from what the world model states:
-    entities holding typed ACTIVE relations to the context's objects become
-    stakeholders with FORMAL_ROLE positions backed by those relations'
-    evidence. Nothing is inferred here — interests, stances and informal
-    influence require a recorded judgment."""
+    """Derive stakeholder assessments from what the world model states.
+
+    Entities holding ACTIVE typed relations to the context's objects become
+    stakeholders with formal-role positions backed by those relations. Nothing
+    is inferred: interests, stances and informal influence need a judgment.
+    """
     store = ctx.store
     relevant = set(relevant_object_ids)
-    latest_relations: dict[str, Mapping[str, Any]] = {}
-    for relation in store.records_of("relationship_version"):
-        latest_relations[relation["relationship_id"]] = relation
+    latest_objects = store.latest_by_id("object_version", "object_id")
     created = []
-    for relation in sorted(latest_relations.values(),
+    for relation in sorted(store.latest_by_id("relationship_version",
+                                              "relationship_id").values(),
                            key=lambda r: r["relationship_id"]):
         if relation["status"] != "ACTIVE" \
                 or relation["relation_type"] not in _ROLE_RELATIONS:
@@ -615,8 +606,9 @@ def discover_stakeholders(ctx: AnalyticContext, *, context_kind: str, context_id
                 position_id=digest_id("pos", relation["relationship_id"],
                                       stakeholder_id),
                 kind="FORMAL_ROLE",
-                statement=f"{_entity_label(store, stakeholder_id)} {wording} "
-                          f"{_entity_label(store, other_id)}",
+                statement=f"{_entity_label(store, stakeholder_id, latest_objects)} "
+                          f"{wording} "
+                          f"{_entity_label(store, other_id, latest_objects)}",
                 stance="UNRESOLVED", authority="OBSERVED",
                 claim_ids=(), relationship_ids=(relation["relationship_id"],),
                 valid_from=relation.get("valid_from"), valid_to=None,
@@ -670,8 +662,8 @@ def explain_assessment(store: AnalyticStore, assessment_id: str) -> dict[str, An
             {"kind": influences[i]["kind"], "mechanism": influences[i]["mechanism"],
              "authority": influences[i]["authority"], "status": influences[i]["status"]}
             for i in assessment["influence_ids"] if i in influences],
-        # live from the review queue: an ambiguity opened after the last
-        # version must be visible here, not just the stored snapshot
+        # live from the review queue, so an ambiguity opened after the last
+        # version still shows
         "identity_caveats": list(open_identity_caveats(
             store, assessment["entity_object_id"])),
         "source_basis": {

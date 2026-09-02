@@ -1,7 +1,5 @@
-"""Shared fixtures for analytical-layer tests: an AnalyticStore-backed
-pipeline over planted deterministic manifestations, plus helpers to build
-the semantic state (claims, entities, relations) the analytical engines
-consume."""
+"""Shared fixtures for the analytic tests: a store-backed pipeline over planted
+evidence, plus the fixed GLEIF records the analytic engines read."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -51,6 +49,18 @@ GLEIF_ACME_SUSPENDED = b"""{
 }"""
 
 
+ACME = "LEI:ACMELEI000000000001"
+
+
+def seed_acme(pipeline, ctx, body=GLEIF_ACME):
+    """Plant the Acme registry record and index the resulting claims by predicate."""
+    plant_manifestation(pipeline, source_id="gleif", native_id="lei/ACMELEI000000000001",
+                        body=body, media_type="application/json", retrieval_time=T0)
+    pipeline.process_new_evidence()
+    return {c["predicate"]: c["claim_id"] for c in ctx.store.current_claims().values()
+            if c["subject_ref"] == ACME}
+
+
 def plant_page(pipeline, *, url: str, body: str, retrieval_time: str,
                source_id: str = "live-web", **kwargs) -> dict:
     return plant_manifestation(
@@ -60,7 +70,6 @@ def plant_page(pipeline, *, url: str, body: str, retrieval_time: str,
 
 
 def statement_page(statement: str, extra: str = "") -> str:
-    """A minimal page whose labeled statement the deterministic extractor
-    captures exactly."""
+    """A tiny page whose "Statement:" line the extractor captures verbatim."""
     return (f"<html><head><title>Notice</title></head><body>"
             f"<p>Statement: {statement}.</p><p>{extra}</p></body></html>")

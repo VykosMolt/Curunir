@@ -1,10 +1,5 @@
-"""Regression pins for the fifth adversarial review — the two surfaces the
-round-4 class fix missed: (a) records derived from a subject OTHER than the
-one named (the pipeline processing a pending SPECIAL manifestation; the
-stale-basis companion), and (b) newly-created records that CITE compartmented
-references (reports, requirements, tasks, saved views). Plus the round-4
-machinery defects (most_restrictive collapse, warning floor, scrub-prefix
-corruption, watch fields, reply_to)."""
+"""Two more ways a restricted record can leak: something derived from a subject
+other than the one named, and something new that merely cites a restricted id."""
 from __future__ import annotations
 
 import hashlib
@@ -62,18 +57,17 @@ def _plant_manifestation(pipeline, *, marking, body: bytes, native_id: str):
 
 
 def test_pipeline_processes_special_manifestation_as_special(mission):
-    """Round-5 C1: a PENDING SPECIAL manifestation, processed by a PUBLIC
-    pipeline run, materializes SPECIAL derived state — never PUBLIC."""
+    """A restricted manifestation processed by a public pipeline run produces
+    restricted state, not public state."""
     pipeline, ctx, seeded, cc = mission
     body = (b"<html><body><p>Statement: SENSITIVE PARTNER AS is a front "
             b"for the compartmented programme.</p></body></html>")
     manifestation = _plant_manifestation(pipeline, marking=RESTRICTED_MARK,
                                          body=body, native_id="https://x.example/secret")
-    # the pipeline's own marking is PUBLIC; it still must not declassify
+    # The pipeline's own marking is public, and must not win over the evidence's.
     assert pipeline.marking.compartments == ()
     head = pipeline.store.events(None)[-1]["seq"]
     pipeline.process_new_evidence()
-    # every record derived from the SPECIAL manifestation is invisible to B
     for event in pipeline.store.events(None):
         if event["seq"] <= head:
             continue
@@ -90,11 +84,8 @@ def test_pipeline_processes_special_manifestation_as_special(mission):
 
 
 def test_report_citing_special_basis_is_special(mission):
-    """Round-5 C2: a report whose basis_refs cite a SPECIAL claim is itself
-    compartmented; its prose never reaches an uncleared analyst."""
+    """A report resting on a restricted basis is restricted, prose included."""
     pipeline, ctx, seeded, cc = mission
-    # a SPECIAL claim: author a SPECIAL forecast is easier — use the seeded
-    # secret assumption as an EXPLICITLY_INFERENTIAL basis
     report = commands.create_report(
         cc(CTX_A), title="dossier", question="?", sections=[
             {"kind": "key_judgments", "title": "KJ", "sentences": [
@@ -108,7 +99,7 @@ def test_report_citing_special_basis_is_special(mission):
 
 
 def test_requirement_task_view_citing_special_are_special(mission):
-    """Round-5 C3."""
+    """A requirement, task or saved view citing a restricted id is restricted too."""
     pipeline, ctx, seeded, cc = mission
     secret = seeded["secret_assumption_id"]
     req = commands.open_requirement(cc(CTX_A), question="q?", priority="MEDIUM",
@@ -128,13 +119,13 @@ def test_requirement_task_view_citing_special_are_special(mission):
 
 
 def test_stale_basis_item_inherits_hypothesis_marking(mission):
-    """Round-5 C4: the stale-basis companion is marked like its hypothesis."""
+    """A stale-basis item is marked like the hypothesis it belongs to."""
     pipeline, ctx, seeded, cc = mission
     from curunir_semantic.hypotheses import _queue_stale_basis
     hypothesis = commands.create_hypothesis(cc(CTX_A), statement="compartmented h",
                                             case_id="c", compartments=("SPECIAL",))
     raw = ctx.store.current_hypotheses()[hypothesis["hypothesis_id"]]
-    _queue_stale_basis(pipeline.context(), raw,  # PUBLIC refresh context
+    _queue_stale_basis(pipeline.context(), raw,  # a public refresh context
                        [{"claim": {"claim_id": "claim-x"}, "state": "RETRACTED"}])
     items = [r for r in ctx.store.records_of("review_item")
              if r["kind"] == "STALE_BASIS"]
@@ -142,25 +133,20 @@ def test_stale_basis_item_inherits_hypothesis_marking(mission):
 
 
 def test_warning_projection_floor_check(mission):
-    """Round-5 C7: a warning join above the actor's access is refused, not
-    stranded."""
+    """A marking above the actor's access is not viewable, and an org-locked input
+    joined with a releasable one fails closed."""
     pipeline, ctx, seeded, cc = mission
-    # actor holds SPECIAL only; forecast+objective join stays within SPECIAL,
-    # so this must SUCCEED — the floor check only blocks joins ABOVE access.
-    # Direct unit check of the join+floor on split releasability:
-    actor_ctx = CTX_A  # compartments ("SPECIAL",)
+    actor_ctx = CTX_A  # holds SPECIAL and nothing else
     hi = Marking("m", ("SPECIAL", "OTHER"), ("PUBLIC",))
-    assert not can_view(hi, actor_ctx)  # actor lacks OTHER
+    assert not can_view(hi, actor_ctx)  # the actor does not hold OTHER
     with pytest.raises(ValueError):
-        # org-locked collapse across a releasable input fails closed
         most_restrictive([Marking("m", (), ("PUBLIC",)), Marking("m", (), ())])
 
 
 def test_scrub_does_not_corrupt_visible_sibling_ids(mission):
-    """Round-5 C8: a hidden id's family-prefix must not scrub a VISIBLE
-    sibling that shares it."""
+    """Scrubbing a hidden id leaves a visible id that shares its prefix intact."""
     pipeline, ctx, seeded, cc = mission
-    # two review items in the same family: one SPECIAL (hidden), one PUBLIC
+    # Two review items in one family: one restricted, one public.
     for suffix, marking in (("edd8f9f86066db0f658e", RESTRICTED_MARK),
                             ("2e9a3e8641bf477bf3c0", MARK)):
         item = ReviewItem(item_id=f"review-expected-{suffix}", kind="EXPECTED_NOT_OBSERVED",
@@ -173,15 +159,13 @@ def test_scrub_does_not_corrupt_visible_sibling_ids(mission):
     view_b = MissionProjection(ctx.store, CTX_B)
     served = view_b.get("review_item", "review-expected-2e9a3e8641bf477bf3c0")
     assert served is not None
-    assert served["item_id"] == "review-expected-2e9a3e8641bf477bf3c0"  # not corrupted
-    # and resolving the served id round-trips (no REDACTED prefix injected)
+    assert served["item_id"] == "review-expected-2e9a3e8641bf477bf3c0"
     assert "REDACTED" not in served["item_id"]
 
 
 def test_watch_rejects_hidden_target_ref(mission):
-    """Round-5 C9."""
+    """A watch cannot be created around a hidden id or an echoed REDACTED marker."""
     pipeline, ctx, seeded, cc = mission
-    # an UNCLEARED actor cannot launder a hidden id into a watch
     with pytest.raises(CommandError):
         commands.create_watch(cc(CTX_B), need_id="n", target_kind="NATIVE_OBJECT",
                               target_ref=seeded["secret_object_id"], source_id="gleif",
@@ -194,13 +178,12 @@ def test_watch_rejects_hidden_target_ref(mission):
 
 
 def test_reply_to_validated_and_gated(mission):
-    """Round-5 finding 5: reply_to cannot launder a hidden id or oracle."""
+    """Replying to an annotation you cannot see is refused the same way as replying
+    to one that does not exist."""
     pipeline, ctx, seeded, cc = mission
-    # a SPECIAL annotation on a SPECIAL target
     special = commands.annotate(cc(CTX_A), target_kind="analytic_assumption",
                                 target_id=seeded["secret_assumption_id"],
                                 kind="NOTE", text="compartmented note")
-    # analyst-b replying to it: refused identically to a nonexistent parent
     with pytest.raises((CommandError, NotFound)):
         commands.annotate(cc(CTX_B), target_kind="analytic_forecast",
                           target_id=seeded["forecast"]["forecast_id"],
@@ -212,7 +195,7 @@ def test_reply_to_validated_and_gated(mission):
 
 
 def test_url_in_note_not_false_rejected(mission):
-    """Round-5 finding 13: pasted registry URLs are allowed in prose."""
+    """A pasted URL in prose is not mistaken for a leaked id."""
     pipeline, ctx, seeded, cc = mission
     made = commands.annotate(
         cc(CTX_A), target_kind="analytic_forecast",

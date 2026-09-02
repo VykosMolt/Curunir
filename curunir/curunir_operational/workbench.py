@@ -1,11 +1,10 @@
-"""Configuration-driven operational workshops and the common operating picture.
+"""Operational workshops and the common operating picture.
 
 A workshop definition is validated data: object types, tables, map layers,
-timeline sources, allowed actions and access requirements. The renderer builds
-views only from an access-filtered projection, and the COP is a generated
-self-contained HTML document (inline SVG map, no external assets, no network).
-Epistemic state is always conveyed by symbol shape and text label, never by
-colour alone. No scenario constants live in this module.
+timeline sources, allowed actions and access requirements. The renderer works
+only from an access-filtered projection, and the picture is a self-contained
+HTML document with an inline SVG map and no external assets. Epistemic state
+always shows as symbol shape and text, never colour alone.
 """
 from __future__ import annotations
 
@@ -236,7 +235,7 @@ class WorkbenchRenderer:
                 "details": details, "counts": counts}
 
 
-# ---- common operating picture (self-contained HTML) -------------------------
+# ---- common operating picture ----
 
 _SYMBOL_SVG = {
     "circle": '<circle cx="{x}" cy="{y}" r="6" class="sym"/>',
@@ -260,7 +259,8 @@ def _project_features(layers: list[dict[str, Any]], width: int, height: int, pad
                 points.extend(c[:2] for c in coords)
     if not points:
         return lambda lon, lat: (width / 2, height / 2)
-    lons = [p[0] for p in points]; lats = [p[1] for p in points]
+    lons = [p[0] for p in points]
+    lats = [p[1] for p in points]
     min_lon, max_lon = min(lons), max(lons)
     min_lat, max_lat = min(lats), max(lats)
     span_lon = (max_lon - min_lon) or 1e-6
@@ -287,8 +287,9 @@ def render_cop_html(view: Mapping[str, Any], *, title: str) -> str:
             state = props["epistemic_state"]
             dashed = state not in ("OBSERVED", "REPORTED", "CORRECTED")
             if geometry["type"] == "LineString":
-                path = " ".join(f"{'M' if i == 0 else 'L'} {project(c[0], c[1])[0]} {project(c[0], c[1])[1]}"
-                                for i, c in enumerate(geometry["coordinates"]))
+                points = [project(c[0], c[1]) for c in geometry["coordinates"]]
+                path = " ".join(f"{'M' if i == 0 else 'L'} {px} {py}"
+                                for i, (px, py) in enumerate(points))
                 svg_parts.append(f'<path d="{path}" class="line{" dashed" if dashed else ""}"/>')
                 mid = geometry["coordinates"][len(geometry["coordinates"]) // 2]
                 x, y = project(mid[0], mid[1])
@@ -297,11 +298,9 @@ def render_cop_html(view: Mapping[str, Any], *, title: str) -> str:
                 template = _SYMBOL_SVG.get(props["symbol"], _SYMBOL_SVG["question"])
                 svg_parts.append(template.format(x=x, y=y, x0=x - 6, y0=y - 6, xl=x - 6, xr=x + 6,
                                                  yt=y - 6, yb=y + 6, yq=y + 4))
-            # deterministic label de-collision: nudge down in 13px steps while
-            # any previously placed label anchor is within 14px
-            # Keep labels inside the SVG.  Labels near the right edge use an
-            # end anchor; this is deterministic and avoids the previously
-            # clipped rightmost place name without scenario-specific logic.
+            # Nudge a label down in fixed steps until it clears the ones
+            # already placed, and anchor it from the right near the edge so it
+            # stays inside the SVG. Deterministic, with no per-scenario rules.
             right_aligned = x > width - 190
             label_x, label_y = (x - 9 if right_aligned else x + 9), y - 4
             while any(abs(label_x - px) < 110 and abs(label_y - py) < 14 for px, py in placed_anchors):

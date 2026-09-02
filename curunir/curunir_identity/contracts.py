@@ -1,4 +1,4 @@
-"""Replayable records for Curunír cryptographic actor identity."""
+"""Records for actor keys and signed actions."""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -18,7 +18,7 @@ IDENTITY_EVENT_TYPES = {
 
 @dataclass(frozen=True)
 class ActorKeyRecord(Record):
-    """One immutable version of an actor-owned Ed25519 public key."""
+    """One version of an actor's public key."""
 
     RECORD_TYPE = "actor_key"
     key_id: str
@@ -39,8 +39,8 @@ class ActorKeyRecord(Record):
         _member(self.status, KEY_STATUSES, "key status")
         if self.version < 1:
             raise ValueError("key versions start at 1")
-        if not self.key_id or not self.actor_id or len(self.public_key) != 64:
-            raise ValueError("an actor key requires ids and a 32-byte public key")
+        if not self.key_id or not self.actor_id:
+            raise ValueError("an actor key requires a key id and an actor id")
         try:
             raw = bytes.fromhex(self.public_key)
         except ValueError as exc:
@@ -54,7 +54,7 @@ class ActorKeyRecord(Record):
 
 @dataclass(frozen=True)
 class SignedActionRecord(Record):
-    """An action signature bound to the exact actor, act, target and mission."""
+    """A signature bound to one actor, action, target and mission."""
 
     RECORD_TYPE = "signed_action"
     action_id: str

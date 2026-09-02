@@ -1,12 +1,4 @@
-"""Bridge between the fabric and the mission workflow, on one shared store.
-
-A FabricStore accepts every mission event type, so one store root carries the
-whole lineage: requirement → need → plan → execution → manifestation →
-coverage → watch → change → alert. The bridge keeps the boundaries intact:
-the fabric records collection facts and evidence-bound alerts; only a HUMAN
-actor can ever answer or close the requirement (enforced by the mission
-workflow itself).
-"""
+"""Link fabric needs and changes to mission requirements and alerts."""
 from __future__ import annotations
 
 from argus.source_intelligence.models import digest_id
@@ -28,7 +20,7 @@ def open_requirement_with_need(store: FabricStore, *, mission_context: str, ques
                                owning_role: str = "ANALYST",
                                closure_criteria: str = "", rationale: str = "",
                                now: str, actor: str, marking: Marking) -> InformationNeed:
-    """Open a mission InformationRequirement and its fabric-side need together."""
+    """Open a mission requirement and the fabric need that serves it."""
     workflow = MissionWorkflow(store)
     requirement = workflow.open_requirement(
         mission_context=mission_context, question=question, affected_ids=entities,
@@ -52,7 +44,7 @@ def open_requirement_with_need(store: FabricStore, *, mission_context: str, ques
 
 def alert_from_change(store: FabricStore, change_record: dict, *, severity: str = "WARNING",
                       now: str, actor: str, marking: Marking) -> tuple[str, bool]:
-    """Raise an evidence-bound mission alert for a watch change observation."""
+    """Raise a mission alert for one watch change observation."""
     if not change_record["evidence_manifestation_ids"] and change_record["change_type"] != "RETRIEVAL_FAILURE":
         raise ValueError("change alerts must cite manifestation evidence")
     evidence = tuple(change_record["evidence_manifestation_ids"]) or (change_record["run_id"],)

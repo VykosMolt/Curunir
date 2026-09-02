@@ -1,17 +1,4 @@
-"""Starter catalog: a small set of real public sources with genuinely
-different acquisition shapes, enough to prove the generic architecture.
-
-    wikidata      — multilingual entity lookup API (search + expand)
-    gleif         — legal-entity registry API with page pagination
-    sec-edgar     — regulatory filing full-text search + archive fetch (deep history)
-    wayback       — web archive: historical enumeration + capture fetch
-    live-web      — ordinary public web page retrieval (current only)
-    federal-register-feed — official gazette RSS change feed (append-only)
-
-Descriptors use the ARGUS Source Intelligence vocabulary; profiles carry the
-fabric acquisition-shape facts. Nothing here is mocked: every entry binds to
-a working connector against the real public endpoint.
-"""
+"""The starter catalog: six real public sources with different acquisition shapes."""
 from __future__ import annotations
 
 from argus.source_intelligence.models import SourceDescriptor, digest_id
@@ -138,7 +125,7 @@ def starter_catalog(now: str) -> list[tuple[SourceDescriptor, CapabilityProfile]
                 available_fields=("timestamp", "original_url", "digest", "mimetype", "statuscode"),
                 known_biases=("capture density follows crawl priorities, not importance",),
                 known_gaps=("robots-excluded and uncrawled pages are absent",),
-                archive_compatible=False,  # it IS the archive; re-archiving is circular
+                archive_compatible=False,  # It is the archive.
             ),
         ),
         (

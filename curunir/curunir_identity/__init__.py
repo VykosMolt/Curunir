@@ -1,4 +1,4 @@
-"""Curunír V6.7 Ed25519 actor identity and signed actions."""
+"""Ed25519 actor identity: keys, sessions, signed actions and their replay."""
 from .actions import (
     ACCEPTED,
     SignatureRejected,

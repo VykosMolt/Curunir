@@ -1,14 +1,6 @@
-"""Direct exercise of capability families whose mapped tests never called
-their named implementations (C11 handoff: F01 lawful acquisition, F14
-sovereignty exit test).
-
-The F03 production-prediction cases and the V4 security-review guard were
-removed with the research-campaign tree in the V6.9 excision; they live on at
-tag ``archive/curunir-campaign-tree-v5x``.
-
-Each test calls the named product function itself, with both a positive and a
-negative case where the capability is a decision, so it cannot pass by
-refusing (or allowing) everything.
+"""Two capabilities exercised by calling the product functions themselves:
+deciding what may lawfully be fetched, and proving an export can be walked away
+with. Each decision is tested both ways, so nothing passes by always refusing.
 """
 from __future__ import annotations
 
@@ -22,7 +14,7 @@ NOW = "2026-08-15T12:00:00+00:00"
 
 
 # ---------------------------------------------------------------------------
-# F01 — lawful acquisition: classify_access / acquisition_eligible / connectors
+# What may lawfully be fetched
 # ---------------------------------------------------------------------------
 
 def _descriptor(access_class: str):
@@ -59,7 +51,6 @@ def test_f01_each_access_class_gets_its_decision_not_a_downgrade(
 def test_f01_ineligible_is_refused_not_silently_downgraded():
     from argus.source_intelligence.policy import acquisition_eligible, classify_access
     decision = classify_access(_descriptor("RESTRICTED"), "https://example.org/x", now=NOW)
-    # the refusal names its reason and is not converted to any ELIGIBLE_* value
     assert not acquisition_eligible(decision)
     assert "PRIVATE_OR_RESTRICTED_ACCESS" in decision.reason_codes
     assert not decision.decision.startswith("ELIGIBLE")
@@ -93,11 +84,11 @@ def test_f01_connectors_shape_leads_without_granting_acquisition():
         assert "REQUIRES_ACQUISITION" in lead.relevance_rationale
         assert lead.acquisition_state == "NOT_ACQUIRED"
     assert NEWS_CONNECTOR.policy.absence_semantics.startswith("ABSENCE_IS_UNKNOWN")
-    assert NEWS_CONNECTOR.policy.prohibited_inference  # inference limits are declared, not implied
+    assert NEWS_CONNECTOR.policy.prohibited_inference  # the limits are written down
 
 
 # ---------------------------------------------------------------------------
-# F14 — sovereignty.run_exit_test
+# Leaving with a complete, verifiable copy
 # ---------------------------------------------------------------------------
 
 def test_f14_exit_test_passes_on_faithful_export_and_fails_on_tamper(tmp_path):
@@ -124,7 +115,7 @@ def test_f14_exit_test_passes_on_faithful_export_and_fails_on_tamper(tmp_path):
     assert result["passed"] is True
     assert all(result["checks"].values())
 
-    # a tampered export must fail the exit test, not pass by construction
+    # An altered export must fail, so the check is not passing by construction.
     events = (tmp_path / "export" / "events.jsonl").read_text().splitlines()
     tampered = events[-1].replace('"OPEN"', '"CLOSED"')
     (tmp_path / "export" / "events.jsonl").write_text("\n".join(events[:-1] + [tampered]) + "\n")

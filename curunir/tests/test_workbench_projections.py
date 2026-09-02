@@ -1,5 +1,5 @@
-"""Mission projection: cross-plane composition, access filtering before
-serialization, redaction of hidden references, provenance descent."""
+"""Mission projection: composed views, access filtering applied before anything is
+serialized, and provenance descent."""
 from __future__ import annotations
 
 import json
@@ -49,10 +49,8 @@ def test_restricted_records_invisible_to_b(mission):
     assert secret not in view_b.visible_object_ids()
     assert view_a.get("analytic_assumption", seeded["secret_assumption_id"]) is not None
     assert view_b.get("analytic_assumption", seeded["secret_assumption_id"]) is None
-    # counts computed from the filtered set only
     assert view_a.overview()["counts"]["entities"] \
         == view_b.overview()["counts"]["entities"] + 1
-    # the whole serialized payload of B never contains the hidden id
     blob = json.dumps(view_b.overview()) + json.dumps(view_b.family("analytic_assumption"))
     assert secret not in blob
     assert seeded["secret_assumption_id"] not in blob
@@ -103,7 +101,7 @@ def test_timeline_axes_differ(mission):
     valid = timeline(projection, axis="valid")
     knowledge = timeline(projection, axis="knowledge")
     assert valid["axis"] == "valid" and knowledge["axis"] == "knowledge"
-    # knowledge axis includes forecast versions (no valid time), valid axis not
+    # A forecast has no valid time, so it can only sit on the knowledge axis.
     assert any(e["kind"] == "forecast" for e in knowledge["entries"])
     assert not any(e["kind"] == "forecast" for e in valid["entries"])
     with pytest.raises(ValueError):

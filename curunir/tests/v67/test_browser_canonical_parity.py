@@ -1,4 +1,5 @@
-"""Causal byte-parity lock for browser-produced Ed25519 signatures."""
+"""The browser and the server canonicalize to the same bytes, and the browser
+refuses every value where they would differ."""
 from __future__ import annotations
 
 import base64

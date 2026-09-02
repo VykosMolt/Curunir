@@ -1,10 +1,8 @@
-"""Analytic store: the semantic store plus analytical event types.
+"""Analytic store: the semantic store plus the analytical event types.
 
-One store root carries the entire stack under a single hash chain — mission
-workflow, fabric acquisition, semantic understanding, and now the analytical
-layer — with the inherited export/import/replay and tamper-detection
-guarantees. All "current state" views here are pure functions over the
-replayed log; nothing is cached outside it.
+One store root carries the whole stack under a single hash chain, with the
+inherited export, import, replay and tamper-detection guarantees. Every
+"current state" view here is a pure function over the replayed log.
 """
 from __future__ import annotations
 
@@ -51,17 +49,42 @@ ANALYTIC_ID_FIELDS = {
 
 class AnalyticStore(SemanticStore):
     EVENT_TYPES = {**SemanticStore.EVENT_TYPES, **ANALYTIC_EVENT_TYPES}
-    # every analytical record family is versioned: append enforces strict
-    # next-version so a concurrent writer's stale update raises instead of
-    # silently shadowing current state (last-append-wins is not truth).
-    # EXTENDS the semantic plane's map — replacing it would silently strip
-    # protection from hypotheses/discriminators/routes/review items on the
-    # very store the shipped stack runs on
+    # Extends the semantic map rather than replacing it, so a concurrent
+    # writer's stale update raises on every family, analytical and semantic.
     VERSIONED_RECORD_TYPES = {
         **SemanticStore.VERSIONED_RECORD_TYPES,
         **{record_type: id_field
            for record_type, (_, id_field) in ANALYTIC_ID_FIELDS.items()},
     }
+
+    # ---- log-derived indexes ---------------------------------------------
+
+    def _reset_indexes(self) -> None:
+        super()._reset_indexes()
+        # A candidate is spent by the first record that carried it. Keyed over
+        # the whole log, so a later version dropping the id cannot free it.
+        self._proposal_materializations: dict[str, tuple[str, str]] = {}
+        self._transition_ids: set[str] = set()
+
+    def _index(self, event: dict) -> None:
+        super()._index(event)
+        record = event["record"]
+        record_type = record["record_type"]
+        if record_type == "analytic_transition":
+            self._transition_ids.add(record["transition_id"])
+        elif record_type in ANALYTIC_ID_FIELDS:
+            proposal_id = record.get("proposal_id")
+            if proposal_id:
+                _, id_field = ANALYTIC_ID_FIELDS[record_type]
+                self._proposal_materializations.setdefault(
+                    proposal_id, (record_type, record[id_field]))
+
+    def materialization_of(self, proposal_id: str) -> tuple[str, str] | None:
+        """(record type, id) of what already spent this candidate proposal."""
+        return self._proposal_materializations.get(proposal_id)
+
+    def has_transition(self, transition_id: str) -> bool:
+        return transition_id in self._transition_ids
 
     # ---- generic versioned views ----------------------------------------
 
@@ -119,10 +142,6 @@ class AnalyticStore(SemanticStore):
         return [r for r in self.current_analytics("propagation_edge").values()
                 if r["narrative_id"] == narrative_id]
 
-    def assessments_for_entity(self, entity_object_id: str) -> list[dict]:
-        return [r for r in self.current_stakeholder_assessments().values()
-                if r["entity_object_id"] == entity_object_id]
-
     def paths_for_objective(self, objective_id: str) -> list[dict]:
         return [r for r in self.current_impact_paths().values()
                 if r["objective_id"] == objective_id]
@@ -135,11 +154,3 @@ class AnalyticStore(SemanticStore):
 
     def current_warnings(self) -> dict[str, dict]:
         return self.current_analytics("strategic_warning")
-
-    def indicators_for_forecast(self, forecast_id: str) -> list[dict]:
-        return [r for r in self.current_indicators().values()
-                if forecast_id in r["forecast_ids"]]
-
-    def warnings_for_objective(self, objective_id: str) -> list[dict]:
-        return [r for r in self.current_warnings().values()
-                if r["objective_id"] == objective_id]

@@ -1,7 +1,6 @@
-"""Regression pins for the adversarial review findings: marking preservation
-on re-appends, uniform hidden-id scrubbing, honest disposition attribution,
-approval-state-machine holes, dissent gates, latest-wins for versionless
-families, and error semantics."""
+"""Regression pins for the workbench: markings survive re-appends, hidden ids are
+scrubbed everywhere, dispositions name the real actor, and dissent blocks
+approval."""
 from __future__ import annotations
 
 import json
@@ -39,7 +38,7 @@ def mission(tmp_path):
 
 
 def test_review_disposition_never_declassifies(mission):
-    """Finding 1: a disposition re-append must keep the item's own marking."""
+    """Resolving a review item keeps the item's own marking."""
     ctx, seeded, cc = mission
     item = ReviewItem(item_id="ri-secret", kind="CONTRADICTED",
                       subject_kind="object", subject_id=seeded["secret_object_id"],
@@ -58,12 +57,8 @@ def test_review_disposition_never_declassifies(mission):
 
 
 def test_public_review_of_hidden_subject_is_floored_and_invisible(mission):
-    """V6.7 never-write-down supersedes view-time redaction.
-
-    A review item materially derived from a restricted subject inherits that
-    subject's marking at admission, so no alternate query path can expose a
-    partially redacted PUBLIC shell.
-    """
+    """A review item about a restricted subject takes that subject's marking when it
+    is written, so no query path can return a half-redacted public shell."""
     ctx, seeded, cc = mission
     secret = seeded["secret_object_id"]
     item = ReviewItem(item_id="ri-public", kind="IDENTITY_AMBIGUITY",
@@ -81,8 +76,7 @@ def test_public_review_of_hidden_subject_is_floored_and_invisible(mission):
 
 
 def test_submit_disposition_records_real_actor_kind(mission):
-    """Finding 3: the disposition log never asserts a human act that did not
-    happen."""
+    """A disposition records the actor kind that really acted."""
     ctx, seeded, cc = mission
     report = commands.create_report(cc(SERVICE_CTX), title="svc draft",
                                     question="?", sections=[
@@ -95,8 +89,8 @@ def test_submit_disposition_records_real_actor_kind(mission):
 
 
 def test_service_cannot_edit_and_supersession_is_recorded(mission):
-    """Finding 4: no service actor voids an approved report; revising an
-    approved version records SUPERSEDED against it."""
+    """A service actor cannot edit an approved report, and a human revision records
+    SUPERSEDED against the version it replaces."""
     ctx, seeded, cc = mission
     claim_id = seeded["status_claim"]["claim_id"]
     sections = [{"kind": "key_judgments", "title": "KJ", "sentences": [
@@ -119,14 +113,14 @@ def test_service_cannot_edit_and_supersession_is_recorded(mission):
     superseded = next(d for d in ctx.store.report_dispositions(report["report_id"])
                       if d["disposition"] == "SUPERSEDED")
     assert superseded["report_version"] == approved["version"]
-    # original drafter attribution survives status transitions (finding 23)
+    # The approved version still names its original drafter.
     frozen = next(v for v in ctx.store.report_versions(report["report_id"])
                   if v["version"] == approved["version"])
     assert frozen["author"] == "analyst-a"
 
 
 def test_sentence_anchored_dissent_blocks_approval(mission):
-    """Finding 5: dissent below report level cannot dodge the gate."""
+    """Dissent recorded against a single sentence still blocks approval."""
     ctx, seeded, cc = mission
     claim_id = seeded["status_claim"]["claim_id"]
     report = commands.create_report(cc(CTX_A), title="dossier",
@@ -142,15 +136,14 @@ def test_sentence_anchored_dissent_blocks_approval(mission):
                       text="the registry basis is single-origin")
     projection = MissionProjection(ctx.store, CTX_A)
     assert open_dissent(projection, report["report_id"])
-    # separation of duties: the drafter cannot approve at all
+    # The drafter can never approve, dissent or not.
     with pytest.raises(PermissionError, match="separation of duties"):
         commands.approve_report(cc(CTX_A), report["report_id"],
                                 expected_version=submitted["version"])
-    # an independent approver is still blocked by the sentence-anchored dissent
     with pytest.raises(ValueError, match="dissent"):
         commands.approve_report(cc(CTX_B), report["report_id"],
                                 expected_version=submitted["version"])
-    # rewording the sentence does not detach the dissent (finding 7, round 2)
+    # Rewording the sentence must not detach the dissent from it.
     commands.reject_report(cc(CTX_B), report["report_id"],
                            expected_version=submitted["version"],
                            note="revise wording", return_for_revision=True)
@@ -169,7 +162,7 @@ def test_sentence_anchored_dissent_blocks_approval(mission):
 
 
 def test_only_the_dissenting_author_resolves_dissent(mission):
-    """Finding 6: the approver a dissent blocks cannot clear their own path."""
+    """Only the author of a dissent can resolve it."""
     ctx, seeded, cc = mission
     dissent = commands.annotate(cc(CTX_B), target_kind="hypothesis",
                                 target_id=seeded["hypothesis"]["hypothesis_id"],
@@ -185,8 +178,7 @@ def test_only_the_dissenting_author_resolves_dissent(mission):
 
 
 def test_versionless_families_resolve_latest_by_log_order(mission):
-    """Findings 8/10/11/12: pause state is projection-visible, authorship
-    survives, re-creation is refused, overview counts the truth."""
+    """A watch has no version field, so its current state is the last one logged."""
     ctx, seeded, cc = mission
     watch = commands.create_watch(
         cc(CTX_A), need_id="need-x", target_kind="NATIVE_OBJECT",
@@ -203,8 +195,8 @@ def test_versionless_families_resolve_latest_by_log_order(mission):
 
 
 def test_source_registry_visible_and_not_hidden(mission):
-    """Finding 9: profiles/status are registry metadata; source ids never
-    poison the hidden set."""
+    """Source registry metadata stays visible, and a source id never lands in the
+    hidden set."""
     ctx, seeded, cc = mission
     projection = MissionProjection(ctx.store, CTX_B)
     assert projection.family("fabric_source_profile")
@@ -216,7 +208,8 @@ def test_source_registry_visible_and_not_hidden(mission):
 
 
 def test_historical_as_current_derived_from_basis(mission):
-    """Finding 18: omitting temporal_scope does not opt out."""
+    """A sentence resting on an expired claim is blocked even without a stated
+    temporal scope."""
     ctx, seeded, cc = mission
     from curunir_semantic.contracts import SemanticClaim
     raw = ctx.store.current_claims()[seeded["status_claim"]["claim_id"]]
@@ -239,7 +232,7 @@ def test_historical_as_current_derived_from_basis(mission):
 
 
 def test_probability_checked_against_authored_versions(mission):
-    """Finding 21: every quoted probability must be an authored version."""
+    """A quoted probability has to match a version an analyst actually authored."""
     ctx, seeded, cc = mission
     forecast_id = seeded["forecast"]["forecast_id"]
     commands.move_forecast(cc(CTX_A), forecast_id, expected_version=1,
@@ -264,7 +257,7 @@ def test_probability_checked_against_authored_versions(mission):
 
 
 def test_malformed_report_body_is_400_not_404(mission):
-    """Finding 19: KeyError from malformed input is never an existence claim."""
+    """A malformed section is a bad request, not a missing record."""
     ctx, seeded, cc = mission
     with pytest.raises(ValueError):
         commands.create_report(cc(CTX_A), title="broken", question="?",
@@ -273,7 +266,7 @@ def test_malformed_report_body_is_400_not_404(mission):
 
 
 def test_theme_appears_in_entity_dossier(mission):
-    """Findings 13/14: dossier joins use the real contract fields."""
+    """A theme naming an entity shows up in that entity's dossier."""
     ctx, seeded, cc = mission
     from curunir_analytic.themes import create_theme
     from curunir_analytic.substrate import AnalyticContext

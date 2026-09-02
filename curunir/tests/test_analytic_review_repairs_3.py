@@ -1,4 +1,6 @@
-"""Regression locks for the third-round adversarial findings (R1–R10)."""
+"""What an accepted model proposal may and may not buy: exactly the content the
+person accepted, on exactly one object, in this plane only — plus a few other
+refusals a review turned up."""
 from __future__ import annotations
 
 import pytest
@@ -16,21 +18,12 @@ from curunir_operational.contracts import AnalyticalProposal
 from curunir_operational.store import StoreError, _entry_hash
 from curunir_semantic.worldmodel import world_object_id
 
-from analytic_support import (GLEIF_ACME, MARK, T0, make_analytic, plant_page,
+from analytic_support import (MARK, T0, make_analytic, plant_page, seed_acme,
                               statement_page)
-from semantic_support import plant_manifestation
 
 pytestmark = pytest.mark.no_db
 
 ACME_OBJECT = world_object_id("LEI:ACMELEI000000000001")
-
-
-def _seed(pipeline, ctx):
-    plant_manifestation(pipeline, source_id="gleif", native_id="lei/ACMELEI000000000001",
-                        body=GLEIF_ACME, media_type="application/json", retrieval_time=T0)
-    pipeline.process_new_evidence()
-    return {c["predicate"]: c["claim_id"] for c in ctx.store.current_claims().values()
-            if c["subject_ref"] == "LEI:ACMELEI000000000001"}
 
 
 def _accepted(ctx, target_kind, content_fn, inputs):
@@ -45,7 +38,7 @@ def _accepted(ctx, target_kind, content_fn, inputs):
 
 def test_r1_model_fold_cannot_exceed_accepted_content(tmp_path):
     pipeline, ctx = make_analytic(tmp_path)
-    by_predicate = _seed(pipeline, ctx)
+    by_predicate = seed_acme(pipeline, ctx)
     resolved = _accepted(
         ctx, "analytic_theme",
         lambda task, payload: {"title": "Acme standing",
@@ -56,14 +49,14 @@ def test_r1_model_fold_cannot_exceed_accepted_content(tmp_path):
                          provenance_kind="MODEL",
                          inference_id=resolved["inference_id"],
                          proposal_id=resolved["proposal_id"])
-    # completing the same materialization is allowed…
+    # Making the same object again completes it rather than duplicating it.
     again = create_theme(ctx, title="Acme standing",
                          supporting_claim_ids=[by_predicate["entity_status"]],
                          provenance_kind="MODEL",
                          inference_id=resolved["inference_id"],
                          proposal_id=resolved["proposal_id"])
     assert again["version"] == theme["version"]
-    # …but folding claims the human never accepted is not
+    # Claims nobody accepted cannot ride in on the same acceptance.
     with pytest.raises(ValueError, match="beyond the[\\s\\S]*accepted"):
         create_theme(ctx, title="Acme standing",
                      supporting_claim_ids=[by_predicate["entity_status"],
@@ -78,7 +71,7 @@ def test_r1_model_fold_cannot_exceed_accepted_content(tmp_path):
 
 def test_r2_candidates_must_declare_binding_fields(tmp_path):
     _, ctx = make_analytic(tmp_path, seeded=False)
-    # a model choosing its own key names cannot produce an acceptable candidate
+    # A candidate must use the field names the acceptance is checked against.
     with pytest.raises(ValueError, match="binding[\\s\\S]*fields"):
         record_candidate(ctx, target_kind="analytic_theme",
                          content={"proposed_title": "Modest registry note",
@@ -91,9 +84,8 @@ def test_r2_candidates_must_declare_binding_fields(tmp_path):
 
 def test_r3_operational_acceptance_is_not_analytic_currency(tmp_path):
     pipeline, ctx = make_analytic(tmp_path)
-    by_predicate = _seed(pipeline, ctx)
-    # an accepted OPERATIONAL proposal (different proposal_type, no
-    # target_kind) must be worthless at the analytical gate
+    by_predicate = seed_acme(pipeline, ctx)
+    # An acceptance from the operational plane must buy nothing here.
     from curunir_operational.canonical import sha256
     from curunir_operational.contracts import InferenceRecord
     now = ctx.now_fn()
@@ -152,14 +144,13 @@ def test_r4_variant_acceptance_is_consumed(tmp_path):
                   inference_id=resolved["inference_id"],
                   proposal_id=resolved["proposal_id"])
     add_variant(ctx, narrative_1["narrative_id"], **kwargs)
-    # the same acceptance cannot mint a second variant on another narrative
     with pytest.raises(ValueError, match="consumed|already"):
         add_variant(ctx, narrative_2["narrative_id"], **kwargs)
 
 
 def test_r5_model_recall_completes_instead_of_raising(tmp_path):
     pipeline, ctx = make_analytic(tmp_path)
-    by_predicate = _seed(pipeline, ctx)
+    by_predicate = seed_acme(pipeline, ctx)
     other = world_object_id("LEI:OTHERLEI00000000002")
     resolved = _accepted(
         ctx, "influence_assertion",
@@ -175,11 +166,10 @@ def test_r5_model_recall_completes_instead_of_raising(tmp_path):
                   inference_id=resolved["inference_id"],
                   proposal_id=resolved["proposal_id"])
     first = assert_influence(ctx, **kwargs)
-    # the crash-recovery re-call completes idempotently — it must NOT raise
-    # "acceptance consumed" against the object it itself materialized
+    # Repeating the call after a crash must not count as spending the
+    # acceptance a second time on the object it already made.
     second = assert_influence(ctx, **kwargs)
     assert second["version"] == first["version"]
-    # but a different proposal cannot touch it
     with pytest.raises(ValueError, match="different proposal"):
         assert_influence(ctx, **{**kwargs, "proposal_id": "prop-other",
                                  "inference_id": "inf-other"})
@@ -187,7 +177,7 @@ def test_r5_model_recall_completes_instead_of_raising(tmp_path):
 
 def test_r6_position_order_cannot_bypass_guard(tmp_path):
     pipeline, ctx = make_analytic(tmp_path)
-    by_predicate = _seed(pipeline, ctx)
+    by_predicate = seed_acme(pipeline, ctx)
     interest = StakeholderPosition(
         position_id="int-1", kind="INFERRED_INTEREST", statement="interest",
         stance="UNRESOLVED", authority="SUPPORTED_INFERENCE",
@@ -237,7 +227,7 @@ def test_r7_verbatim_requires_text_identity(tmp_path):
 
 def test_r8_assessment_fold_is_typed(tmp_path):
     pipeline, ctx = make_analytic(tmp_path)
-    by_predicate = _seed(pipeline, ctx)
+    by_predicate = seed_acme(pipeline, ctx)
     assessment = create_assessment(
         ctx, entity_object_id=ACME_OBJECT, context_kind="ISSUE",
         context_id="x", role_in_context="party",
@@ -257,7 +247,7 @@ def test_r9_analogue_degradation_is_alertable():
 
 def test_r10_forged_object_version_import_rejected(tmp_path):
     pipeline, ctx = make_analytic(tmp_path)
-    _seed(pipeline, ctx)
+    seed_acme(pipeline, ctx)
     version = next(v for v in ctx.store.records_of("object_version"))
     head = ctx.store.head()
     now = ctx.now_fn()

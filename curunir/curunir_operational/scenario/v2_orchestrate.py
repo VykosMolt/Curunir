@@ -1,19 +1,21 @@
-"""Top-level V2 orchestration: three scenarios, joint outputs, provider
-evaluation, delta synchronization, cross-workbench access matrix, stress, and
-the full artifact set."""
+"""Top-level orchestration for the second scenario set: three scenarios, joint
+outputs, provider evaluation, delta sync, the cross-workbench access matrix,
+stress, and the full artifact set."""
 from __future__ import annotations
 
 import json
+import shutil
+import tempfile
 from pathlib import Path
 from typing import Any
 
 from curunir_operational.canonical import canonical_line
 from curunir_operational.delta import (build_delta_bundle, build_full_bundle, import_delta_bundle,
                                        verify_delta_bundle)
-from curunir_operational.projection import Projection, projection_hash
+from curunir_operational.projection import Projection
 from curunir_operational.providers_eval import run_provider_comparison
 from curunir_operational.sitrep import build_situation_report, render_markdown, render_text
-from curunir_operational.sovereignty import build_sovereignty_manifest, run_exit_test
+from curunir_operational.sovereignty import build_sovereignty_manifest
 from curunir_operational.store import MissionDataStore
 from curunir_operational.workbench import WorkbenchRenderer, render_cop_html
 from curunir_operational.access import can_view
@@ -39,11 +41,11 @@ def _restricted_ids(store: MissionDataStore) -> set[str]:
 
 
 def cross_workbench_access_matrix(b: dict[str, Any]) -> dict[str, Any]:
-    """A leak = a restricted object id, or a compartment name the context does
-    not hold, appearing in that context's serialized view. An object the
-    context IS authorized to see is not a leak."""
-    store = b["store"]; projection = b["projection"]
-    # privileged diagnostic: map each restricted object to its marking
+    """A leak is a restricted object id, or a compartment name the context does
+    not hold, showing up in that context's serialized view."""
+    store = b["store"]
+    projection = b["projection"]
+    # Privileged diagnostic: map each restricted object to its marking.
     restricted_markings = {r["object_id"]: r["marking"] for r in store.records_of("object_version")
                            if r["marking"].get("compartments")}
     all_compartments = {c for m in restricted_markings.values() for c in m["compartments"]}
@@ -54,10 +56,10 @@ def cross_workbench_access_matrix(b: dict[str, Any]) -> dict[str, Any]:
             continue
         view = projection.view(context)
         serialized = canonical_line(view)
-        # only ids the context genuinely cannot view count as leaks
+        # Only ids the context genuinely cannot view count as leaks.
         unauthorized_ids = sorted(oid for oid, marking in restricted_markings.items()
                                   if not can_view(marking, context) and oid in serialized)
-        # compartment names the context does not hold must not appear
+        # A compartment name the context does not hold must not appear.
         unheld_compartments = sorted(c for c in all_compartments
                                      if c not in context.compartments and c in serialized)
         r1 = next((o for o in view["objects"] if o["object_id"] == "route-R1"), None)
@@ -81,7 +83,7 @@ def delta_sync_demo(b: dict[str, Any], out_dir: Path) -> dict[str, Any]:
     store = b["store"]
     seq_phase1 = b["seq_phase1"]
     full_manifest = build_full_bundle(store, out_dir / "full_bundle")
-    # stale target = a store holding only up to seq_phase1; a delta brings it current
+    # A stale target holds only the first phase; a delta brings it current.
     truncated_root = out_dir / "truncated_target"
     _truncate_import(store, truncated_root, seq_phase1)
     truncated = MissionDataStore(truncated_root)
@@ -89,15 +91,15 @@ def delta_sync_demo(b: dict[str, Any], out_dir: Path) -> dict[str, Any]:
     verification = verify_delta_bundle(out_dir / "delta_bundle")
     receipt = import_delta_bundle(truncated, out_dir / "delta_bundle")
     brought_current = truncated.head()["head_hash"] == store.head()["head_hash"]
-    # duplicate delta → idempotent no-op on the now-current store
+    # Re-applying the same delta is a no-op.
     duplicate_receipt = import_delta_bundle(truncated, out_dir / "delta_bundle")
-    # missing base: a target holding only 1 event cannot receive a delta based at seq_phase1
+    # A target holding one event cannot receive a delta based later than that.
     missing_base_target = _fresh_from_truncation(store, out_dir / "missing_base_target", keep=1)
     missing_base = import_delta_bundle(missing_base_target, out_dir / "delta_bundle")
-    # wrong base: a target that diverged at seq_phase1 (different history) rejects the delta
+    # A target with a diverged history rejects the delta.
     diverged = _diverged_target(store, out_dir / "diverged_target", seq_phase1)
     wrong_base = import_delta_bundle(diverged, out_dir / "delta_bundle")
-    # tamper the delta events and re-verify
+    # Tamper with the delta events and verify again.
     tampered_dir = out_dir / "delta_tampered"
     _copy_dir(out_dir / "delta_bundle", tampered_dir)
     events_file = tampered_dir / "delta_events.jsonl"
@@ -123,8 +125,8 @@ def _fresh_from_truncation(store, root, keep):
 
 
 def _diverged_target(store, root, keep_seq):
-    """A target sharing the first keep_seq events then appending a divergent one,
-    so the delta's base hash still matches but an overlapping event differs."""
+    """A target sharing the first ``keep_seq`` events then diverging, so the
+    delta's base hash matches but an overlapping event does not."""
     _truncate_import(store, root, keep_seq)
     target = MissionDataStore(root)
     from curunir_operational.contracts import SourceRecord
@@ -138,12 +140,8 @@ def _diverged_target(store, root, keep_seq):
 
 
 def _truncate_import(store: MissionDataStore, root: Path, keep_seq: int) -> None:
-    import shutil
-    import tempfile
-    # The full store exporter is intentionally one-shot and refuses an existing
-    # path.  Each synthetic truncation therefore gets its own disposable export
-    # root; sharing one scratch path made the second scenario depend on an
-    # unsafe overwrite behavior that V6.7 correctly removed.
+    # The exporter refuses an existing path, so each truncation gets its own
+    # disposable export root rather than sharing one.
     with tempfile.TemporaryDirectory(
             prefix=f".{root.name}.full-export.", dir=root.parent) as scratch:
         full_export = Path(scratch) / "export"
@@ -158,21 +156,15 @@ def _truncate_import(store: MissionDataStore, root: Path, keep_seq: int) -> None
             shutil.copyfile(payload, root / "payloads" / payload.name)
 
 
-def _fresh_from_open_export(store, export_dir, root, drop_to):
-    """A store holding only `drop_to` events, to trigger MISSING_BASE for a later delta."""
-    _truncate_import(store, root, drop_to)
-    return MissionDataStore(root)
-
-
 def _copy_dir(src: Path, dst: Path) -> None:
-    import shutil
     if dst.exists():
         shutil.rmtree(dst)
     shutil.copytree(src, dst)
 
 
 def joint_report(b: dict[str, Any], context) -> dict[str, Any]:
-    store = b["store"]; projection = b["projection"]
+    store = b["store"]
+    projection = b["projection"]
     view = projection.view(context)
     logistics = WorkbenchRenderer(projection).render(
         _workshop(store, "SHARED_LOGISTICS_VISIBILITY_WORKBENCH_V1"), context)
@@ -201,7 +193,8 @@ def _workshop(store: MissionDataStore, workshop_id: str) -> dict[str, Any]:
 
 
 def run_v2(root: Path, out_dir: Path) -> dict[str, Any]:
-    root = Path(root); out_dir = Path(out_dir)
+    root = Path(root)
+    out_dir = Path(out_dir)
     (out_dir / "04_v2_scenarios").mkdir(parents=True, exist_ok=True)
     (out_dir / "05_v2_workbenches").mkdir(parents=True, exist_ok=True)
     (out_dir / "06_v2_exports").mkdir(parents=True, exist_ok=True)
@@ -210,8 +203,9 @@ def run_v2(root: Path, out_dir: Path) -> dict[str, Any]:
     b = run_scenario_b(root / "scenario_b")
     c = run_scenario_c(root / "scenario_c")
 
-    # workbench renders (both workbenches, joint + per-domain contexts)
-    b_store = b["store"]; b_proj = b["projection"]
+    # Render both workbenches, in the joint and per-domain contexts.
+    b_store = b["store"]
+    b_proj = b["projection"]
     logistics_wb = _workshop(b_store, "SHARED_LOGISTICS_VISIBILITY_WORKBENCH_V1")
     infra_wb = _workshop(b_store, "INFRASTRUCTURE_RESILIENCE_AND_CIVIL_PROTECTION_WORKBENCH_V2")
     renderer = WorkbenchRenderer(b_proj)
@@ -221,7 +215,7 @@ def run_v2(root: Path, out_dir: Path) -> dict[str, Any]:
             (out_dir / "05_v2_workbenches" / f"cop_{name}_{ctx_name}.html").write_text(
                 render_cop_html(view, title=f"{wb['purpose']} — {ctx_name}"), encoding="utf-8")
 
-    # situation reports for each workbench (joint context)
+    # One situation report per workbench, in the joint context.
     for name in ("logistics", "civil_protection", "joint"):
         report = build_situation_report(b_store, b_proj, v2.CONTEXTS[name],
                                         operational_context=f"Infrastructure cascade — {name}", since_seq=b["seq_phase1"])
@@ -234,8 +228,8 @@ def run_v2(root: Path, out_dir: Path) -> dict[str, Any]:
     access_matrix = cross_workbench_access_matrix(b)
     _wj(out_dir / "04_v2_scenarios" / "cross_workbench_access_matrix.json", access_matrix)
 
-    # provider evaluation on scenario B: each provider gets its own fresh copy
-    # of the store (evaluation must not mutate operational state)
+    # Each provider gets its own fresh copy of the store, so evaluation never
+    # touches operational state.
     empty = Projection(MissionDataStore.create(root / "empty_store", "empty", a_config.at(0)),
                        snapshot_time=a_config.at(1))
     b_store.export_to(root / "eval_export")
@@ -246,7 +240,7 @@ def run_v2(root: Path, out_dir: Path) -> dict[str, Any]:
         return MissionDataStore.import_from(root / "eval_export", root / f"eval_{label}_{eval_counter['n']}")
 
     provider_eval = run_provider_comparison(
-        root / "eval_export", make_eval_store, b_proj, empty, v2.CONTEXTS["joint"], v2.CONTEXTS["logistics"],
+        make_eval_store, b_proj, empty, v2.CONTEXTS["joint"], v2.CONTEXTS["logistics"],
         _restricted_ids(b_store),
         times=[a_config.at(40.0), a_config.at(40.5), a_config.at(41.0), a_config.at(41.5)])
     _wj(out_dir / "04_v2_scenarios" / "provider_evaluation.json", provider_eval)
@@ -260,7 +254,7 @@ def run_v2(root: Path, out_dir: Path) -> dict[str, Any]:
     sovereignty = build_sovereignty_manifest(b_store)
     _wj(out_dir / "06_v2_exports" / "sovereignty_manifest_v2.json", sovereignty)
 
-    # scenario metrics
+    # ---- metrics ----
     metrics = {
         "scenario_a": {"head": scenario_a["summary"]["store_head"]["head_hash"],
                        "questions_answerable": scenario_a["summary"]["questions_answerable"]},

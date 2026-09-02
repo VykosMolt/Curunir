@@ -1,5 +1,5 @@
-"""Sovereignty manifest, exit test (open export → fresh import), PACE bundle
-creation, verification, tamper detection and non-authoritative import."""
+"""Sovereignty manifest, the exit test that exports and reimports a store, and
+PACE bundles: building, verifying, detecting tampering, and importing."""
 from __future__ import annotations
 
 import json
@@ -41,7 +41,7 @@ def test_sovereignty_manifest_dependencies(tmp_path):
     assert all(d["network_required"] is False for d in manifest["dependencies"])
     assert manifest["engagement_boundary"] == "SYSTEM_OF_ENGAGEMENT_AND_ANALYSIS"
     owner = manifest["data_ownership"]["operational_objects_relations_workflow"]["owner"]
-    assert "CIVDEF-AUTH" in owner  # derived from recorded markings, not hard-coded
+    assert "CIVDEF-AUTH" in owner  # read off the recorded markings, not hard-coded
 
 
 def test_exit_test_roundtrip(tmp_path):
@@ -58,14 +58,14 @@ def test_pace_bundle_lifecycle(tmp_path):
                                  operational_context="test corridor")
     assert verify_pace_bundle(tmp_path / "pace")["valid"]
     text = (tmp_path / "pace" / "sitrep.txt").read_text()
-    assert "obs-secret" not in text and "SITUATION REPORT" in text  # plain text readable, filtered
+    assert "obs-secret" not in text and "SITUATION REPORT" in text
     projection_json = (tmp_path / "pace" / "projection.json").read_text()
     assert "obs-secret" not in projection_json
     assert "omitted" in manifest["omission_policy"]
     briefing = import_pace_bundle(tmp_path / "pace")
     assert briefing["non_authoritative_import"] is True
     assert briefing["projection"]["counts"]["objects_total"] == 1
-    # determinism: same inputs → same combined hash
+    # The same inputs must give the same bundle hash.
     again = build_pace_bundle(store, projection, LOW_CONTEXT, tmp_path / "pace2",
                               operational_context="test corridor")
     assert again["combined_sha256"] == manifest["combined_sha256"]

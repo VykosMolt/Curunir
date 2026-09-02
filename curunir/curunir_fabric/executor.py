@@ -1,11 +1,7 @@
-"""Plan execution: policy-gated acquisition terminating in immutable custody.
+"""Run queries against sources: policy check, connector call, custody, records.
 
-Every query × source attempt produces exactly one ExecutionRecord with a
-truthful outcome; every retrieved response body is preserved through the
-established Source Intelligence custody path (content-addressed store +
-validated chain of custody) and bound into the fabric log as a
-ManifestationRecord. Empty results are preserved too: the response bytes are
-the evidence that the search ran and returned nothing.
+Every attempt produces one execution record. Every response body, including an
+empty one, is preserved in custody and recorded as a manifestation.
 """
 from __future__ import annotations
 
@@ -44,7 +40,7 @@ _STATUS_TO_OUTCOME = {
 
 
 class LocalStorageFault(OSError):
-    """A custody/local-disk failure, never attributable to the source."""
+    """A local disk failure. Never blamed on the source."""
 
 
 def content_class_for(media_type: str, body: bytes) -> str:
@@ -58,7 +54,7 @@ def content_class_for(media_type: str, body: bytes) -> str:
 
 
 class RateGate:
-    """Per-source minimum spacing between live requests."""
+    """Minimum spacing between requests to one source."""
 
     def __init__(self, default_interval_seconds: float = 0.5,
                  per_source: Mapping[str, float] | None = None,
@@ -86,7 +82,7 @@ class ExecutionContext:
     marking: object
     now_fn: Callable[[], str] = utc_now
     connectors: Mapping[str, SourceConnector] = field(default_factory=lambda: dict(BUILTIN_CONNECTORS))
-    transports: Mapping[str, Callable] = field(default_factory=dict)  # connector_id → transport override
+    transports: Mapping[str, Callable] = field(default_factory=dict)  # connector_id -> transport override
     rate_gate: RateGate = field(default_factory=RateGate)
 
 
@@ -152,8 +148,9 @@ def _manifestation(ctx: ExecutionContext, *, source_id: str, connector: SourceCo
 
 def execute_single(ctx: ExecutionContext, *, query: QuerySpec, source_id: str,
                    plan_id: str = "") -> ExecutionResult:
-    """One query against one source: policy gate, connector call, custody, records."""
+    """One query against one source: policy check, connector call, custody, records."""
     started = ctx.now_fn()
+    execution_id = digest_id("execution", plan_id, query.query_id, source_id, started)
     connector_id = ""
     connector = None
     profile = ctx.registry.profile(source_id)
@@ -170,7 +167,7 @@ def execute_single(ctx: ExecutionContext, *, query: QuerySpec, source_id: str,
         completed = ctx.now_fn()
         error_detail = scrub_surrogates(error_detail)
         execution = ExecutionRecord(
-            execution_id=digest_id("execution", plan_id, query.query_id, source_id, started),
+            execution_id=execution_id,
             plan_id=plan_id, query_id=query.query_id, source_id=source_id,
             connector_id=connector_id,
             connector_version=connector.connector_version if connector else "",
@@ -184,8 +181,7 @@ def execute_single(ctx: ExecutionContext, *, query: QuerySpec, source_id: str,
             absence_semantics=ABSENCE_SEMANTICS, marking=ctx.marking,
             truncated=bool(response.truncated) if response else False,
         )
-        # Referents land first. An interruption can leave an unreferenced
-        # manifestation, but never an execution containing a dangling id.
+        # Manifestations are written first so an execution never names a missing one.
         for manifestation in manifestations:
             ctx.store.append("FABRIC_MANIFESTATION_RECORDED", manifestation,
                              recorded_time=completed, actor=ctx.actor)
@@ -228,14 +224,13 @@ def execute_single(ctx: ExecutionContext, *, query: QuerySpec, source_id: str,
             historical = query.operation.startswith("HISTORICAL_")
             single = response.results[0] if len(response.results) == 1 else None
             capture_time = single.source_time if historical and single else None
-            # a multi-result response is identified by the target it enumerates.
+            # A multi-result response is identified by the target it enumerates.
             native_id = single.native_id if single else (
                 query.value if query.operation in
                 ("HISTORICAL_ENUMERATE", "ENUMERATE", "POLL") else "")
             manifestations = (_manifestation(
                 ctx, source_id=source_id, connector=connector,
-                execution_id=digest_id(
-                    "execution", plan_id, query.query_id, source_id, started),
+                execution_id=execution_id,
                 response=response, native_id=native_id,
                 temporal_status="HISTORICAL" if historical and capture_time else "LIVE",
                 source_time=single.source_time if single else None,

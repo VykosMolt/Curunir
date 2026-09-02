@@ -1,16 +1,9 @@
-"""Semantic change engine: manifestation difference → world-model difference.
+"""Work out what a change between two manifestations of a target means.
 
-The fabric's watch layer already answers "did the bytes change". This layer
-answers what the change *means*: it diffs the observation sets of two
-manifestations of one target, classifies each difference (value change,
-proposition added/removed, relation/event added, correction, retraction,
-historical state discovered, or semantically unchanged), identifies the
-affected world-model objects and claims, updates claim lifecycle states, and
-queues review items — without deleting or rewriting any prior state.
-
-Chrome noise never becomes a semantic change here because the diff runs over
-typed observations, not raw text: a page whose navigation changed but whose
-extracted propositions are identical is SEMANTICALLY_UNCHANGED.
+The watch layer answers "did the bytes change". This module diffs the two
+manifestations' observations, classifies each difference, names the claims it
+touches and queues review items, deleting nothing. Diffing observations rather
+than raw text keeps page furniture out.
 """
 from __future__ import annotations
 
@@ -19,12 +12,14 @@ from typing import Any, Iterable, Mapping
 
 from argus.source_intelligence.models import digest_id
 
+from curunir_operational.canonical import parse_time
+
 from .contracts import ClaimStateRecord, ReviewItem, SemanticChangeRecord
 from .store import SemanticStore
-from .worldmodel import IntegrationContext
+from .worldmodel import IntegrationContext, world_object_id
 
-# compact multilingual correction/retraction cues; a match is a signal for
-# classification, never an auto-resolution
+# Correction and retraction wording in several languages. A match only steers
+# the classification; it never resolves anything on its own.
 _CORRECTION_CUES = re.compile(
     r"\b(correction|corrected|corrigendum|erratum|berichtigung|korrigiert|"
     r"rectificatif|corrigé|rettifica|исправлен\w*|поправка)\b", re.IGNORECASE)
@@ -41,7 +36,7 @@ def _observation_key(observation: Mapping[str, Any]) -> tuple[str, str, str, str
 def classify_pairwise(prior: list[Mapping[str, Any]],
                       current: list[Mapping[str, Any]],
                       current_text: str = "") -> list[dict[str, Any]]:
-    """Pure classification of two observation sets into semantic differences."""
+    """Classify the differences between two sets of observations."""
     prior_by_key = {_observation_key(o): o for o in prior}
     current_by_key = {_observation_key(o): o for o in current}
     differences: list[dict[str, Any]] = []
@@ -65,7 +60,7 @@ def classify_pairwise(prior: list[Mapping[str, Any]],
         if retraction:
             change_class = "SOURCE_RETRACTION"
         elif correction and change_class == "REMOVED_PROPOSITION":
-            # a correction that replaces a statement removes the old one
+            # a correction replaces a statement, removing the old one
             change_class = "SOURCE_CORRECTION"
         differences.append({"change_class": change_class, "key": key,
                             "prior": observation, "current": None})
@@ -93,7 +88,6 @@ def classify_pairwise(prior: list[Mapping[str, Any]],
 
 def _affected(store: SemanticStore, observations: Iterable[Mapping[str, Any] | None]
               ) -> tuple[tuple[str, ...], tuple[str, ...]]:
-    from .worldmodel import world_object_id
     object_ids: set[str] = set()
     claim_ids: set[str] = set()
     for observation in observations:
@@ -116,7 +110,7 @@ _CONTENT_TRUNCATION_WARNING_PREFIXES = (
 def _current_read_truncated(store: SemanticStore,
                             manifestation: Mapping[str, Any],
                             manifestation_id: str) -> bool:
-    """Whether semantic content, rather than only its anchor map, was capped."""
+    """Whether the content itself was capped, not just its anchor map."""
     if manifestation.get("truncated"):
         return True
     document = next((record for record in store.records_of("semantic_document")
@@ -132,9 +126,9 @@ def interpret_change(ctx: IntegrationContext, prior_manifestation_id: str,
                      max_records: int = 50) -> list[dict[str, Any]]:
     """Interpret the difference between two manifestations of one target.
 
-    Both manifestations must already be normalized and extracted. Emits
-    SemanticChangeRecords, updates claim lifecycle where the change class
-    warrants it, and opens review items — idempotently.
+    Both must already be normalized and extracted. Records the differences,
+    updates claim standing where the change warrants it, and opens review items.
+    Safe to re-run.
     """
     store = ctx.store
     prior_observations = store.observations_for_manifestation(prior_manifestation_id) \
@@ -156,9 +150,9 @@ def interpret_change(ctx: IntegrationContext, prior_manifestation_id: str,
                                         current_text)
         if _current_read_truncated(store, current_manifestation,
                                    current_manifestation_id):
-            # A partial current read cannot establish that prior content was
-            # removed or changed. Additions remain usable because truncation
-            # can hide source content but cannot manufacture it.
+            # A truncated read cannot show that earlier content was removed or
+            # changed. Additions still count: truncation can hide content but
+            # cannot invent it.
             for difference in differences:
                 if (difference["change_class"] in _STATE_FOR_CLASS
                         and difference.get("prior") is not None):
@@ -170,8 +164,8 @@ def interpret_change(ctx: IntegrationContext, prior_manifestation_id: str,
     emitted: list[dict[str, Any]] = []
     truncated = differences[max_records:]
     if truncated:
-        # never silently lose differences: the remainder is recorded as one
-        # explicit unresolved-change record naming what was not interpreted
+        # Never drop differences silently: record the remainder as one
+        # unresolved change naming what was not interpreted.
         differences = differences[:max_records] + [{
             "change_class": "UNRESOLVED_CHANGE", "key": None, "prior": None, "current": None,
             "truncated_count": len(truncated),
@@ -186,10 +180,9 @@ def interpret_change(ctx: IntegrationContext, prior_manifestation_id: str,
                               (current_obs or {}).get("observation_id", ""),
                               (prior_obs or {}).get("observation_id", ""))
         if change_id in existing_change_ids:
-            # the change record exists, but the propagation tail (claim
-            # lifecycle + review item) may have been lost to an interruption
-            # after the append — _propagate is idempotent, so completing it
-            # here makes a re-run finish the flow instead of skipping it
+            # The change is recorded, but the claim standing and review item
+            # that follow it may have been lost to an interruption. Finish
+            # them; _propagate is safe to re-run.
             _propagate(ctx, existing_changes[change_id])
             continue
         affected_objects, affected_claims = _affected(store, (prior_obs, current_obs))
@@ -254,8 +247,7 @@ _STATE_FOR_CLASS = {
 
 
 def _manifestation_state_time(manifestation: Mapping[str, Any]) -> str:
-    """When the manifestation's source state was current — capture time for
-    archives, retrieval time for live fetches; "" when unknown."""
+    """When this state was current at the source, or "" if unknown."""
     if not manifestation:
         return ""
     if manifestation.get("temporal_status") == "HISTORICAL":
@@ -264,12 +256,12 @@ def _manifestation_state_time(manifestation: Mapping[str, Any]) -> str:
     return manifestation.get("retrieval_time") or ""
 
 
-def _claim_newest_evidence_time(ctx: IntegrationContext,
-                                claim: Mapping[str, Any]) -> str:
-    """The newest source-state time among the claim's current observations."""
-    store = ctx.store
-    observations = {o["observation_id"]: o
-                    for o in store.records_of("semantic_observation")}
+def _claim_newest_evidence_time(ctx: IntegrationContext, claim: Mapping[str, Any],
+                                observations: Mapping[str, Any] | None = None) -> str:
+    """The newest source-state time among the claim's observations."""
+    if observations is None:
+        observations = {o["observation_id"]: o
+                        for o in ctx.store.records_of("semantic_observation")}
     times = []
     for observation_id in claim["observation_ids"]:
         observation = observations.get(observation_id)
@@ -283,28 +275,36 @@ def _claim_newest_evidence_time(ctx: IntegrationContext,
 
 
 def _propagate(ctx: IntegrationContext, change: Mapping[str, Any]) -> None:
-    """Carry a classified change onto the claims it touches: lifecycle state
-    plus a review item. Prior claim versions and states stay in the log.
+    """Carry a classified change onto the claims it touches.
 
-    Re-entrant for crash recovery, but completion is GAP-DETECTION, not
-    re-judgment: a change's staleness verdict about a claim stands only
-    while the change is the newest information about it. A later change or
-    a later claim version supersedes it — re-stamping an old change's
-    verdict over a claim that has since moved on would mark correct current
-    state STALE for a reason two versions old."""
+    Each affected claim gets a standing update where the change warrants one,
+    plus a review item. Prior versions and states stay in the log.
+
+    Safe to re-run, but a re-run only fills gaps: a change's verdict about a
+    claim holds only while it is the newest information about that claim. A
+    later change or claim version wins, so an old change cannot mark correct
+    current state stale.
+    """
     store = ctx.store
     mapping = _STATE_FOR_CLASS.get(change["change_class"])
     if mapping is None:
         return
     claim_state, review_kind = mapping
     now = ctx.now_fn()
-    from curunir_operational.canonical import parse_time
     all_changes = store.records_of("semantic_change")
     change_position = next((i for i, c in enumerate(all_changes)
                             if c["change_id"] == change["change_id"]),
                            len(all_changes))
+    # Read once for the whole loop: every affected claim is visited once, and
+    # the appends below only touch the claim being visited.
+    current_claims = store.current_claims()
+    claim_states = store.claim_states()
+    all_observations = {o["observation_id"]: o
+                        for o in store.records_of("semantic_observation")}
+    change_manifestation = ctx.manifestation(change["current_manifestation_id"])
+    change_time = _manifestation_state_time(change_manifestation)
     for claim_id in change["affected_claim_ids"]:
-        current = store.current_claims().get(claim_id)
+        current = current_claims.get(claim_id)
         if current is None:
             continue
         superseded_by_later_change = any(
@@ -313,36 +313,29 @@ def _propagate(ctx: IntegrationContext, change: Mapping[str, Any]) -> None:
             for later in all_changes[change_position + 1:])
         superseded_by_later_version = parse_time(current["recorded_time"]) \
             > parse_time(change["recorded_time"])
-        # the EVIDENCE axis, not just record order: when a backlog is
-        # interpreted after integration already advanced the claim, the old
-        # change's records postdate the claim version — but the claim's own
-        # evidence is newer than the change's manifestation, and an old
-        # source state must not stale a claim resting on newer source state
+        # Compare the evidence, not just record order: a backlog interpreted
+        # after the claim already moved on looks newer by record order while
+        # resting on older source state.
         superseded_by_newer_evidence = False
-        change_manifestation = ctx.manifestation(change["current_manifestation_id"])
-        change_time = _manifestation_state_time(change_manifestation)
-        claim_time = _claim_newest_evidence_time(ctx, current)
+        claim_time = _claim_newest_evidence_time(ctx, current, all_observations)
         if change_time and claim_time \
                 and parse_time(claim_time) > parse_time(change_time):
             superseded_by_newer_evidence = True
         lifecycle_applicable = not superseded_by_later_change \
             and not superseded_by_later_version \
             and not superseded_by_newer_evidence
-        # Deliberate: when the integrator has already advanced the claim to
-        # the changed value, the transition is expressed by the version bump
-        # and the claim's standing is CURRENT — a stale/corrected marker would
-        # misdescribe the current version. The lifecycle write below therefore
-        # fires only when the claim still carries the pre-change value; the
-        # review item always opens either way.
+        # If the claim already carries the changed value, the version bump has
+        # expressed the change and its standing is CURRENT; a stale marker would
+        # misdescribe it. The review item opens either way.
         if claim_state and lifecycle_applicable \
                 and current["object_or_value"] != change["current_value"]:
-            # a SERVICE actor may transition a claim's standing only OUT of
-            # machine-bookkeeping states: RETRACTED, CORRECTED, DISPUTED and
-            # SOURCE_WITHDRAWN carry adjudication weight, and completion
-            # re-runs of this propagation must never re-stamp over a human's
-            # later judgment
-            if store.claim_state(claim_id) in ("CURRENT", "STALE", "SUPERSEDED") \
-                    and store.claim_state(claim_id) != claim_state:
+            state_record = claim_states.get(claim_id)
+            standing = state_record["state"] if state_record else "CURRENT"
+            # The machine may only move a claim out of its own bookkeeping
+            # states. RETRACTED, CORRECTED, DISPUTED and SOURCE_WITHDRAWN are
+            # human judgments and a re-run must never stamp over them.
+            if standing in ("CURRENT", "STALE", "SUPERSEDED") \
+                    and standing != claim_state:
                 state = ClaimStateRecord(
                     state_id=digest_id("clstate", claim_id, claim_state, change["change_id"]),
                     claim_id=claim_id, state=claim_state,
@@ -365,7 +358,7 @@ def _propagate(ctx: IntegrationContext, change: Mapping[str, Any]) -> None:
 
 
 def explain_change(store: SemanticStore, change: Mapping[str, Any]) -> str:
-    """Human-readable semantic alert body for one change record."""
+    """The alert body a person reads for one change."""
     lines = [f"{change['change_class']}: {change['detail']}"]
     lines.append(f"source: {change['source_id']}; manifestations "
                  f"{(change['prior_manifestation_id'] or '(none)')[:20]} → "

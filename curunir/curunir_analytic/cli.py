@@ -16,7 +16,7 @@ Commands:
     warnings                    standing warnings with tier and components
     calibration                 scoreboard: proper scores, buckets, coverage
     needs                       current analytical collection needs
-    explain KIND ID             eight-section structured explanation
+    explain KIND ID             structured explanation of one object
     history KIND ID             versions + transitions of one object
     dependents --claim ID       analytical objects resting on a claim
     stale                       analytical objects in degraded states
@@ -88,8 +88,8 @@ def _stale(store: AnalyticStore) -> list[dict]:
     rows = []
     for kind in ("analytic_theme", "analytic_narrative", "impact_path",
                  "analytic_assumption", "mission_objective"):
+        _, id_field = ANALYTIC_ID_FIELDS[kind]
         for record in store.current_analytics(kind).values():
-            _, id_field = ANALYTIC_ID_FIELDS[kind]
             if record.get("status") in ("STALE", "CONTESTED", "UNCERTAIN",
                                         "INVALIDATED", "EXPOSED", "DECLINING"):
                 rows.append({"kind": kind, "id": record[id_field],
@@ -97,6 +97,12 @@ def _stale(store: AnalyticStore) -> list[dict]:
                              "what": (record.get("title") or record.get("statement")
                                       or record.get("summary", ""))[:90]})
     return rows
+
+
+def _kind_and_id(parser: argparse.ArgumentParser, args) -> tuple[str, str]:
+    if len(args.args) < 2:
+        parser.error(f"{args.command} requires KIND and ID")
+    return args.args[0], args.args[1]
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -188,14 +194,14 @@ def main(argv: list[str] | None = None) -> int:
     elif command == "needs":
         result = analytic_collection_needs(store)
     elif command == "explain":
-        kind, object_id = args.args[0], args.args[1]
+        kind, object_id = _kind_and_id(parser, args)
         explanation = explain_object(store, kind, object_id)
         if args.text:
             print(render_text(explanation))
             return 0
         result = explanation
     elif command == "history":
-        kind, object_id = args.args[0], args.args[1]
+        kind, object_id = _kind_and_id(parser, args)
         result = {"versions": [
             {"version": v.get("version", 1), "recorded_time": v["recorded_time"],
              "status": v.get("status", ""), "change_reason": v.get("change_reason", "")}

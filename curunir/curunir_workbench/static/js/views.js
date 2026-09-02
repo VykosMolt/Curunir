@@ -1,16 +1,14 @@
-// Workbench views, part 1: mission shell, world model, evidence, provenance.
-// Every view renders an authorized projection fetched from the server; the
-// browser derives nothing and owns no mission truth.
-import { get, post, ApiError } from "./api.js";
+// Views, part 1: overview, search, world model, evidence, sources, claims.
+// Every view renders what the server returns; the browser derives nothing.
+import { get, post } from "./api.js";
 import {
-  annotationList, badge, chainNode, claimDescentView, clip, emptyBox, errorBox,
-  fmtTime, graphSvg, h, kv, loading, mapSvg, pivot, probabilityChart,
-  recordRoute, refLink, table, ident,
+  annotationList, badge, claimDescentView, clip, emptyBox, errorBox,
+  fmtTime, graphSvg, h, kv, loading, mapSvg, pivot, refLink, table, ident,
 } from "./ui.js";
 
 export function nav(route) { location.hash = `#${route}`; }
 
-// save the current layout (filters/focus/window) as a named mission view
+// Save the current filters and focus as a named view.
 export function saveViewButton(viewKind, definitionFn) {
   const status = h("span", {});
   return h("span", {},
@@ -35,7 +33,7 @@ export async function render(main, fn) {
   }
 }
 
-// annotate box reused across detail views
+// The annotation form shared by the detail views.
 export function annotateBox(targetKind, targetId, refresh, { anchorRef = "" } = {}) {
   const textarea = h("textarea", { placeholder: "annotation…", "aria-label": "annotation text" });
   const kind = h("select", { "aria-label": "annotation kind" },
@@ -84,8 +82,6 @@ export async function overviewView(main) {
         items.length ? items.map(renderItem) : emptyBox(emptyMsg));
     return [
       h("h1", {}, "Common operating picture"),
-      // The mission, in the operator's words. Store, state token and context
-      // are custody detail: real, retained, and shown in Auditor mode only.
       h("p", { class: "muted" },
         `as at ${fmtTime(ov.meta.snapshot_time)}`,
         h("code", { class: "ident" },
@@ -414,11 +410,11 @@ export async function timelineView(main, params) {
           { label: "kind", render: (e) => badge(e.kind) },
           { label: "item", render: (e) => refLink(
               { object_version: "object", event: "activity", manifestation: "fabric_manifestation",
-                semantic_change: "record/semantic_change", claim: "semantic_claim",
+                semantic_change: "semantic_change", claim: "semantic_claim",
                 forecast: "analytic_forecast", indicator: "forecast_indicator",
-                warning: "strategic_warning", collection: "record/fabric_execution",
-                watch_run: "record/fabric_watch_run", decision: "record/decision",
-                analyst_action: "record/analyst_action", annotation: "workbench_annotation",
+                warning: "strategic_warning", collection: "fabric_execution",
+                watch_run: "fabric_watch_run", decision: "decision",
+                analyst_action: "analyst_action", annotation: "workbench_annotation",
                 report: "workbench_report" }[e.kind] || e.kind, e.ref, clip(e.label, 130)) },
           { label: "other axis", render: (e) => h("span", { class: "faint mono" },
               axis === "valid" ? `recorded ${fmtTime(e.recorded_time)}`
@@ -573,8 +569,7 @@ export async function evidenceView(main, params, id) {
         })()] : null,
       h("h2", {}, "Native payload", d.payload ? h("span", { class: "faint" },
         ` (${d.payload.bytes ?? "?"} bytes${d.payload.truncated ? ", truncated view" : ""})`) : null),
-      // span offsets are exact only within their normalized payload — the
-      // native bytes render without highlights
+      // Span offsets belong to the normalized payload, so the native bytes get no highlights.
       highlightedPayload(d.payload, []),
       (d.normalized_payloads || [])
         .filter((np) => np.sha256 !== (d.payload || {}).sha256)
@@ -740,8 +735,7 @@ export async function recordView(main, params, kind, id) {
 }
 
 // ---- claims: the reading surface -------------------------------------------
-// What the evidence says, grouped by the thing it is about, with the VALUE as
-// the headline rather than the predicate or the identifier.
+// Claims grouped by subject, with the value as the headline.
 
 function _humanPredicate(p) {
   const w = String(p || "").replace(/[_-]+/g, " ").trim().toLowerCase();
@@ -782,9 +776,7 @@ export async function claimsView(main) {
 
     for (const [subject, group] of groups) {
       frag.append(h("h2", {}, subject));
-      // A tension is the SAME subject asserting the SAME predicate with
-      // different values. Anything looser invents disagreement the evidence
-      // does not support.
+      // A tension is the same subject and predicate with different values.
       const byPred = new Map();
       for (const c of group) {
         const k = String(c.predicate || "").toLowerCase();

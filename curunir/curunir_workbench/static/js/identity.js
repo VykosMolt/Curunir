@@ -1,4 +1,4 @@
-// Browser signing last mile: non-extractable Ed25519 device keys in IndexedDB.
+// Browser-side signing with a non-extractable Ed25519 device key kept in IndexedDB.
 import { canonicalBytes } from "./canonical.js";
 import { get, post } from "./api.js";
 

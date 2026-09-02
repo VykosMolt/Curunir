@@ -1,4 +1,5 @@
-"""Persistent watch: durable scheduling, change detection, restart survival."""
+"""Watches: they run on their cadence, tell a real change from the first look,
+and pick up where they left off after a restart."""
 from __future__ import annotations
 
 import json
@@ -144,14 +145,14 @@ def test_watch_state_survives_process_restart(tmp_path):
     tick(ctx, now="2026-08-15T12:05:00+00:00")
     head = ctx.store.head()["head_hash"]
 
-    # "restart": all objects rebuilt from disk alone
+    # A restart: everything rebuilt from disk.
     transport2 = MutableTransport(FEED_V2, "application/rss+xml")
     ctx2 = _context(tmp_path, {"rss-feed-v1": transport2}, start_minute=120)
     assert ctx2.store.head()["head_hash"] == head
     assert due_watches(ctx2.store, now="2026-08-15T12:30:00+00:00") == []  # cadence honoured
     runs = tick(ctx2, now="2026-08-15T14:00:00+00:00")
     assert len(runs) == 1
-    # the diff used the pre-restart baseline: real changes were detected
+    # The comparison used the baseline recorded before the restart.
     change_types = {r["change_type"] for r in ctx2.store.records_of("fabric_change")}
     assert "NEW_OBJECT" in change_types
     assert ctx2.store.verify_chain()["valid"]
@@ -168,7 +169,7 @@ def test_retrieval_failure_is_an_observation_and_watch_continues(tmp_path):
     failures = [r for r in ctx.store.records_of("fabric_change")
                 if r["change_type"] == "RETRIEVAL_FAILURE"]
     assert failures and failures[0]["prior_ref"]  # points at last good manifestation
-    # source recovers; watch keeps observing
+    # The source recovers and the watch carries on.
     transport.status, transport.error, transport.body = 200, None, FEED_V1
     recovered = tick(ctx, now="2026-08-15T16:00:00+00:00")
     assert recovered[0].outcome == "EXECUTED_WITH_RESULTS"
@@ -202,7 +203,7 @@ def test_change_observation_raises_evidence_bound_mission_alert(tmp_path):
     alert = ctx.store.records_of("alert")[0]
     assert alert["alert_id"] == alert_id
     assert set(change["evidence_manifestation_ids"]) <= set(alert["evidence_refs"])
-    # same change cannot spam duplicate alerts
+    # The same change must not raise a second alert.
     _id, created_again = alert_from_change(ctx.store, change,
                                            now="2026-08-15T15:05:00+00:00",
                                            actor="fabric-watch", marking=MARK)

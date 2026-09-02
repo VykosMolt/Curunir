@@ -10,12 +10,11 @@ from __future__ import annotations
 
 import csv
 import io
-import json
 from dataclasses import dataclass
 from typing import Any, Mapping
 
 from .access import Marking
-from .canonical import digest_id, parse_time, sha256
+from .canonical import digest_id, parse_json_strict, parse_time, sha256
 from .contracts import IngestionEvent
 from .schema_registry import SchemaRegistry
 from .store import MissionDataStore
@@ -23,7 +22,7 @@ from .store import MissionDataStore
 
 @dataclass(frozen=True)
 class ConnectorOutcome:
-    status: str  # ACCEPTED | QUARANTINED | DUPLICATE
+    status: str  # ACCEPTED, QUARANTINED or DUPLICATE
     ingestion: dict[str, Any]
     payload: Any | None
     validation: dict[str, Any]
@@ -57,7 +56,8 @@ class MissionDataConnector:
                source_id: str, received_time: str, recorded_time: str, actor: str, marking: Marking,
                source_time: str | None = None, schema_version: str = "1.0",
                watermark: str | None = None) -> ConnectorOutcome:
-        body_sha = store.put_payload(body)  # acquisition custody first, before any parsing
+        # Take custody of the bytes before anything parses them.
+        body_sha = store.put_payload(body)
         payload: Any | None = None
         parse_error: str | None = None
         try:
@@ -102,7 +102,7 @@ class JsonFeedConnector(MissionDataConnector):
     media_type = "application/json"
 
     def parse(self, body: bytes) -> Any:
-        payload = json.loads(body.decode("utf-8"))
+        payload = parse_json_strict(body, label="JSON feed")
         if not isinstance(payload, dict):
             raise ValueError("JSON payload must be an object")
         return payload
@@ -143,7 +143,7 @@ class CsvFeedConnector(MissionDataConnector):
                     else:
                         typed[name] = value
                 except ValueError:
-                    typed[name] = value  # leave for the validator to report
+                    typed[name] = value  # leave it for the validator to report
             typed_rows.append(typed)
         return {"rows": typed_rows, **{k: v for k, v in payload.items() if k != "rows"}}
 
@@ -153,7 +153,7 @@ class GeoJsonConnector(MissionDataConnector):
     media_type = "application/geo+json"
 
     def parse(self, body: bytes) -> Any:
-        payload = json.loads(body.decode("utf-8"))
+        payload = parse_json_strict(body, label="GeoJSON feed")
         if not isinstance(payload, dict) or payload.get("type") != "FeatureCollection":
             raise ValueError("payload must be a GeoJSON FeatureCollection")
         return payload

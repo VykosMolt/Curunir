@@ -1,6 +1,6 @@
-"""Narrative engine: reach vs independence, deterministic propagation with
-honest authority, variant discipline, counter-narratives, earliest-observed
-origin semantics."""
+"""Narratives: how far a statement travelled is not how many independent sources
+carry it, propagation edges state their own authority, variants and counter-
+narratives are kept apart, and an origin is only the earliest copy seen."""
 from __future__ import annotations
 
 import pytest
@@ -20,8 +20,7 @@ STATEMENT = "Acme Industri plans to close its Oslo plant this year"
 
 
 def _seed_statement_pages(pipeline, ctx):
-    """The same long proposition on: two pages of one site (one family) and
-    one page of an independent site (second family)."""
+    """The same statement on two pages of one site and one page of another."""
     plant_page(pipeline, url="https://nyhet.example.no/a",
                body=statement_page(STATEMENT), retrieval_time=T0)
     plant_page(pipeline, url="https://nyhet.example.no/b",
@@ -61,7 +60,6 @@ def test_propagation_edges_carry_honest_authority(tmp_path):
     derivative = next(e for e in edges if e["relation"] == "LIKELY_DERIVATIVE")
     assert "unseen common origin" in derivative["mechanism"]
     assert derivative["from_family"] != derivative["to_family"]
-    # idempotent: a re-run appends nothing
     assert derive_propagation(ctx, narrative["narrative_id"]) == []
 
 
@@ -137,7 +135,7 @@ def test_historical_discovery_revises_earliest_observed_only(tmp_path):
     narrative = create_narrative(ctx, statement=STATEMENT,
                                  supporting_claim_ids=claim_ids)
     assert narrative["earliest_time"].startswith("2026-08-17T12")
-    # a preserved 2020 archive capture of a third site carrying the proposition
+    # An archived 2020 copy of the same statement on another site.
     plant_manifestation(
         pipeline, source_id="wayback",
         native_id="20200105120000/https://gammelt.example.org/sak",
@@ -173,14 +171,12 @@ def test_independent_adoption_requires_judgment(tmp_path):
                                  supporting_claim_ids=claim_ids)
     manifestations = [o["manifestation_id"]
                       for o in ctx.store.records_of("semantic_observation")][:2]
-    # a service actor without an accepted candidate cannot assert adoption
     with pytest.raises(ValueError, match="accepted candidate"):
         assert_independent_adoption(
             ctx, narrative["narrative_id"],
             from_manifestation_id=manifestations[0],
             to_manifestation_id=manifestations[1],
             mechanism="looks independent", actor_id="svc", actor_kind="SERVICE")
-    # a fabricated inference id does not satisfy the gate either
     with pytest.raises(ValueError, match="not found in the log"):
         assert_independent_adoption(
             ctx, narrative["narrative_id"],

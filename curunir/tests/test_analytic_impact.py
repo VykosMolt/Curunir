@@ -1,7 +1,6 @@
-"""Impact engine: typed paths ending at objectives, uncertainty propagation,
-assumption invalidation reaching dependent paths and objectives, deterministic
-path suggestion honest about missing typed routes, human-only response
-acceptance."""
+"""Impact paths: every path ends at an objective, uncertainty travels along it,
+a broken assumption stales what rests on it, path suggestion invents no route,
+and only a person accepts a response option."""
 from __future__ import annotations
 
 import pytest
@@ -14,8 +13,7 @@ from curunir_analytic.impact import (build_path, create_objective, explain_path,
 from curunir_semantic.contracts import ClaimStateRecord
 from curunir_semantic.worldmodel import world_object_id
 
-from analytic_support import GLEIF_ACME, MARK, T0, make_analytic
-from semantic_support import plant_manifestation
+from analytic_support import GLEIF_ACME, MARK, make_analytic, seed_acme
 
 pytestmark = pytest.mark.no_db
 
@@ -27,14 +25,6 @@ GLEIF_WITH_SUCCESSOR = GLEIF_ACME.replace(
     b'"successorEntity": {"lei": "SUCCLEI000000000003"}, "legalAddress"')
 
 
-def _seed(pipeline, ctx, body=GLEIF_ACME):
-    plant_manifestation(pipeline, source_id="gleif", native_id="lei/ACMELEI000000000001",
-                        body=body, media_type="application/json", retrieval_time=T0)
-    pipeline.process_new_evidence()
-    return {c["predicate"]: c["claim_id"] for c in ctx.store.current_claims().values()
-            if c["subject_ref"] == "LEI:ACMELEI000000000001"}
-
-
 def _objective(ctx, depends=(("object", ACME_OBJECT),)):
     return create_objective(ctx, mission_context="m1",
                             statement="Maintain visibility of Acme's legal standing",
@@ -43,7 +33,7 @@ def _objective(ctx, depends=(("object", ACME_OBJECT),)):
 
 def test_path_must_terminate_at_objective(tmp_path):
     pipeline, ctx = make_analytic(tmp_path)
-    by_predicate = _seed(pipeline, ctx)
+    by_predicate = seed_acme(pipeline, ctx)
     objective = _objective(ctx)
     edge = ImpactEdge(edge_id="e1", from_kind="object", from_id=ACME_OBJECT,
                       to_kind="object", to_id="elsewhere", edge_kind="DEPENDENCY",
@@ -56,7 +46,7 @@ def test_path_must_terminate_at_objective(tmp_path):
 
 def test_uncertain_edge_weakens_whole_path(tmp_path):
     pipeline, ctx = make_analytic(tmp_path)
-    by_predicate = _seed(pipeline, ctx)
+    by_predicate = seed_acme(pipeline, ctx)
     objective = _objective(ctx)
     assumption = record_assumption(
         ctx, statement="Acme remains the sole supplier through Q4",
@@ -87,7 +77,7 @@ def test_uncertain_edge_weakens_whole_path(tmp_path):
 
 def test_invalidated_assumption_reaches_paths_and_objectives(tmp_path):
     pipeline, ctx = make_analytic(tmp_path)
-    by_predicate = _seed(pipeline, ctx)
+    by_predicate = seed_acme(pipeline, ctx)
     objective = _objective(ctx)
     assumption = record_assumption(
         ctx, statement="Supplier X remains available through Q4",
@@ -117,7 +107,6 @@ def test_invalidated_assumption_reaches_paths_and_objectives(tmp_path):
     path_kinds = {t["transition_type"]
                   for t in ctx.store.transitions_for(path["path_id"])}
     assert "ASSUMPTION_INVALIDATED" in path_kinds
-    # assumption history: HELD then INVALIDATED, both in the log
     versions = ctx.store.analytic_versions("analytic_assumption",
                                            assumption["assumption_id"])
     assert [v["status"] for v in versions] == ["HELD", "INVALIDATED"]
@@ -125,7 +114,7 @@ def test_invalidated_assumption_reaches_paths_and_objectives(tmp_path):
 
 def test_degraded_evidence_stales_path(tmp_path):
     pipeline, ctx = make_analytic(tmp_path)
-    by_predicate = _seed(pipeline, ctx)
+    by_predicate = seed_acme(pipeline, ctx)
     objective = _objective(ctx)
     edge = ImpactEdge(
         edge_id="e1", from_kind="object", from_id=ACME_OBJECT,
@@ -149,11 +138,11 @@ def test_degraded_evidence_stales_path(tmp_path):
 
 def test_suggest_path_walks_only_typed_relations(tmp_path):
     pipeline, ctx = make_analytic(tmp_path)
-    _seed(pipeline, ctx, body=GLEIF_WITH_SUCCESSOR)
+    seed_acme(pipeline, ctx, body=GLEIF_WITH_SUCCESSOR)
     activity = next(a for a in ctx.store.records_of("activity")
                     if a["activity_type"] == "lei_registered")
-    # objective depending on the successor entity: reachable only through the
-    # evidence-stated SUCCESSOR_OF relation
+    # The successor entity is reachable only through the SUCCESSOR_OF relation
+    # the evidence states.
     objective = create_objective(
         ctx, mission_context="m1", statement="Track successor entity standing",
         depends_on=(("object", SUCCESSOR_OBJECT),))
@@ -166,8 +155,8 @@ def test_suggest_path_walks_only_typed_relations(tmp_path):
                and "SUCCESSOR_OF" in e.note for e in edges)
     path = build_path(ctx, objective_id=objective["objective_id"],
                       summary="event exposure via succession", edges=edges)
-    assert path["path_authority"] == "DERIVED"  # deterministic walk, no inference
-    # an objective with no typed route yields None, not an invented path
+    assert path["path_authority"] == "DERIVED"  # a walk, not an inference
+    # With no typed route the walk returns None rather than inventing one.
     unreachable = create_objective(
         ctx, mission_context="m1", statement="Track an unrelated asset",
         depends_on=(("object", world_object_id("LEI:UNRELATED0000000009")),))
@@ -177,7 +166,7 @@ def test_suggest_path_walks_only_typed_relations(tmp_path):
 
 def test_response_acceptance_is_human_only(tmp_path):
     pipeline, ctx = make_analytic(tmp_path)
-    by_predicate = _seed(pipeline, ctx)
+    by_predicate = seed_acme(pipeline, ctx)
     objective = _objective(ctx)
     edge = ImpactEdge(
         edge_id="e1", from_kind="object", from_id=ACME_OBJECT,

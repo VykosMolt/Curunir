@@ -1,16 +1,9 @@
 """Structured explanations for any analytical object.
 
-The structured form is primary; the text rendering sits on top of it. Every
-explanation answers the same eight questions:
-
-  WHAT           what the object currently asserts
-  WHY            supporting propositions (descending to evidence)
-  AGAINST        contradicting or weakening evidence
-  SOURCE_BASIS   independent families vs derivative reach
-  TEMPORAL       when the assessment applies and how it changed
-  INFERENCES     which links are inferential rather than observed
-  UNCERTAINTY    what remains unresolved
-  MISSION_EFFECT which analytical/mission state depends on this object
+Every explanation answers the same eight questions: WHAT the object asserts,
+WHY, what stands AGAINST it, its SOURCE_BASIS, its TEMPORAL span, which links
+are INFERENCES, what UNCERTAINTY remains, and its MISSION_EFFECT. `render_text`
+sits on top of the structured form.
 """
 from __future__ import annotations
 
@@ -22,21 +15,26 @@ from .substrate import DependencyIndex, open_identity_caveats
 
 def _claims_text(store: AnalyticStore, claim_ids) -> list[dict[str, str]]:
     claims = store.current_claims()
+    states = store.claim_states()
     result = []
     for claim_id in claim_ids:
         claim = claims.get(claim_id)
         result.append({
             "claim_id": claim_id,
             "statement": claim["statement"] if claim else "(claim not found)",
-            # an unknown id must not inherit the CURRENT default: it is not
-            # a claim at all
-            "state": store.claim_state(claim_id) if claim else "UNRESOLVED_CLAIM",
+            # an unknown id is not a claim, so it must not inherit CURRENT
+            "state": states.get(claim_id, {}).get("state", "CURRENT") if claim
+            else "UNRESOLVED_CLAIM",
         })
     return result
 
 
-def _mission_effect(store: AnalyticStore, kind: str, object_id: str) -> dict[str, Any]:
-    index = DependencyIndex(store)
+def _mission_effect(store: AnalyticStore, kind: str, object_id: str, *,
+                    index: DependencyIndex | None = None) -> dict[str, Any]:
+    # the index replays every current analytical view, so a caller explaining
+    # several objects should build one and pass it in
+    if index is None:
+        index = DependencyIndex(store)
     dependents = sorted(index.by_analytic.get((kind, object_id), set()))
     requirements = [r for r in store.records_of("information_requirement")
                     if object_id in r["affected_ids"]]
@@ -57,7 +55,8 @@ def _mission_effect(store: AnalyticStore, kind: str, object_id: str) -> dict[str
             "hypotheses": hypotheses}
 
 
-def explain_object(store: AnalyticStore, kind: str, object_id: str) -> dict[str, Any]:
+def explain_object(store: AnalyticStore, kind: str, object_id: str, *,
+                   index: DependencyIndex | None = None) -> dict[str, Any]:
     """The eight-section structured explanation for any analytical object."""
     if kind not in ANALYTIC_ID_FIELDS:
         raise ValueError(f"unknown analytical kind: {kind}")
@@ -122,8 +121,8 @@ def explain_object(store: AnalyticStore, kind: str, object_id: str) -> dict[str,
     if basis.get("unresolved_claim_ids"):
         uncertainty.append(f"{len(basis['unresolved_claim_ids'])} referenced claim "
                            f"id(s) resolve to no known claim and carry no weight")
-    # identity caveats are read LIVE from the review queue, not from the
-    # stored snapshot: an ambiguity opened after the last version must show
+    # read live from the review queue: an ambiguity opened after the last
+    # version must still show
     if record.get("entity_object_id"):
         live_caveats = open_identity_caveats(store, record["entity_object_id"])
         if live_caveats:
@@ -134,8 +133,8 @@ def explain_object(store: AnalyticStore, kind: str, object_id: str) -> dict[str,
                            f"ambiguity item(s)")
     family_count = len(basis.get("origin_families", ()))
     if record.get("basis") is not None and family_count == 0:
-        # only for kinds that carry a claim basis; a path's descent runs
-        # through its edges and assumptions instead
+        # only for kinds with a claim basis: a path descends through its
+        # edges and assumptions instead
         uncertainty.insert(0, "NO EVIDENTIARY BASIS: no supporting claim resolves "
                               "to retained evidence — this object asserts nothing "
                               "the log can back")
@@ -143,7 +142,7 @@ def explain_object(store: AnalyticStore, kind: str, object_id: str) -> dict[str,
         uncertainty.append("all support descends from one origin family")
     for note in basis.get("coverage_notes", ()):
         uncertainty.append(f"coverage: {note}")
-    # coverage gaps recorded against discriminators over this object's claims
+    # coverage gaps raised against discriminators over this object's claims
     basis_claims = set(basis.get("supporting_claim_ids", ()))
     if basis_claims:
         discriminator_ids = {d["discriminator_id"]
@@ -177,12 +176,12 @@ def explain_object(store: AnalyticStore, kind: str, object_id: str) -> dict[str,
         },
         "INFERENCES": inferential,
         "UNCERTAINTY": uncertainty,
-        "MISSION_EFFECT": _mission_effect(store, kind, object_id),
+        "MISSION_EFFECT": _mission_effect(store, kind, object_id, index=index),
     }
 
 
 def render_text(explanation: Mapping[str, Any]) -> str:
-    """Readable rendering of the structured explanation."""
+    """Render the structured explanation as lines of text."""
     if explanation.get("status") == "UNKNOWN_OBJECT":
         return f"unknown analytical object: {explanation['kind']}:{explanation['id']}"
     lines = [f"{explanation['kind']} {explanation['id'][:24]}",

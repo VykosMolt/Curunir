@@ -1,14 +1,9 @@
-"""Competing hypotheses wired to the live world model.
+"""Competing hypotheses, and the observations that would tell them apart.
 
-Follows the V4 hypothesis discipline — a hypothesis is never born supported,
-assessment history accumulates, dependence-aware evidence counting — and adds
-the two things V4 lacked: event-sourced state beside the world model it
-assesses, and typed discriminating observations that bridge unresolved
-uncertainty back into collection.
-
-Claim linkage is an explicit recorded act (analyst or rule); refresh derives
-status from the linked claims' current versions, lifecycle states and
-dependence groups without deleting any prior assessment.
+A hypothesis is never born supported, its assessment history accumulates, and
+evidence from the same publisher is never counted twice. Linking a claim to a
+hypothesis is a recorded act; refreshing re-derives the status from the linked
+claims without deleting any earlier assessment.
 """
 from __future__ import annotations
 
@@ -17,18 +12,22 @@ from typing import Any, Mapping
 from argus.source_intelligence.models import digest_id
 from curunir_operational.access import Marking, marking_from_record, most_restrictive
 
-from .contracts import DiscriminatingObservation, HypothesisRecord
+from curunir_operational.canonical import parse_time
+
+from .contracts import DiscriminatingObservation, HypothesisRecord, ReviewItem
 from .store import SemanticStore
-from .worldmodel import IntegrationContext
+from .worldmodel import IntegrationContext, dependence_group_for
 
 
 def record_hypothesis(store: SemanticStore, *, statement: str, case_id: str,
                       assumptions: tuple[str, ...] = (), unknowns: tuple[str, ...] = (),
                       analyst_or_provider: str, now: str, actor: str,
                       marking: Marking) -> dict[str, Any]:
-    """A new hypothesis starts UNRESOLVED — never born supported. A repeat
-    call folds new assumptions/unknowns rather than discarding them: the
-    stated assumption set is recorded epistemic state."""
+    """Record a hypothesis; a new one starts UNRESOLVED, never supported.
+
+    Calling again folds in new assumptions and unknowns rather than dropping
+    them.
+    """
     hypothesis_id = digest_id("hyp", case_id, statement)
     existing = store.current_hypotheses().get(hypothesis_id)
     if existing is not None:
@@ -64,8 +63,8 @@ def _reappend(store: SemanticStore, hypothesis: Mapping[str, Any], updates: dict
     merged = {**{k: v for k, v in hypothesis.items() if k != "record_type"}, **updates}
     merged["history"] = tuple(hypothesis["history"]) + (history_note,)
     merged["recorded_time"] = now
-    # a re-append NEVER re-classifies: the hypothesis keeps its own marking
-    # (the caller's marking governs only records the caller newly creates)
+    # A re-append never re-marks: the hypothesis keeps its own marking. The
+    # caller's marking applies only to records the caller creates.
     merged["marking"] = marking_from_record(hypothesis["marking"]) \
         if isinstance(hypothesis.get("marking"), dict) else hypothesis["marking"]
     merged["version"] = store.next_family_version("hypothesis", "hypothesis_id",
@@ -81,7 +80,7 @@ def _reappend(store: SemanticStore, hypothesis: Mapping[str, Any], updates: dict
 
 def link_claim(store: SemanticStore, hypothesis_id: str, claim_id: str, stance: str, *,
                rationale: str, now: str, actor: str, marking: Marking) -> dict[str, Any]:
-    """Record that a claim bears on a hypothesis (supporting/contradicting/unresolved)."""
+    """Record that a claim supports, contradicts or is unresolved for a hypothesis."""
     if stance not in ("supporting", "contradicting", "unresolved"):
         raise ValueError(f"invalid stance: {stance}")
     hypothesis = store.current_hypotheses().get(hypothesis_id)
@@ -102,7 +101,7 @@ def link_claim(store: SemanticStore, hypothesis_id: str, claim_id: str, stance: 
 
 
 def refresh_hypothesis(ctx: IntegrationContext, hypothesis_id: str) -> dict[str, Any]:
-    """Re-derive status from the linked claims' live state. History preserved."""
+    """Re-derive the status from the linked claims' current state."""
     store = ctx.store
     hypothesis = store.current_hypotheses().get(hypothesis_id)
     if hypothesis is None:
@@ -167,8 +166,7 @@ def refresh_hypothesis(ctx: IntegrationContext, hypothesis_id: str) -> dict[str,
 
 def _queue_stale_basis(ctx: IntegrationContext, hypothesis: Mapping[str, Any],
                        degraded_support: list[Mapping[str, Any]]) -> None:
-    """A hypothesis whose supporting basis degraded queues for review."""
-    from .contracts import ReviewItem
+    """Queue a hypothesis whose supporting evidence has weakened."""
     store = ctx.store
     degraded_ids = tuple(sorted(s["claim"]["claim_id"] for s in degraded_support))
     item_id = digest_id("review-stale", hypothesis["hypothesis_id"], *degraded_ids)
@@ -176,10 +174,8 @@ def _queue_stale_basis(ctx: IntegrationContext, hypothesis: Mapping[str, Any],
         return
     now = ctx.now_fn()
     states = ", ".join(f"{s['claim']['claim_id'][:16]}={s['state']}" for s in degraded_support)
-    # the item is ABOUT the hypothesis AND names each degraded claim's
-    # standing: it inherits the join of the hypothesis's marking and every
-    # degraded claim's STATE-RECORD marking, so naming a compartmented claim's
-    # DISPUTED/degraded standing never lands in a lower-marked record
+    # The item names the hypothesis and every weakened claim's standing, so it
+    # is at least as restricted as all of them.
     claim_states = store.claim_states()
     item_markings = [marking_from_record(hypothesis["marking"])
                      if isinstance(hypothesis.get("marking"), dict) else hypothesis["marking"]]
@@ -197,7 +193,7 @@ def _queue_stale_basis(ctx: IntegrationContext, hypothesis: Mapping[str, Any],
 
 
 def existing_basis_groups(store: SemanticStore, discriminator: Mapping[str, Any]) -> set[str]:
-    """Origin families already supporting what the discriminator questions."""
+    """The publishers already backing what the discriminator asks about."""
     groups: set[str] = set()
     claims = store.current_claims()
     for claim_id in discriminator["claim_ids"]:
@@ -216,7 +212,7 @@ def existing_basis_groups(store: SemanticStore, discriminator: Mapping[str, Any]
 
 def refresh_hypotheses_for_claims(ctx: IntegrationContext,
                                   claim_ids: set[str]) -> list[dict[str, Any]]:
-    """Propagate claim-state changes into every hypothesis touching them."""
+    """Refresh every hypothesis that references one of these claims."""
     refreshed = []
     for hypothesis_id, hypothesis in ctx.store.current_hypotheses().items():
         touched = claim_ids & (set(hypothesis["supporting_claim_ids"])
@@ -236,15 +232,12 @@ def propose_discriminator(store: SemanticStore, *, question: str,
                           source_family_hints: tuple[str, ...] = (),
                           independence_required: bool = False,
                           now: str, actor: str, marking: Marking) -> dict[str, Any]:
-    """What observation would most help distinguish the alternatives.
+    """Ask for the observation that would best distinguish the alternatives.
 
-    Idempotent by (question, subject, attribute) — but the exists path FOLDS
-    the caller's epistemics instead of discarding them: new hypothesis/claim
-    links and hints merge in, and an independence requirement can only ever
-    be raised, never silently downgraded by a cached weaker discriminator
-    (the downgrade would let same-family evidence outrank and satisfy the
-    very question it cannot answer). The hypothesis-link loop runs on both
-    paths, so an interrupted first call completes on re-run.
+    Identified by question, subject and attribute. Calling again folds in new
+    links and hints rather than dropping them, and an independence requirement
+    can only be raised, never lowered — lowering it would let same-publisher
+    evidence answer a question it cannot answer.
     """
     discriminator_id = digest_id("disc", question, desired_subject_ref, desired_attribute)
     existing = store.latest_by_id("discriminator", "discriminator_id").get(discriminator_id)
@@ -272,8 +265,7 @@ def propose_discriminator(store: SemanticStore, *, question: str,
             updates["source_refs"] = merged_sources
         if raised_independence:
             updates["independence_required"] = True
-            # the pose snapshot is taken NOW, when independence is first
-            # required, over the merged linkage
+            # snapshot the basis now, when independence is first required
             updates["basis_groups_at_pose"] = tuple(sorted(existing_basis_groups(
                 store, {"claim_ids": merged_claims,
                         "hypothesis_ids": merged_hypotheses})))
@@ -296,9 +288,8 @@ def propose_discriminator(store: SemanticStore, *, question: str,
             marking=marking, source_refs=source_refs)
         store.append("DISCRIMINATOR_RECORDED", new_record, recorded_time=now, actor=actor)
         record = new_record.to_record()
-    # the link loop runs on BOTH paths: a crash between the discriminator
-    # append and the linking, or a later call bringing a new hypothesis,
-    # completes here idempotently
+    # Link on both paths, so a call interrupted before linking, or a later
+    # call bringing a new hypothesis, completes here.
     for hypothesis_id in record["hypothesis_ids"]:
         hypothesis = store.current_hypotheses().get(hypothesis_id)
         if hypothesis and discriminator_id not in hypothesis["discriminator_ids"]:
@@ -318,7 +309,7 @@ def update_discriminator(store: SemanticStore, discriminator: Mapping[str, Any],
         merged[key] = tuple(merged.get(key, ()))
     merged["source_refs"] = tuple(tuple(ref) for ref in merged["source_refs"])
     merged["recorded_time"] = now
-    # a re-append NEVER re-classifies: the discriminator keeps its own marking
+    # a re-append never re-marks: the discriminator keeps its own marking
     merged["marking"] = marking_from_record(discriminator["marking"]) \
         if isinstance(discriminator.get("marking"), dict) else discriminator["marking"]
     merged["version"] = store.next_family_version(
@@ -331,21 +322,20 @@ def update_discriminator(store: SemanticStore, discriminator: Mapping[str, Any],
 
 def discriminator_satisfied_by(store: SemanticStore,
                                discriminator: Mapping[str, Any]) -> list[dict[str, Any]]:
-    """Observations answering a discriminator — only evidence recorded after
-    the discriminator was posed counts; pre-existing observations are what
-    made the question worth asking, not its answer. When independence was
-    required, evidence from an origin family already in the basis does not
-    satisfy: the ranking's judgment and the satisfaction judgment agree."""
-    from .worldmodel import dependence_group_for
-    from curunir_operational.canonical import parse_time
+    """The observations that answer a discriminator.
+
+    Only evidence recorded after the question was asked counts; what came
+    before is why the question was worth asking, not its answer. Where
+    independence was required, a publisher already in the basis cannot answer.
+    """
     first_posed = min((r["recorded_time"] for r in store.records_of("discriminator")
                        if r["discriminator_id"] == discriminator["discriminator_id"]),
                       key=parse_time, default=discriminator["recorded_time"])
     if not discriminator["independence_required"]:
         basis_groups = set()
     else:
-        # the snapshot taken when the question was posed: evidence acquired to
-        # answer it cannot filter itself out by being integrated first
+        # Use the basis as it stood when the question was asked, so evidence
+        # collected to answer it cannot filter itself out.
         basis_groups = set(discriminator.get("basis_groups_at_pose") or ()) \
             or existing_basis_groups(store, discriminator)
     manifestations = {m["manifestation_id"]: m

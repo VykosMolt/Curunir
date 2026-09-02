@@ -1,20 +1,13 @@
-"""Manifestation → normalized document/record, with payload custody.
+"""Normalize a manifestation into addressable text and, if structured, fields.
 
-Reuses the established derivative functions (XML element paths, exact
-plain-text line mapping, pdftotext page anchoring) and adds the two paths the
-repository lacked: JSON structured records normalized to an addressable
-field-path table (never flattened to prose), and HTML normalized to
-block-level regions rather than one document-sized span.
-
-The original bytes stay authoritative in the immutable custody store; the
-normalized text and field table are content-addressed payloads in the event
-store, so every span/field anchor is recoverable by replay. Mapping statuses
-state honestly how normalized offsets relate to original bytes.
+JSON becomes a table of field paths rather than prose, and HTML becomes
+block-level regions rather than one document-sized span. The original bytes stay
+authoritative in custody; the text and field table are content-addressed in the
+store, so every anchor is recoverable by replay.
 """
 from __future__ import annotations
 
 import hashlib
-import html as html_module
 import json
 import os
 import re
@@ -37,10 +30,9 @@ from . import PARSER_VERSION
 from .contracts import NormalizedDocumentRecord
 from .store import SemanticStore
 
-# bounds a pathological payload without truncating real registry records: a
-# maximal Wikidata organisation entity flattens to ~24k rows, so 50k keeps
-# identity- and relation-bearing fields (external ids, official website)
-# addressable while FIELDS_TRUNCATED_AT_* still fires on genuine outliers
+# Bound a runaway payload without truncating real records: the largest
+# Wikidata organisation flattens to about 24k rows, so 50k leaves room while
+# still firing FIELDS_TRUNCATED_AT_* on a genuine outlier.
 MAX_FIELDS = 50_000
 MAX_FIELD_VALUE = 2000
 MAX_REGIONS = 400
@@ -56,7 +48,7 @@ class NormalizationError(ValueError):
 
 
 def load_manifestation_bytes(custody_root: str | Path, manifestation: dict) -> bytes:
-    """Recover the original bytes from custody by content identity, verified."""
+    """Read the original bytes back from custody and check their hash."""
     digest = manifestation["content_sha256"]
     path = Path(custody_root) / "sha256" / digest[:2] / digest[2:4] / digest
     if not path.exists():
@@ -72,10 +64,10 @@ def load_manifestation_bytes(custody_root: str | Path, manifestation: dict) -> b
 
 def _json_fields(payload: Any, *, prefix: str = "$"
                  ) -> tuple[list[tuple[str, str]], bool, bool]:
-    """Flatten a JSON payload into (field_path, scalar value) rows.
+    """Flatten a JSON payload into (field path, value) rows.
 
-    Paths are stable JSONPath-style addresses; structure is preserved as
-    addressable fields, never collapsed into prose.
+    The paths are stable JSONPath-style addresses, so the structure stays
+    addressable instead of being collapsed into prose.
     """
     rows: list[tuple[str, str]] = []
     field_cap_reached = False
@@ -114,7 +106,6 @@ class _BlockCollector(HTMLParser):
         super().__init__(convert_charrefs=True)
         self.blocks: list[tuple[str, str]] = []  # (label, text)
         self._hidden_depth = 0
-        self._stack: list[str] = []
         self._buffer: list[str] = []
         self._buffer_label = "body"
         self.title = ""
@@ -140,8 +131,6 @@ class _BlockCollector(HTMLParser):
                 self._buffer_label = tag
             else:
                 self._buffer_label = "body"
-        if tag not in ("br", "hr", "img", "meta", "link", "input"):
-            self._stack.append(tag)
 
     def handle_endtag(self, tag):
         tag = tag.lower()
@@ -150,8 +139,6 @@ class _BlockCollector(HTMLParser):
             return
         if tag == "title":
             self._in_title = False
-        if self._stack and self._stack[-1] == tag:
-            self._stack.pop()
         if tag in _BLOCK_TAGS:
             self._flush()
             self._buffer_label = "body"
@@ -177,7 +164,7 @@ def _sniff_charset(data: bytes) -> str | None:
 
 
 def decode_html(data: bytes) -> tuple[str, list[str]]:
-    """Decode HTML bytes honoring a declared charset; report what was used."""
+    """Decode HTML bytes using any declared charset, and say what was used."""
     charset = _sniff_charset(data)
     if charset:
         try:
@@ -191,10 +178,10 @@ def decode_html(data: bytes) -> tuple[str, list[str]]:
 
 
 def html_blocks(data: bytes) -> tuple[str, list[tuple[str, int, int]], str, list[str], str]:
-    """Normalize HTML into newline-joined blocks with per-block regions.
+    """Normalize HTML into newline-joined blocks with a region per block.
 
-    Normalized offsets are exact within the emitted text; the mapping back to
-    original bytes remains approximate and is declared as such downstream.
+    Offsets are exact within the emitted text. The mapping back to the original
+    bytes is approximate, and is declared as such.
     """
     raw, decode_warnings = decode_html(data)
     content_class = classify_html(raw)
@@ -216,7 +203,7 @@ def html_blocks(data: bytes) -> tuple[str, list[tuple[str, int, int]], str, list
         if len(regions) < MAX_REGIONS:
             regions.append((f"{label}:{index}", start, end))
         parts.append(text)
-        offset = end + 1  # newline separator
+        offset = end + 1  # for the newline between blocks
     if len(collector.blocks) > MAX_REGIONS:
         warnings.append(f"REGIONS_TRUNCATED_AT_{MAX_REGIONS}")
     title = " ".join(collector.title.split())
@@ -247,9 +234,11 @@ def normalize_manifestation(store: SemanticStore, manifestation: dict,
                             custody_root: str | Path, *,
                             now: str, actor: str, marking,
                             language_hint: str = "") -> dict:
-    """Normalize one manifestation into the semantic plane. Idempotent:
-    re-normalizing the same manifestation under the same parser version
-    returns the existing record instead of appending a duplicate."""
+    """Normalize one manifestation into the semantic plane.
+
+    Re-normalizing under the same parser version returns the existing record
+    rather than appending a duplicate.
+    """
     document_id = normalized_document_id(manifestation["manifestation_id"])
     for existing in store.records_of("semantic_document"):
         if existing["document_id"] == document_id:
@@ -297,7 +286,7 @@ def normalize_manifestation(store: SemanticStore, manifestation: dict,
             regions.append((path, start, end))
         if len(maps) > MAX_REGIONS:
             warnings.append(f"REGIONS_TRUNCATED_AT_{MAX_REGIONS}")
-        # element paths double as a field table for structured extraction
+        # the element paths double as a field table for extraction
         rows = [(path, text[start:end][:MAX_FIELD_VALUE])
                 for path, start, end in maps[:MAX_FIELDS]]
         field_count = len(rows)
@@ -354,7 +343,7 @@ def normalize_manifestation(store: SemanticStore, manifestation: dict,
 
 
 def _pdf_text(data: bytes) -> tuple[str, list[tuple[str, int, int]], list[str]]:
-    """Run pdftotext with wall-clock and captured-output bounds."""
+    """Run pdftotext under a time limit and an output size limit."""
     path = ""
     process: subprocess.Popen | None = None
     output = bytearray()
@@ -422,7 +411,7 @@ def _pdf_text(data: bytes) -> tuple[str, list[tuple[str, int, int]], list[str]]:
 
 
 def load_fields(store: SemanticStore, document_record: dict) -> list[tuple[str, str]]:
-    """Recover the addressable field table for a structured document."""
+    """Read back the field table of a structured document."""
     if not document_record["fields_sha256"]:
         return []
     body = store.get_payload(document_record["fields_sha256"])

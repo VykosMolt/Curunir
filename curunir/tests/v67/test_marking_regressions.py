@@ -1,4 +1,5 @@
-"""Historical V6.7 information-flow exploits at the production boundary."""
+"""Authoring or refreshing over a restricted claim must not produce a public
+record of it."""
 from __future__ import annotations
 
 import hashlib
@@ -91,8 +92,7 @@ def test_authoring_and_background_refresh_cannot_declassify_restricted_basis(tmp
     )
     assert claim["marking"]["compartments"] == ["SPECIAL"]
 
-    # Historical exploit 1: PUBLIC authoring over a SPECIAL claim returned and
-    # persisted a PUBLIC theme.
+    # Authoring publicly over a restricted claim must not give a public theme.
     theme = create_theme(
         public_context,
         title=SECRET_TITLE,
@@ -101,8 +101,7 @@ def test_authoring_and_background_refresh_cannot_declassify_restricted_basis(tmp
     )
     assert theme["marking"]["compartments"] == ["SPECIAL"]
 
-    # Historical exploit 2: a later PUBLIC background refresh reclassified the
-    # SPECIAL theme and exposed its analyst-authored prose.
+    # A later public refresh must not reclassify that theme or expose its prose.
     _plant_restricted(
         pipeline,
         "INACTIVE",

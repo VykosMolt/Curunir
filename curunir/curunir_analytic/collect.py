@@ -1,30 +1,20 @@
-"""Analytics should drive collection: analytical uncertainty becomes
-discriminating observations and information requirements through the
-EXISTING active-collection machinery — no parallel planner.
+"""Analytical uncertainty turned into collection, through the existing active-
+collection machinery rather than a parallel planner.
 
-The uncertainty patterns this module recognizes:
-
-  theme important but single-origin      → seek an independent source family
-  narrative origin unresolved            → seek earlier/historical manifestations
-  inferred interest without public stand → seek a primary statement
-  impact path resting on weak edges      → seek evidence discriminating the edge
-  forecast single-family or coverage-blocked → seek independent corroboration,
-                                           or search exactly the declared sources
-  absence indicator needing its coverage → look where the thing would appear,
-                                           before (or after) its deadline
-
-Each becomes a typed DiscriminatingObservation (idempotent) plus a mission
-information requirement; the existing EIV planner ranks routes with the
-coverage and dependence arithmetic it already has.
+The patterns recognized here: a single-origin theme wants an independent source
+family; an unresolved narrative origin wants earlier manifestations; an inferred
+interest without a public stand wants a primary statement; a weak impact edge
+wants discriminating evidence; a coverage-blocked or single-family forecast
+wants the declared sources searched; an absence indicator wants coverage where
+the thing would appear. Each becomes a discriminator plus a mission information
+requirement, which the existing planner ranks.
 """
 from __future__ import annotations
 
 from typing import Any, Mapping
 
-from curunir_operational.access import Marking
 from curunir_semantic.collection import requirement_for_discriminator
 from curunir_semantic.hypotheses import propose_discriminator
-from curunir_semantic.worldmodel import parse_subject
 
 from .store import AnalyticStore
 from .substrate import AnalyticContext
@@ -45,8 +35,8 @@ def _need(kind: str, subject_id: str, question: str, *, claim_ids: tuple[str, ..
 
 
 def analytic_collection_needs(store: AnalyticStore) -> list[dict[str, Any]]:
-    """Scan current analytical state for the recognized uncertainty patterns.
-    Pure derivation — records nothing."""
+    """Scan analytical state for the recognized uncertainty patterns, recording
+    nothing."""
     needs = []
 
     for theme in store.current_themes().values():
@@ -179,9 +169,7 @@ def analytic_collection_needs(store: AnalyticStore) -> list[dict[str, Any]]:
             desired_attribute = anchor_claim["predicate"]
             desired_type = "STATEMENT"
         else:
-            # a non-claim-predicate forecast with no resolvable supporting
-            # claim gives the discriminator nothing typed to bind to — the
-            # skip is deliberate and mirrors the indicator loop below
+            # nothing typed for the discriminator to bind to
             continue
         if coverage_blocked:
             question = (f"Resolution of analytic_forecast:"
@@ -212,11 +200,11 @@ def analytic_collection_needs(store: AnalyticStore) -> list[dict[str, Any]]:
         if all(forecasts.get(fid) is None
                or forecasts[fid]["status"] in FORECAST_TERMINAL_STATUSES
                for fid in indicator["forecast_ids"]):
-            continue  # a dead question does not drive collection
+            continue  # a settled question does not drive collection
         watched_claims = tuple(dict.fromkeys(
             claim_id
             for forecast_id in indicator["forecast_ids"]
-            for claim_id in store.current_forecasts()
+            for claim_id in forecasts
             .get(forecast_id, {"basis": {"supporting_claim_ids": ()}})
             ["basis"]["supporting_claim_ids"]))
         if not watched_claims:
@@ -241,8 +229,7 @@ def analytic_collection_needs(store: AnalyticStore) -> list[dict[str, Any]]:
 def open_analytic_requirements(ctx: AnalyticContext, *, mission_context: str,
                                needs: list[dict[str, Any]] | None = None
                                ) -> list[dict[str, Any]]:
-    """Turn analytical uncertainty into discriminators + mission information
-    requirements through the existing machinery. Idempotent end to end."""
+    """Open a discriminator and a mission requirement for each need."""
     store = ctx.store
     if needs is None:
         needs = analytic_collection_needs(store)

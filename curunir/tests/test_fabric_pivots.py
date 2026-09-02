@@ -1,4 +1,5 @@
-"""Typed pivot graph: evidence-grounded proposals, reversible, query-generating."""
+"""Pivots: each one cites the evidence it came from, a decision can be taken
+back, and only live pivots become new queries."""
 from __future__ import annotations
 
 import json
@@ -101,7 +102,6 @@ def test_pivot_resolution_is_reversible_latest_wins(ctx):
     resolve_pivot(ctx.store, latest, "ACCEPTED", rationale="confirmed after review",
                   now=ctx.now_fn(), actor="analyst", marking=MARK)
     assert ctx.store.latest_by_id("fabric_pivot", "pivot_id")[target.pivot_id]["status"] == "ACCEPTED"
-    # full history retained
     history = [r for r in ctx.store.records_of("fabric_pivot") if r["pivot_id"] == target.pivot_id]
     assert [r["status"] for r in history] == ["PROPOSED", "REJECTED", "ACCEPTED"]
 

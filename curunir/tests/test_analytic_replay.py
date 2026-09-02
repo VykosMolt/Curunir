@@ -1,8 +1,6 @@
-"""Replay/restart and atomicity: the analytical layer reconstructs entirely
-from the retained hash-chained log — across process restarts and
-export/import — with no provider or network dependency, and interrupted
-multi-event operations complete idempotently instead of leaving partial
-semantic state."""
+"""The analytic layer rebuilds from its log alone — across a restart and across
+export and import, with no network — and an interrupted write completes on the
+next run instead of leaving half a record."""
 from __future__ import annotations
 
 import socket
@@ -78,7 +76,7 @@ def test_restart_reconstructs_analytical_state_without_network(tmp_path, monkeyp
     state = _build_full_state(pipeline, ctx)
     before = _analytic_view(ctx.store)
 
-    # a fresh process: block all network creation, reload from disk only
+    # Stand in for a fresh process: no network, reload from disk.
     def _no_network(*args, **kwargs):
         raise AssertionError("replay must not touch the network")
     monkeypatch.setattr(socket, "socket", _no_network)
@@ -86,7 +84,7 @@ def test_restart_reconstructs_analytical_state_without_network(tmp_path, monkeyp
     reloaded = AnalyticStore(tmp_path / "store")
     after = _analytic_view(reloaded)
     assert after == before
-    # explanations, including full evidence descent, work from replay alone
+    # Explanations must work from the reloaded store alone.
     explanation = explain_object(reloaded, "analytic_theme",
                                  state["theme"]["theme_id"])
     assert explanation["WHY"][0]["state"] == "CURRENT"
@@ -103,8 +101,7 @@ def test_export_import_round_trip_preserves_analytics(tmp_path):
 
 
 def test_interrupted_creation_completes_on_rerun(tmp_path):
-    """Crash between the object append and its CREATED transition: the
-    re-run completes the missing transition instead of duplicating state."""
+    """A crash before the CREATED transition is completed by the re-run."""
     pipeline, ctx = make_analytic(tmp_path)
     plant_manifestation(pipeline, source_id="gleif", native_id="lei/ACMELEI000000000001",
                         body=GLEIF_ACME, media_type="application/json", retrieval_time=T0)
@@ -127,16 +124,14 @@ def test_interrupted_creation_completes_on_rerun(tmp_path):
                      supporting_claim_ids=[status_claim], provenance_kind="RULE")
     ctx.store.append = real_append
 
-    # partial state: theme exists, no creation transition
+    # The theme landed but its transition did not.
     theme_id = next(iter(ctx.store.current_themes()))
     assert ctx.store.transitions_for(theme_id) == []
-    # the re-run of the same operation completes the record coherently
     theme = create_theme(ctx, title="Acme registry standing",
                          supporting_claim_ids=[status_claim], provenance_kind="RULE")
     assert theme["version"] == 1  # no duplicate object version
     transitions = ctx.store.transitions_for(theme_id)
     assert [t["transition_type"] for t in transitions] == ["CREATED"]
-    # and a third run changes nothing
     create_theme(ctx, title="Acme registry standing",
                  supporting_claim_ids=[status_claim], provenance_kind="RULE")
     assert len(ctx.store.transitions_for(theme_id)) == 1

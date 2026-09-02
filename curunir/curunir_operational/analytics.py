@@ -1,21 +1,18 @@
-"""Analytics and model plane: deterministic rule provider and a replaceable
-mock model provider.
+"""Analytics plane: a deterministic rule provider and a replaceable mock model.
 
-Providers are non-authoritative: they read an access-filtered slice of the
-projection, record every invocation as an InferenceRecord (inputs, hashes,
-outputs, validation), and emit AnalyticalProposals. Nothing a provider emits
-becomes operational state until the workflow layer materializes it, and no
-provider can record a human decision. Accreditation state in V1 is synthetic
-or unaccredited by contract.
+Providers read an access-filtered slice of the projection, record every
+invocation as an InferenceRecord, and emit proposals. Nothing a provider emits
+becomes operational state until the workflow materializes it, and no provider
+can record a human decision.
 """
 from __future__ import annotations
 
 from typing import Any, Iterable, Mapping
 
-from .access import AccessContext, Marking, ROLE_RANK, can_view, marking_from_record
+from .access import AccessContext, Marking, can_view, inherited_marking, marking_from_record
 from .canonical import digest_id, sha256
 from .contracts import AnalyticalProposal, InferenceRecord, ModelPackage
-from .geometry import point_to_linestring_m
+from .geometry import haversine_m, point_to_linestring_m
 from .projection import Projection
 from .store import MissionDataStore
 
@@ -49,18 +46,12 @@ def mock_model_package() -> ModelPackage:
     )
 
 
-def most_restrictive(markings: Iterable[Mapping[str, Any] | Marking]) -> Marking:
-    chosen: Marking | None = None
-    best = (-1, -1)
-    for marking in markings:
-        candidate = marking if isinstance(marking, Marking) else marking_from_record(marking)
-        score = (len(candidate.compartments), ROLE_RANK.get(candidate.min_role, 0))
-        if score >= best:
-            best = score
-            chosen = candidate
-    if chosen is None:
+def _joined(markings: Iterable[Mapping[str, Any] | Marking]) -> Marking:
+    """High-water join of every marking that contributed content."""
+    markings = list(markings)
+    if not markings:
         raise ValueError("no markings supplied")
-    return chosen
+    return inherited_marking(markings[0], list(markings[1:]))
 
 
 class _ProviderBase:
@@ -142,10 +133,11 @@ class DeterministicRuleProvider(_ProviderBase):
         return proposals
 
     def _rule_hazard_impact(self, objects, recorded_time, hazard_impact_m) -> list[dict[str, Any]]:
-        """Hazard-to-infrastructure/route impact proposals. The calculation,
-        threshold, geometry basis and uncertainty travel with the proposal;
-        the AFFECTS relationship becomes real only when the workflow
-        materializes it."""
+        """Proposals for hazards close to a route or infrastructure object.
+
+        The calculation, threshold, geometry basis and uncertainty travel with
+        the proposal; the relationship is real only once materialized.
+        """
         rule_id = "rule-hazard-impact"
         hazards = {oid: e["current"] for oid, e in objects.items()
                    if e["current"]["object_type"] == "OPERATIONAL_CONCERN"
@@ -165,7 +157,6 @@ class DeterministicRuleProvider(_ProviderBase):
                 if geometry["kind"] == "LINESTRING":
                     distance = min(point_to_linestring_m(p, geometry["coordinates"]) for p in hazard_points)
                 elif geometry["kind"] == "POINT":
-                    from .geometry import haversine_m
                     distance = min(haversine_m(p, geometry["coordinates"]) for p in hazard_points)
                 else:
                     continue
@@ -173,7 +164,7 @@ class DeterministicRuleProvider(_ProviderBase):
                     findings.append({"target_id": target_id, "distance_m": round(distance, 1)})
             if not findings:
                 continue
-            marking = most_restrictive([hazard["marking"], *[targets[f["target_id"]]["marking"] for f in findings]])
+            marking = _joined([hazard["marking"], *[targets[f["target_id"]]["marking"] for f in findings]])
             inference = self._record(input_refs=(hazard_id, *[f["target_id"] for f in findings]),
                                      inputs={"hazard": hazard, "findings": findings},
                                      output={"rule_id": rule_id, "hazard": hazard_id, "findings": findings},
@@ -211,9 +202,8 @@ class DeterministicRuleProvider(_ProviderBase):
         return proposals
 
     def _rule_reported_disruption(self, objects, relationships, recorded_time) -> list[dict[str, Any]]:
-        """Single-report disruption notice. Alert marking inherits the most
-        restrictive involved marking, so a compartmented observation yields an
-        alert visible only to contexts holding that compartment."""
+        """Disruption notice from a single report, marked to cover both the
+        observation and the object it reports on."""
         rule_id = "rule-reported-disruption"
         proposals = []
         for relation in relationships:
@@ -226,7 +216,7 @@ class DeterministicRuleProvider(_ProviderBase):
             if status not in DISRUPTION_STATES or target is None \
                     or target["current"]["object_type"] not in ("INFRASTRUCTURE", "ROUTE"):
                 continue
-            marking = most_restrictive([observation["marking"], target["current"]["marking"]])
+            marking = _joined([observation["marking"], target["current"]["marking"]])
             inference = self._record(input_refs=(observation["object_id"],), inputs=observation,
                                      output={"rule_id": rule_id, "target": target_id, "status": status},
                                      recorded_time=recorded_time, marking=marking,
@@ -260,7 +250,7 @@ class DeterministicRuleProvider(_ProviderBase):
             if len(distinct) < 2:
                 continue
             involved = sorted(statuses)
-            marking = most_restrictive([objects[o]["current"]["marking"] for o in involved])
+            marking = _joined([objects[o]["current"]["marking"] for o in involved])
             inputs = {o: objects[o]["current"] for o in involved}
             inference = self._record(input_refs=tuple(involved), inputs=inputs,
                                      output={"rule_id": rule_id, "target": target, "statuses": statuses},
@@ -370,7 +360,11 @@ class DeterministicRuleProvider(_ProviderBase):
         involved = sorted(routes)
         if not involved:
             return proposals
-        marking = most_restrictive([routes[r]["current"]["marking"] for r in involved])
+        # Every disruption named in the exposure map contributes content, so the
+        # assessment inherits its marking too.
+        exposed = sorted({f["disruption_id"] for findings in exposure.values() for f in findings})
+        marking = _joined([routes[r]["current"]["marking"] for r in involved]
+                          + [objects[d]["current"]["marking"] for d in exposed if d in objects])
         inference = self._record(input_refs=tuple(involved),
                                  inputs={r: routes[r]["current"] for r in involved},
                                  output={"rule_id": rule_id, "exposure": exposure},
@@ -420,7 +414,7 @@ class DeterministicRuleProvider(_ProviderBase):
         proposals = []
         if not stale:
             return proposals
-        marking = most_restrictive([e["current"]["marking"] for e in stale.values()])
+        marking = _joined([e["current"]["marking"] for e in stale.values()])
         inference = self._record(input_refs=tuple(stale), inputs={o: e["freshness"] for o, e in stale.items()},
                                  output={"rule_id": rule_id, "stale": sorted(stale)},
                                  recorded_time=recorded_time, marking=marking, downstream=tuple(stale))
@@ -459,7 +453,7 @@ class DeterministicRuleProvider(_ProviderBase):
             visible = [m for m in members if m in objects]
             if len(visible) < 2:
                 continue
-            marking = most_restrictive([objects[m]["current"]["marking"] for m in visible])
+            marking = _joined([objects[m]["current"]["marking"] for m in visible])
             inference = self._record(input_refs=tuple(visible), inputs={"group": group_id, "members": visible},
                                      output={"rule_id": rule_id, "group_id": group_id, "members": visible},
                                      recorded_time=recorded_time, marking=marking, downstream=tuple(visible))
@@ -477,9 +471,8 @@ class DeterministicRuleProvider(_ProviderBase):
 
 
 class MockAssessmentProvider(_ProviderBase):
-    """Deterministic stand-in for an external model. Same contract surface as
-    any accredited provider would use; output is keyed to the input hash and
-    has no analytical validity."""
+    """Stand-in for an external model: same contract surface, no analytical
+    validity — the output is keyed to the input hash."""
 
     def __init__(self, store: MissionDataStore, provider_actor: str = "provider-mock-model"):
         super().__init__(store, mock_model_package(), provider_actor)

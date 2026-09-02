@@ -1,10 +1,4 @@
-"""Internet Archive Wayback Machine — historical manifestations of URLs.
-
-HISTORICAL_ENUMERATE lists captures of a URL through the CDX API;
-HISTORICAL_FETCH retrieves one capture's original bytes (``id_`` form, no
-archive chrome). Captures are historical manifestations: each carries the
-archive capture time distinct from any live retrieval of the same URL.
-"""
+"""Wayback Machine: HISTORICAL_ENUMERATE lists captures; HISTORICAL_FETCH gets one capture's bytes."""
 from __future__ import annotations
 
 import json
@@ -70,12 +64,12 @@ class WaybackConnector(SourceConnector):
             return self._failed(request, url, raw, now=now, error_class="PARSE",
                                 error_detail="CDX response is not a JSON array")
         next_cursor = None
-        if rows and rows[-1] and len(rows[-1]) == 1:  # trailing resume key row (after a blank row)
+        if rows and rows[-1] and len(rows[-1]) == 1:  # The resume key comes as a final one-cell row.
             next_cursor = rows[-1][0]
             rows = rows[:-1]
         rows = [row for row in rows if row]
         results = []
-        for row in rows[1:]:  # first row is the header
+        for row in rows[1:]:  # The first row is the header.
             if not isinstance(row, list) or len(row) < 5:
                 continue
             timestamp, original, digest, mimetype, statuscode = row[:5]
@@ -95,7 +89,7 @@ class WaybackConnector(SourceConnector):
                               next_cursor=next_cursor, media_type="application/json")
 
     def _fetch_capture(self, request: ConnectorRequest, transport: Transport, now: str) -> ConnectorResponse:
-        # value is "<14-digit timestamp>/<original url>" as returned by enumeration
+        # The value is "<14-digit timestamp>/<original url>", as enumeration returns it.
         timestamp, _, original = request.value.partition("/")
         if len(timestamp) != 14 or not timestamp.isdigit() or not original:
             return self._failed(request, request.value, {}, now=now, error_class="PARSE",

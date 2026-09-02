@@ -1,11 +1,9 @@
-"""Pipeline facade: acquisition edge → understanding → world model → alerts.
+"""The one entry point from retrieved evidence to an updated world model.
 
-`process_new_evidence` is the one call that carries every unprocessed
-manifestation through normalization, extraction and world-model integration.
-`process_fabric_changes` upgrades the watch path: each byte-level fabric
-change becomes an interpreted semantic change with affected objects, claim
-lifecycle updates, review items — and an evidence-bound mission alert whose
-body explains the semantic difference instead of a hash.
+`process_new_evidence` carries every unprocessed manifestation through
+normalization, extraction and integration. `process_fabric_changes` turns each
+byte-level change the watch layer found into an interpreted semantic change and
+an alert whose body explains the difference instead of showing a hash.
 """
 from __future__ import annotations
 
@@ -18,7 +16,8 @@ from argus.source_intelligence.models import digest_id
 from curunir_operational.access import Marking, marking_from_record, most_restrictive
 from curunir_operational.workflow import WorkflowEngine
 
-from .changes import explain_change, interpret_change
+from .changes import _propagate, explain_change, interpret_change
+from .contracts import ReviewItem
 from .extract import extract_observations
 from .normalize import NormalizationError, load_text, normalize_manifestation, normalized_document_id
 from .store import SemanticStore
@@ -50,7 +49,7 @@ class SemanticPipeline:
         return digest_id("review-processing", manifestation_id)
 
     def _processing_attempts(self) -> dict[str, int]:
-        """Reconstruct consecutive failures from append-only review history."""
+        """Count consecutive failures per manifestation from the review history."""
         attempts: dict[str, int] = {}
         for item in self.store.records_of("review_item"):
             if item["kind"] != "PROCESSING_FAILED":
@@ -62,11 +61,10 @@ class SemanticPipeline:
 
     def _record_processing_failure(self, manifestation_id: str, stage: str,
                                    error: Exception, marking=None) -> None:
-        """A pipeline failure is durable state, never a silently dropped
-        exception: the manifestation stays queued for retry until resolved.
-        The failure item is ABOUT the manifestation, so it inherits the
-        manifestation's marking, never a lower pipeline default."""
-        from .contracts import ReviewItem
+        """Record a failure so the manifestation is retried, not lost.
+
+        The item is about the manifestation, so it inherits its marking.
+        """
         item_id = self._failure_item_id(manifestation_id)
         attempts = self._processing_attempts().get(manifestation_id, 0)
         if attempts >= MAX_PROCESSING_ATTEMPTS:
@@ -88,7 +86,6 @@ class SemanticPipeline:
                           actor=self.actor)
 
     def _resolve_processing_failure(self, manifestation_id: str) -> None:
-        from .contracts import ReviewItem
         item_id = self._failure_item_id(manifestation_id)
         latest = self.store.latest_by_id("review_item", "item_id").get(item_id)
         if latest is None or latest["status"] != "OPEN":
@@ -100,32 +97,29 @@ class SemanticPipeline:
             status="RESOLVED", resolution_note="reprocessed successfully",
             version=self.store.next_family_version("review_item", "item_id", item_id),
             recorded_time=self.now_fn(),
-            # a re-append never re-classifies: keep the item's own marking
+            # a re-append never re-marks: keep the item's own marking
             marking=marking_from_record(latest["marking"])
             if isinstance(latest.get("marking"), dict) else latest["marking"])
         self.store.append("REVIEW_ITEM_RECORDED", resolved,
                           recorded_time=resolved.recorded_time, actor=self.actor)
 
     def _item_marking(self, manifestation: dict):
-        """The marking derived state of a manifestation inherits: the join of
-        the pipeline's marking and the manifestation's own."""
+        """The marking anything derived from this manifestation must carry."""
         own = manifestation.get("marking")
         if not isinstance(own, dict):
             return self.marking
         return most_restrictive([self.marking, marking_from_record(own)])
 
     def process_manifestation(self, manifestation: dict) -> dict[str, Any]:
-        """Normalize, extract and integrate one manifestation (idempotent).
+        """Normalize, extract and integrate one manifestation; safe to re-run.
 
-        Any failure is recorded as an OPEN PROCESSING_FAILED review item so a
-        partially written manifestation is retried, not skipped as done."""
+        A failure is recorded as an open review item, so a half-written
+        manifestation is retried rather than counted as done.
+        """
         manifestation_id = manifestation["manifestation_id"]
         now = self.now_fn()
-        # the manifestation's understanding (document, observations, claims,
-        # world objects) inherits the manifestation's OWN marking joined with
-        # the pipeline's — a SPECIAL manifestation processed during a lower
-        # pipeline run (a retry, a batch, a differently-marked route) is never
-        # materialized into lower-marked derived state.
+        # Everything derived here is at least as restricted as the
+        # manifestation itself, whatever marking this run happens to carry.
         item_marking = self._item_marking(manifestation)
         try:
             document = normalize_manifestation(
@@ -138,7 +132,7 @@ class SemanticPipeline:
             return {"manifestation_id": manifestation_id,
                     "status": "NORMALIZATION_FAILED", "error": str(error)}
         except Exception as error:
-            # custody/IO failures are the same failure class: durable, retried
+            # a custody or IO failure is recorded and retried like any other
             self._record_processing_failure(manifestation_id, "normalization", error, item_marking)
             return {"manifestation_id": manifestation_id,
                     "status": "PROCESSING_FAILED", "error": f"{type(error).__name__}: {error}"}
@@ -161,8 +155,9 @@ class SemanticPipeline:
     def process_new_evidence(self) -> dict[str, Any]:
         """Carry every unprocessed manifestation through the pipeline.
 
-        A manifestation counts as done only when its document exists AND no
-        processing failure is open for it; failures are retried."""
+        A manifestation is done only when its document exists and no failure is
+        open for it.
+        """
         processed = []
         known = {r["document_id"] for r in self.store.records_of("semantic_document")}
         open_failures = {r["subject_id"]
@@ -191,11 +186,11 @@ class SemanticPipeline:
 
     def _complete_pair(self, prior_id: str, current_id: str,
                        raise_alerts: bool = True) -> list[str]:
-        """An already-interpreted pair may still be missing its propagation
-        tail (claim lifecycle, review item, alert) if the original run was
-        interrupted after the change records landed. Completing is cheap —
-        no re-normalization or re-classification — and idempotent."""
-        from .changes import _propagate
+        """Finish an interpreted pair's claim standing, review items and alerts.
+
+        An interrupted run can leave those missing. Completing them re-does no
+        normalization or classification and is safe to repeat.
+        """
         pair_changes = [c for c in self.store.records_of("semantic_change")
                         if c["prior_manifestation_id"] == prior_id
                         and c["current_manifestation_id"] == current_id]
@@ -204,10 +199,8 @@ class SemanticPipeline:
             _propagate(ctx, change)
         if not raise_alerts:
             return []
-        # complete only MISSING alerts: an alert is keyed by its change_id, a
-        # one-time fact — re-raising an existing one would append a no-op
-        # "retriggered" transition on every poll, growing the append-only
-        # chain without bound
+        # Only raise alerts that are missing. Re-raising one would append a
+        # no-op transition on every poll and grow the log without bound.
         missing = [c for c in pair_changes
                    if c["change_class"] != "SEMANTICALLY_UNCHANGED"
                    and self.store.find_alert_by_dedup(
@@ -215,7 +208,7 @@ class SemanticPipeline:
         return self._raise_semantic_alerts(missing) if missing else []
 
     def process_fabric_changes(self, *, raise_alerts: bool = True) -> list[dict[str, Any]]:
-        """Interpret watch-detected byte changes semantically, with alerts."""
+        """Interpret the byte changes the watch layer found, and alert on them."""
         interpreted = self._interpreted_pairs()
         manifestations = {r["manifestation_id"]: r
                           for r in self.store.records_of("fabric_manifestation")}
@@ -253,9 +246,10 @@ class SemanticPipeline:
         return outcomes
 
     def interpret_historical_discoveries(self) -> list[dict[str, Any]]:
-        """A newly preserved historical manifestation is itself a semantic
-        event: record the discovered historical state without pretending it
-        happened today."""
+        """Record newly preserved historical states as of when they were true.
+
+        Discovering an old state is itself an event, but it did not happen today.
+        """
         interpreted = {pair[1] for pair in self._interpreted_pairs() if not pair[0]}
         outcomes = []
         for manifestation in self.store.records_of("fabric_manifestation"):

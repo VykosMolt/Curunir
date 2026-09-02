@@ -1,5 +1,7 @@
-"""Regression locks for the adversarial-review findings (F1–F21): each test
-reproduces a reviewed defect scenario and asserts the repaired behavior."""
+"""Defects found by review, each held shut by a test: unknown claims carry no
+weight, model output needs a person's acceptance, a denial never counts as
+support, interrupted writes finish on the next run, and nothing silently
+overwrites a version someone else wrote."""
 from __future__ import annotations
 
 import pytest
@@ -26,7 +28,7 @@ from curunir_analytic.themes import apply_merge, create_theme, resolve_theme
 from curunir_operational.store import StoreError
 from curunir_semantic.worldmodel import world_object_id
 
-from analytic_support import (GLEIF_ACME, MARK, T0, make_analytic, plant_page,
+from analytic_support import (MARK, T0, make_analytic, plant_page, seed_acme,
                               statement_page)
 from semantic_support import plant_manifestation
 
@@ -35,15 +37,7 @@ pytestmark = pytest.mark.no_db
 ACME_OBJECT = world_object_id("LEI:ACMELEI000000000001")
 
 
-def _seed(pipeline, ctx):
-    plant_manifestation(pipeline, source_id="gleif", native_id="lei/ACMELEI000000000001",
-                        body=GLEIF_ACME, media_type="application/json", retrieval_time=T0)
-    pipeline.process_new_evidence()
-    return {c["predicate"]: c["claim_id"] for c in ctx.store.current_claims().values()
-            if c["subject_ref"] == "LEI:ACMELEI000000000001"}
-
-
-# ---- F1: phantom claims are not evidence ----------------------------------
+# ---- a claim nobody has is not evidence ------------------------------------
 
 
 def test_f1_phantom_claims_cannot_found_an_object(tmp_path):
@@ -59,7 +53,7 @@ def test_f1_phantom_claims_cannot_found_an_object(tmp_path):
 
 def test_f1_zero_basis_is_loudest_uncertainty(tmp_path):
     pipeline, ctx = make_analytic(tmp_path)
-    by_predicate = _seed(pipeline, ctx)
+    by_predicate = seed_acme(pipeline, ctx)
     theme = create_theme(ctx, title="Acme standing",
                          supporting_claim_ids=[by_predicate["entity_status"],
                                                "phantom-claim"],
@@ -70,12 +64,12 @@ def test_f1_zero_basis_is_loudest_uncertainty(tmp_path):
     assert any("no known claim" in u for u in explanation["UNCERTAINTY"])
 
 
-# ---- F2/F3: the model-candidate gate actually gates -----------------------
+# ---- model output becomes state only through a person ----------------------
 
 
 def test_f2_f3_model_state_requires_accepted_candidate(tmp_path):
     pipeline, ctx = make_analytic(tmp_path)
-    by_predicate = _seed(pipeline, ctx)
+    by_predicate = seed_acme(pipeline, ctx)
     with pytest.raises(ValueError, match="accepted candidate"):
         create_theme(ctx, title="Model theme",
                      supporting_claim_ids=[by_predicate["entity_status"]],
@@ -85,7 +79,7 @@ def test_f2_f3_model_state_requires_accepted_candidate(tmp_path):
                      supporting_claim_ids=[by_predicate["entity_status"]],
                      provenance_kind="MODEL", inference_id="inf-fabricated",
                      proposal_id="prop-fabricated")
-    # the legitimate path stamps SUPPORTED_INFERENCE, never DERIVED
+    # Accepted model output is an inference, never a derivation.
     assist = AnalyticalAssist(
         package=analytical_assist_package("test", "stub", "1.0"),
         infer_fn=lambda task, payload: {"title": "Registry standing risk",
@@ -102,7 +96,6 @@ def test_f2_f3_model_state_requires_accepted_candidate(tmp_path):
                          inference_id=resolved["inference_id"],
                          proposal_id=resolved["proposal_id"])
     assert theme["authority"] == "SUPPORTED_INFERENCE"
-    # rejecting instead of accepting blocks materialization
     proposed_2 = assist.propose(ctx, task="t2", target_kind="analytic_theme",
                                 inputs={"claims": [by_predicate["legal_name"]]},
                                 input_refs=(by_predicate["legal_name"],))
@@ -116,7 +109,7 @@ def test_f2_f3_model_state_requires_accepted_candidate(tmp_path):
                      proposal_id=rejected["proposal_id"])
 
 
-# ---- F4: counter-evidence cannot manufacture independence -----------------
+# ---- a denial contradicts, it does not corroborate -------------------------
 
 
 def test_f4_counter_variant_contradicts_instead_of_supporting(tmp_path):
@@ -145,17 +138,16 @@ def test_f4_counter_variant_contradicts_instead_of_supporting(tmp_path):
         provenance_kind="ANALYST")
     assert denial["claim_id"] in updated["basis"]["contradicting_claim_ids"]
     assert denial["claim_id"] not in updated["basis"]["supporting_claim_ids"]
-    assert len(updated["basis"]["origin_families"]) == 1  # not inflated
+    assert len(updated["basis"]["origin_families"]) == 1  # still one family
     explanation = explain_narrative(ctx.store, narrative["narrative_id"])
     assert not any("denies" in why for why in explanation["why"])
     assert any("denies" in against for against in explanation["against"])
-    # no LIKELY_DERIVATIVE between an assertion and its denial: the two
-    # manifestations share no verbatim proposition
+    # An assertion and its denial share no wording, so neither copies the other.
     edges = derive_propagation(ctx, narrative["narrative_id"])
     assert all(e["relation"] != "LIKELY_DERIVATIVE" for e in edges)
 
 
-# ---- F5: adoption revision is versioned, never a silent overwrite ----------
+# ---- revising an adoption keeps the earlier reading ------------------------
 
 
 def test_f5_human_adoption_revision_is_versioned(tmp_path):
@@ -188,11 +180,11 @@ def test_f5_human_adoption_revision_is_versioned(tmp_path):
     assert "REVISED" in kinds
 
 
-# ---- F6/F7: interrupted marking completes on re-run ------------------------
+# ---- an interrupted marking pass finishes on the next run ------------------
 
 
 def _impact_state(pipeline, ctx):
-    by_predicate = _seed(pipeline, ctx)
+    by_predicate = seed_acme(pipeline, ctx)
     objective = create_objective(ctx, mission_context="m1",
                                  statement="Track Acme standing",
                                  depends_on=(("object", ACME_OBJECT),))
@@ -229,11 +221,10 @@ def test_f6_interrupted_invalidation_completes_on_rerun(tmp_path):
                               contradicting_claim_ids=(by_predicate["registration_status"],),
                               caused_by="chg-1", reason="supplier ceased operations")
     ctx.store.append = real_append
-    # partial: assumption INVALIDATED, nothing downstream marked
+    # Half done: the assumption is invalid but nothing downstream knows.
     assert ctx.store.current_assumptions()[assumption["assumption_id"]]["status"] \
         == "INVALIDATED"
     assert ctx.store.current_impact_paths()[path["path_id"]]["status"] == "ASSESSED"
-    # the re-run completes the marking pass
     invalidate_assumption(ctx, assumption["assumption_id"],
                           contradicting_claim_ids=(by_predicate["registration_status"],),
                           caused_by="chg-1", reason="supplier ceased operations")
@@ -242,7 +233,6 @@ def test_f6_interrupted_invalidation_completes_on_rerun(tmp_path):
         == "EXPOSED"
     kinds = {t["transition_type"] for t in ctx.store.transitions_for(path["path_id"])}
     assert "ASSUMPTION_INVALIDATED" in kinds
-    # assumption versions did not duplicate
     versions = ctx.store.analytic_versions("analytic_assumption",
                                            assumption["assumption_id"])
     assert [v["status"] for v in versions] == ["HELD", "INVALIDATED"]
@@ -275,7 +265,7 @@ def test_f7_interrupted_stale_refresh_completes_on_rerun(tmp_path):
     ctx.store.append = real_append
     assert ctx.store.current_impact_paths()[path["path_id"]]["status"] == "STALE"
     assert ctx.store.current_objectives()[objective["objective_id"]]["status"] \
-        == "ACTIVE"  # exposure was lost in the crash
+        == "ACTIVE"  # the exposure was lost in the crash
     refresh_path(ctx, path["path_id"], caused_by="chg-2")
     kinds = {t["transition_type"] for t in ctx.store.transitions_for(path["path_id"])}
     assert "STALE" in kinds
@@ -283,7 +273,7 @@ def test_f7_interrupted_stale_refresh_completes_on_rerun(tmp_path):
         == "EXPOSED"
 
 
-# ---- F8: interrupted variant add reconciles --------------------------------
+# ---- an orphaned variant is adopted, not left behind -----------------------
 
 
 def test_f8_orphaned_variant_reconciles_on_rerun(tmp_path):
@@ -322,10 +312,9 @@ def test_f8_orphaned_variant_reconciles_on_rerun(tmp_path):
     with pytest.raises(OSError):
         add_variant(ctx, narrative["narrative_id"], **variant_kwargs)
     ctx.store.append = real_append
-    # partial: the variant exists but the narrative does not know it
+    # Half done: the variant exists but the narrative does not know it.
     assert len(ctx.store.variants_for_narrative(narrative["narrative_id"])) == 1
     assert ctx.store.current_narratives()[narrative["narrative_id"]]["variant_ids"] == []
-    # the re-run reconciles instead of orphaning
     updated = add_variant(ctx, narrative["narrative_id"], **variant_kwargs)
     assert len(updated["variant_ids"]) == 1
     assert softer["claim_id"] in updated["basis"]["supporting_claim_ids"]
@@ -334,12 +323,12 @@ def test_f8_orphaned_variant_reconciles_on_rerun(tmp_path):
     assert "VARIANT_ADDED" in kinds
 
 
-# ---- F9: non-creation flows are re-run safe --------------------------------
+# ---- running a decision twice decides it once ------------------------------
 
 
 def test_f9_merge_resolve_supersede_review_rerun_safe(tmp_path):
     pipeline, ctx = make_analytic(tmp_path)
-    by_predicate = _seed(pipeline, ctx)
+    by_predicate = seed_acme(pipeline, ctx)
     left = create_theme(ctx, title="Acme standing",
                         supporting_claim_ids=[by_predicate["entity_status"]],
                         provenance_kind="RULE")
@@ -354,12 +343,10 @@ def test_f9_merge_resolve_supersede_review_rerun_safe(tmp_path):
     assert [tuple(p) for p in survivor["lineage"]].count(
         ("MERGED_FROM", right["theme_id"])) == 1
     assert len(ctx.store.analytic_versions("analytic_theme", left["theme_id"])) == 2
-    # resolve twice → one version appended
     resolve_theme(ctx, left["theme_id"], actor_id="jan", actor_kind="HUMAN", note="done")
     resolve_theme(ctx, left["theme_id"], actor_id="jan", actor_kind="HUMAN", note="done")
     versions = ctx.store.analytic_versions("analytic_theme", left["theme_id"])
     assert [v["status"] for v in versions].count("RESOLVED") == 1
-    # influence supersede twice → single SUPERSEDED version
     influence = assert_influence(
         ctx, source_object_id=ACME_OBJECT,
         target_object_id=world_object_id("LEI:OTHERLEI00000000002"),
@@ -370,7 +357,6 @@ def test_f9_merge_resolve_supersede_review_rerun_safe(tmp_path):
     influence_versions = ctx.store.analytic_versions(
         "influence_assertion", influence["influence_id"])
     assert [v["status"] for v in influence_versions] == ["ACTIVE", "SUPERSEDED"]
-    # response option cannot be re-decided
     objective = create_objective(ctx, mission_context="m1", statement="o",
                                  depends_on=(("object", ACME_OBJECT),))
     edge = ImpactEdge(edge_id="e1", from_kind="object", from_id=ACME_OBJECT,
@@ -394,12 +380,12 @@ def test_f9_merge_resolve_supersede_review_rerun_safe(tmp_path):
                                actor_id="jan", actor_kind="HUMAN", note="undo")
 
 
-# ---- F10: concurrent stale versions raise instead of shadowing -------------
+# ---- a second writer on a stale view is refused ----------------------------
 
 
 def test_f10_concurrent_version_write_raises(tmp_path):
     pipeline, ctx = make_analytic(tmp_path)
-    by_predicate = _seed(pipeline, ctx)
+    by_predicate = seed_acme(pipeline, ctx)
     theme = create_theme(ctx, title="Acme standing",
                          supporting_claim_ids=[by_predicate["entity_status"]],
                          provenance_kind="RULE")
@@ -411,25 +397,25 @@ def test_f10_concurrent_version_write_raises(tmp_path):
     update_membership(ctx, theme["theme_id"],
                       add_supporting=[by_predicate["legal_name"]],
                       caused_by="w1", rationale="writer 1 folds a claim")
-    # writer 2 computed against the stale view: its append must fail loudly,
-    # not silently shadow writer 1's version under last-append-wins
+    # Writer 2 worked from the older view, so its write must fail rather than
+    # quietly bury writer 1's.
     with pytest.raises(StoreError, match="next version"):
         update_membership(ctx_2, theme["theme_id"],
                           add_supporting=[by_predicate["jurisdiction"]],
                           caused_by="w2", rationale="writer 2 folds a different claim")
 
 
-# ---- F11: the dependency index is complete ---------------------------------
+# ---- the dependency index reaches everything that depends ------------------
 
 
 def test_f11_assumption_objective_links_reach_objectives(tmp_path):
     pipeline, ctx = make_analytic(tmp_path)
-    by_predicate = _seed(pipeline, ctx)
+    by_predicate = seed_acme(pipeline, ctx)
     objective = create_objective(ctx, mission_context="m1",
                                  statement="Track Acme standing",
                                  depends_on=(("object", ACME_OBJECT),))
-    # the natural API: the assumption declares its objectives; the objective
-    # declares nothing back — exactly the demo configuration
+    # Only the assumption names the objective; the link must still be found
+    # from the other side.
     assumption = record_assumption(ctx, statement="Acme remains active",
                                    supporting_claim_ids=(by_predicate["entity_status"],),
                                    objective_ids=(objective["objective_id"],))
@@ -445,7 +431,7 @@ def test_f11_assumption_objective_links_reach_objectives(tmp_path):
 
 def test_f11_claim_dependencies_and_options_and_episodes_indexed(tmp_path):
     pipeline, ctx = make_analytic(tmp_path)
-    by_predicate = _seed(pipeline, ctx)
+    by_predicate = seed_acme(pipeline, ctx)
     claim_id = by_predicate["entity_status"]
     objective = create_objective(ctx, mission_context="m1", statement="o",
                                  depends_on=(("claim", claim_id),))
@@ -474,18 +460,18 @@ def test_f11_claim_dependencies_and_options_and_episodes_indexed(tmp_path):
         in index.affected_by(object_ids=[ACME_OBJECT])
     assert ("historical_episode", episode["episode_id"]) \
         in index.affected_by(activity_ids=[event_id])
-    # an untrackable dependency kind is rejected at objective construction
+    # A dependency the index cannot follow is refused when the objective is made.
     with pytest.raises(ValueError, match="not trackable"):
         create_objective(ctx, mission_context="m1", statement="bad",
                          depends_on=(("mystery", "x"),))
 
 
-# ---- F12: identity ambiguity opened later becomes visible ------------------
+# ---- identity doubt raised later still reaches the assessment --------------
 
 
 def test_f12_late_identity_ambiguity_surfaces(tmp_path):
     pipeline, ctx = make_analytic(tmp_path)
-    by_predicate = _seed(pipeline, ctx)
+    by_predicate = seed_acme(pipeline, ctx)
     theme = create_theme(ctx, title="Acme standing",
                          supporting_claim_ids=[by_predicate["entity_status"]],
                          provenance_kind="RULE")
@@ -494,7 +480,7 @@ def test_f12_late_identity_ambiguity_surfaces(tmp_path):
         context_id=theme["theme_id"], role_in_context="subject",
         supporting_claim_ids=[by_predicate["entity_status"]])
     assert assessment["identity_caveats"] == []
-    # a cross-scheme assertion arrives AFTER the assessment
+    # A second scheme names the same entity, after the assessment was made.
     from test_analytic_stakeholders import WIKIDATA_ACME
     plant_manifestation(pipeline, source_id="wikidata", native_id="Q77777",
                         body=WIKIDATA_ACME, media_type="application/json",
@@ -503,7 +489,6 @@ def test_f12_late_identity_ambiguity_surfaces(tmp_path):
     ambiguities = [r for r in ctx.store.open_review_items()
                    if r["kind"] == "IDENTITY_AMBIGUITY"]
     assert ambiguities
-    # propagation keeps the assessment's caveats in step with the queue
     outcomes = propagate_semantic_changes(ctx)
     refreshed = ctx.store.current_stakeholder_assessments()[
         assessment["assessment_id"]]
@@ -516,7 +501,7 @@ def test_f12_late_identity_ambiguity_surfaces(tmp_path):
     assert any("identity ambiguity" in u for u in explanation["UNCERTAINTY"])
 
 
-# ---- F13: unknown valid time stays unknown ---------------------------------
+# ---- when we fetched a page is not when it became true ---------------------
 
 
 def test_f13_retrieval_time_does_not_become_valid_time(tmp_path):
@@ -533,10 +518,10 @@ def test_f13_retrieval_time_does_not_become_valid_time(tmp_path):
                          provenance_kind="RULE")
     assert theme["valid_from"] is None, \
         "the moment we fetched a page is not when its content became true"
-    assert theme["basis"]["earliest_time"]  # the knowledge-side span remains
+    assert theme["basis"]["earliest_time"]  # when we learned it is still known
 
 
-# ---- F14: a backlog of changes is attributed collectively ------------------
+# ---- a backlog of changes is named in full ---------------------------------
 
 
 def test_f14_backlog_changes_all_named(tmp_path):
@@ -544,7 +529,7 @@ def test_f14_backlog_changes_all_named(tmp_path):
     from curunir_semantic.worldmodel import IntegrationContext
     from analytic_support import GLEIF_ACME_SUSPENDED
     pipeline, ctx = make_analytic(tmp_path)
-    by_predicate = _seed(pipeline, ctx)
+    by_predicate = seed_acme(pipeline, ctx)
     theme = create_theme(ctx, title="Acme standing",
                          supporting_claim_ids=[by_predicate["entity_status"]],
                          provenance_kind="RULE")
@@ -585,12 +570,12 @@ def test_f14_backlog_changes_all_named(tmp_path):
         "every pending change is named; none is silently absorbed by the first"
 
 
-# ---- F15: interests cannot be relabelled into public positions -------------
+# ---- an inferred interest cannot be relabelled as a stated position --------
 
 
 def test_f15_interest_cannot_become_public_position(tmp_path):
     pipeline, ctx = make_analytic(tmp_path)
-    by_predicate = _seed(pipeline, ctx)
+    by_predicate = seed_acme(pipeline, ctx)
     assessment = create_assessment(
         ctx, entity_object_id=ACME_OBJECT, context_kind="ISSUE",
         context_id="rule", role_in_context="party",
@@ -615,12 +600,12 @@ def test_f15_interest_cannot_become_public_position(tmp_path):
         add_position(ctx, assessment["assessment_id"], relabel, caused_by="t")
 
 
-# ---- F16: reassertion preserves history and records a transition -----------
+# ---- asserting something again keeps the earlier history -------------------
 
 
 def test_f16_reassert_influence_keeps_history(tmp_path):
     pipeline, ctx = make_analytic(tmp_path)
-    by_predicate = _seed(pipeline, ctx)
+    by_predicate = seed_acme(pipeline, ctx)
     other = world_object_id("LEI:OTHERLEI00000000002")
     influence = assert_influence(
         ctx, source_object_id=ACME_OBJECT, target_object_id=other,
@@ -641,12 +626,12 @@ def test_f16_reassert_influence_keeps_history(tmp_path):
         "the reassertion is its own recorded transition"
 
 
-# ---- F18: each dependent path's exposure is separately recorded ------------
+# ---- every exposed path records its own reason -----------------------------
 
 
 def test_f18_multiple_paths_each_record_exposure_cause(tmp_path):
     pipeline, ctx = make_analytic(tmp_path)
-    by_predicate = _seed(pipeline, ctx)
+    by_predicate = seed_acme(pipeline, ctx)
     objective = create_objective(ctx, mission_context="m1", statement="o",
                                  depends_on=(("object", ACME_OBJECT),))
     assumption = record_assumption(ctx, statement="a",
@@ -669,7 +654,7 @@ def test_f18_multiple_paths_each_record_exposure_cause(tmp_path):
     assert len(exposures) >= 2, "each dependent path's exposure reason is recorded"
 
 
-# ---- F19/F21: endpoint typing, self-loops, empty authority -----------------
+# ---- edges the contract refuses to build -----------------------------------
 
 
 def test_f19_f21_edge_typing_and_empty_authority():
@@ -685,6 +670,6 @@ def test_f19_f21_edge_typing_and_empty_authority():
                    basis_ids=("c",), assumption_ids=())
     with pytest.raises(ValueError, match="empty set"):
         weakest_authority([])
-    # machine inference never outranks recorded human judgment
+    # A machine inference never outranks a person's judgment.
     assert weakest_authority(["ANALYST_ASSESSMENT", "SUPPORTED_INFERENCE"]) \
         == "SUPPORTED_INFERENCE"

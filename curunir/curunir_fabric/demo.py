@@ -1,4 +1,4 @@
-"""Bounded live demonstration of the OSINT fabric loop against real sources.
+"""Live demonstration of the fabric loop against real public sources.
 
     python -m curunir_fabric.demo --root /tmp/fabric-demo [--phase 1|2|3]
 
@@ -8,8 +8,7 @@ Phase 2: (separate process = restart) run due watches, baseline observations.
 Phase 3: (separate process) run watches again, detect real changes, alert,
          export and replay the lineage.
 
-Every retrieval is a real network request to the registered public endpoint;
-nothing is mocked. The store root persists between phases deliberately.
+Every retrieval is a real network request. The store root persists between phases.
 """
 from __future__ import annotations
 
@@ -35,7 +34,7 @@ from .watch import register_watch, tick
 
 ACTOR = "fabric-live-demo"
 MARK = Marking(owning_authority="curunir-fabric-demo", releasability=("PUBLIC",))
-# a real public page whose content genuinely changes between observations
+# A real feed whose content changes between observations.
 CHANGING_URL = "https://www.federalregister.gov/api/v1/documents.rss"
 SUBJECT = "Severstal"
 
@@ -101,8 +100,7 @@ def phase_1(root: Path) -> dict:
     summary_2 = _expand("lookup-generation", 5)
     summary_3 = _expand("domain-history-generation", 4, families=("DOMAIN",))
 
-    # retrieve one enumerated capture: a historical manifestation, distinct
-    # from every live retrieval of the same URL
+    # Fetch one enumerated capture as a historical manifestation.
     from .contracts import QuerySpec
     from .executor import execute_single
     for outcome in expansion_outcomes:
@@ -128,8 +126,7 @@ def phase_1(root: Path) -> dict:
         source_id="federal-register-feed", operation="POLL", query_value=CHANGING_URL,
         cadence_seconds=60, active=True, blind_spots=("feed window only",),
         created_by=ACTOR, created_time=_now(), marking=MARK), actor=ACTOR)
-    # a live public endpoint whose body genuinely differs between retrievals,
-    # so the second tick demonstrates real content-change detection
+    # This endpoint returns different bytes each time, so the second tick sees a change.
     trace_url = "https://www.cloudflare.com/cdn-cgi/trace"
     register_watch(ctx.store, WatchDefinition(
         watch_id=digest_id("watch", need.need_id, "live-trace"),

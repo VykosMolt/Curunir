@@ -89,7 +89,7 @@ ARGUS remains the evidence and research foundation. This package reuses its
 canonical hashing helpers (via `canonical.py` only), adapts its Source
 Intelligence evidence semantics through `argus_adapter`, and references its
 process-graph identity discipline. It writes nothing into ARGUS stores and
-opens no human-review gates. See `artifacts/curunir_mission_data_fabric_v1_20260720/reuse_map.md`.
+opens no human-review gates.
 
 ## Tests
 

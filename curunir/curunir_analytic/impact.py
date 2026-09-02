@@ -1,22 +1,15 @@
-"""Impact / exposure intelligence: typed paths from world changes to mission
-objectives.
+"""Impact and exposure: typed paths from a world change to a mission objective.
 
-The propagation machinery lives here in core; scenario-specific impact models
-(sector risk formulas, domain taxonomies) belong in mission packages. What
-core enforces:
-
-  * a path is a connected chain of typed, evidence-bearing edges ending at
-    the objective it concerns — graph adjacency is never causality;
-  * direct and second-order effects stay distinguishable per edge;
-  * uncertainty propagates: the path's authority is its weakest edge, and an
-    uncertain first edge cannot produce a certain conclusion;
-  * assumptions are explicit records — invalidating one finds and marks every
-    dependent path and exposes the affected objectives;
-  * response options are decision support: only a recorded human act accepts.
+A path is a connected chain of typed, evidence-bearing edges ending at the
+objective it concerns, and adjacency alone is never causality. Direct and
+second-order effects stay distinguishable, the path's authority is its weakest
+edge, assumptions are explicit records whose invalidation marks every dependent
+path, and a response option is accepted only by a recorded human act. Domain
+risk models belong in mission packages, not here.
 """
 from __future__ import annotations
 
-from typing import Any, Iterable, Mapping
+from typing import Any, Mapping
 
 from argus.source_intelligence.models import digest_id
 
@@ -26,7 +19,7 @@ from .store import AnalyticStore
 from .substrate import (AnalyticContext, DependencyIndex, append_version,
                         ensure_transition, record_transition)
 
-# typed relations along which deterministic exposure propagation may walk
+# the relation types exposure propagation may walk
 _PROPAGATION_RELATIONS = ("DEPENDS_ON", "SUPPLIES", "OWNS", "OPERATES",
                           "HOLDS_ROLE", "PUBLISHED_BY", "SUCCESSOR_OF")
 
@@ -118,8 +111,8 @@ def record_assumption(ctx: AnalyticContext, *, statement: str,
                           detail=f"assumption held: {existing['statement'][:160]}",
                           caused_by=caused_by or assumption_id,
                           to_status=existing["status"])
-        # fold evidence/objective links the caller brought rather than
-        # silently discarding them
+        # fold in the caller's evidence and objective links rather than
+        # discarding them
         new_claims = tuple(c for c in supporting_claim_ids
                            if c not in existing["supporting_claim_ids"])
         new_objectives = tuple(o for o in objective_ids
@@ -165,15 +158,17 @@ def record_assumption(ctx: AnalyticContext, *, statement: str,
 
 def question_assumption(ctx: AnalyticContext, assumption_id: str, *,
                         caused_by: str, reason: str) -> dict[str, Any]:
-    """Degraded or contradicted support makes an assumption UNCERTAIN — a
-    machine-detectable state distinct from INVALIDATED, which requires an
-    explicit act with contradicting evidence."""
+    """Mark an assumption UNCERTAIN.
+
+    A machine-detectable state, distinct from INVALIDATED, which needs an
+    explicit act carrying contradicting evidence.
+    """
     store = ctx.store
     assumption = store.current_assumptions().get(assumption_id)
     if assumption is None:
         raise ValueError(f"unknown assumption: {assumption_id}")
     if assumption["status"] == "UNCERTAIN":
-        # complete a crashed run's missing transition; append nothing
+        # complete a missing transition; append nothing
         record_transition(ctx, subject_kind="analytic_assumption",
                           subject_id=assumption_id, transition_type="QUESTIONED",
                           detail=reason[:300], caused_by=caused_by,
@@ -200,16 +195,16 @@ def question_assumption(ctx: AnalyticContext, assumption_id: str, *,
 def invalidate_assumption(ctx: AnalyticContext, assumption_id: str, *,
                           contradicting_claim_ids: tuple[str, ...],
                           caused_by: str, reason: str) -> dict[str, Any]:
-    """Invalidate an assumption and mark everything that rested on it: every
-    dependent impact path goes STALE with an ASSUMPTION_INVALIDATED
-    transition, and each affected objective is EXPOSED."""
+    """Invalidate an assumption and mark everything resting on it.
+
+    Every dependent path goes STALE and every affected objective EXPOSED.
+    """
     store = ctx.store
     assumption = store.current_assumptions().get(assumption_id)
     if assumption is None:
         raise ValueError(f"unknown assumption: {assumption_id}")
-    # the version append is guarded; the dependent-marking pass below always
-    # runs (every write in it is idempotent by cause), so an interruption
-    # between the two is completed by re-running this call
+    # the marking pass below always runs and every write in it is idempotent,
+    # so re-running this call completes an interrupted one
     if assumption["status"] == "INVALIDATED":
         appended = assumption
     else:
@@ -264,10 +259,11 @@ def invalidate_assumption(ctx: AnalyticContext, assumption_id: str, *,
 
 
 def edge_chain_fingerprint(edges) -> str:
-    """Order-preserving canonical fingerprint of an edge chain's CONTENT —
-    endpoints, kind, effect order, authority, evidence and assumptions, note.
-    This is what a candidate binds and a materialization must match: a
-    caller-chosen edge_id is an identity label, never a content commitment."""
+    """Ordered fingerprint of an edge chain's content.
+
+    This is what a candidate binds and a materialization must match; a
+    caller-chosen edge id is a label, not a commitment to content.
+    """
     fingerprints = []
     for edge in edges:
         data = edge if isinstance(edge, Mapping) else edge.to_record()
@@ -283,8 +279,7 @@ def build_path(ctx: AnalyticContext, *, objective_id: str, summary: str,
                edges: tuple[ImpactEdge, ...],
                provenance_kind: str = "RULE", inference_id: str = "",
                proposal_id: str = "", caused_by: str = "") -> dict[str, Any]:
-    """Construct an impact path. The chain must end at the stated objective
-    — a path that terminates elsewhere is describing something else."""
+    """Construct an impact path; the chain must end at the stated objective."""
     store = ctx.store
     if store.current_objectives().get(objective_id) is None:
         raise ValueError(f"unknown objective: {objective_id}")
@@ -295,8 +290,17 @@ def build_path(ctx: AnalyticContext, *, objective_id: str, summary: str,
                         *(edge.edge_id for edge in edges))
     existing = store.current_impact_paths().get(path_id)
     if existing is not None:
-        # crash-recovery completion: a MODEL re-call may only complete its own
-        # accepted materialization; the consumption scan is not re-entered
+        # edge ids are caller-chosen labels, so two different causal chains can
+        # land on one path_id. Re-calling with the same chain reconciles; a
+        # different chain is a different path and must not be silently dropped.
+        if edge_chain_fingerprint(existing["edges"]) \
+                != edge_chain_fingerprint(edges):
+            raise ValueError(
+                f"impact path {path_id[:24]} already exists with a different "
+                "edge chain: a re-call reconciles the same chain, and a "
+                "different chain whose edge ids collide is a different path")
+        # a MODEL re-call may only complete its own accepted materialization;
+        # the consumption check is not re-entered
         if provenance_kind == "MODEL" and (not proposal_id or proposal_id
                                            != existing.get("proposal_id")):
             raise ValueError(
@@ -315,12 +319,11 @@ def build_path(ctx: AnalyticContext, *, objective_id: str, summary: str,
             store, inference_id=inference_id, proposal_id=proposal_id,
             target_kind="impact_path",
             materialized={"objective_id": objective_id, "summary": summary,
-                          # the causal chain's CONTENT, in order, is what the
-                          # human accepted — ids alone commit to nothing
+                          # the human accepted the chain's content in order,
+                          # not its edge labels
                           "edge_chain": edge_chain_fingerprint(edges)})
-    # every evidence id an edge cites must resolve in the log: a path built on
-    # phantom ids would carry OBSERVED/DERIVED authority forever, immune to
-    # evidence decay, because refresh could never find its basis to degrade
+    # every cited id must resolve in the log, or the path would keep its
+    # authority forever: refresh could never find a basis to degrade
     known_basis: set[str] = set(store.current_claims())
     known_basis.update(r["relationship_id"]
                        for r in store.records_of("relationship_version"))
@@ -361,7 +364,8 @@ def build_path(ctx: AnalyticContext, *, objective_id: str, summary: str,
         edges=edges, status="ASSESSED", path_authority=authority,
         uncertainty_note=uncertainty_note, assumption_ids=assumption_ids,
         provenance_kind=provenance_kind, inference_id=inference_id,
-        proposal_id=proposal_id, change_reason="",
+        proposal_id=proposal_id if provenance_kind == "MODEL" else "",
+        change_reason="",
         history=(f"CONSTRUCTED:{provenance_kind}",),
         recorded_time=ctx.now_fn(), marking=ctx.marking)
     appended = append_version(ctx, record)
@@ -398,8 +402,7 @@ def _restate_path(ctx: AnalyticContext, path: Mapping[str, Any], *, status: str,
 
 
 def refresh_path(ctx: AnalyticContext, path_id: str, *, caused_by: str) -> dict[str, Any]:
-    """Recheck a path against live claim state: degraded evidence in any
-    edge's basis marks the path STALE with the reason on record."""
+    """Recheck a path against live claim state; degraded evidence marks it STALE."""
     store = ctx.store
     path = store.current_impact_paths().get(path_id)
     if path is None:
@@ -408,23 +411,23 @@ def refresh_path(ctx: AnalyticContext, path_id: str, *, caused_by: str) -> dict[
         return path
     from .basis import DEGRADED_CLAIM_STATES
     claims = store.current_claims()
+    states = store.claim_states()
     degraded = []
     for edge in path["edges"]:
         for basis_id in edge["basis_ids"]:
-            if basis_id in claims \
-                    and store.claim_state(basis_id) in DEGRADED_CLAIM_STATES:
-                degraded.append((edge["edge_id"], basis_id,
-                                 store.claim_state(basis_id)))
+            if basis_id not in claims:
+                continue
+            state = states.get(basis_id, {}).get("state", "CURRENT")
+            if state in DEGRADED_CLAIM_STATES:
+                degraded.append((edge["edge_id"], basis_id, state))
     if not degraded:
         return path
     detail = "; ".join(f"edge {edge_id[:12]}: claim {claim_id[:16]} is {state}"
                        for edge_id, claim_id, state in degraded)[:300]
-    # the finding's identity is the DEGRADED EVIDENCE SET, not whichever
-    # change batch happened to trigger the refresh: an unrelated later change
-    # re-runs this as a no-op, while genuinely new degradation is a new
-    # finding. The version append is guarded; the transition and objective
-    # exposure always run (idempotent by this stable cause), so a crash
-    # between them is completed by the next call.
+    # The finding is identified by the degraded evidence itself, not by the
+    # change that triggered the refresh, so an unrelated later change re-runs
+    # as a no-op while new degradation is a new finding. The transition and
+    # objective exposure are idempotent under that cause.
     finding = digest_id("stale-finding", path_id,
                         *sorted(f"{claim_id}:{state}"
                                 for _, claim_id, state in degraded))
@@ -447,10 +450,11 @@ def refresh_path(ctx: AnalyticContext, path_id: str, *, caused_by: str) -> dict[
 def suggest_path_edges(store: AnalyticStore, *, activity_id: str,
                        objective_id: str, max_hops: int = 3
                        ) -> tuple[ImpactEdge, ...] | None:
-    """Deterministically suggest a typed edge chain from an event to an
-    objective, walking only evidence-stated ACTIVE relations and the
-    objective's declared dependencies. Returns None honestly when no typed
-    path exists — reachability through untyped space is not impact."""
+    """Suggest a typed edge chain from an event to an objective.
+
+    Walks only ACTIVE evidence-stated relations and the objective's declared
+    dependencies, and returns None when no typed path exists.
+    """
     activity = next((a for a in store.records_of("activity")
                      if a["activity_id"] == activity_id), None)
     objective = store.current_objectives().get(objective_id)
@@ -460,11 +464,9 @@ def suggest_path_edges(store: AnalyticStore, *, activity_id: str,
                           if kind == "object"}
     if not dependency_objects:
         return None
-    latest_relations: dict[str, Mapping[str, Any]] = {}
-    for relation in store.records_of("relationship_version"):
-        latest_relations[relation["relationship_id"]] = relation
     adjacency: dict[str, list[Mapping[str, Any]]] = {}
-    for relation in latest_relations.values():
+    for relation in store.latest_by_id("relationship_version",
+                                       "relationship_id").values():
         if relation["status"] == "ACTIVE" \
                 and relation["relation_type"] in _PROPAGATION_RELATIONS:
             adjacency.setdefault(relation["source_object_id"], []).append(relation)
@@ -472,7 +474,6 @@ def suggest_path_edges(store: AnalyticStore, *, activity_id: str,
 
     subjects = list(activity.get("subject_ids") or ())
     for subject in subjects:
-        # BFS over typed relations from the event's subject
         frontier = [(subject, [])]
         seen = {subject}
         while frontier:
@@ -563,7 +564,7 @@ def propose_response_option(ctx: AnalyticContext, *, objective_id: str, path_id:
         provenance_kind=provenance_kind, inference_id=inference_id,
         change_reason="", history=(f"PROPOSED:{provenance_kind}",),
         recorded_time=ctx.now_fn(), marking=ctx.marking,
-        proposal_id=proposal_id)
+        proposal_id=proposal_id if provenance_kind == "MODEL" else "")
     appended = append_version(ctx, record)
     ensure_transition(ctx, subject_kind="response_option", subject_id=option_id,
                       transition_type="PROPOSED",
@@ -574,7 +575,7 @@ def propose_response_option(ctx: AnalyticContext, *, objective_id: str, path_id:
 
 def review_response_option(ctx: AnalyticContext, option_id: str, *, accept: bool,
                            actor_id: str, actor_kind: str, note: str) -> dict[str, Any]:
-    """Accepting a response option is a human decision, recorded as one."""
+    """Accept or reject a response option; only a human may accept."""
     if accept and actor_kind != "HUMAN":
         raise ValueError("only a recorded human act can accept a response option")
     store = ctx.store
@@ -584,7 +585,7 @@ def review_response_option(ctx: AnalyticContext, option_id: str, *, accept: bool
     status = "ACCEPTED" if accept else "REJECTED"
     if option["status"] not in ("PROPOSED", "UNDER_REVIEW"):
         if option["status"] == status:
-            # complete a crashed run's missing transition; append nothing
+            # complete a missing transition; append nothing
             record_transition(ctx, subject_kind="response_option",
                               subject_id=option_id, transition_type=status,
                               detail=note[:300], caused_by=f"analyst:{actor_id}",

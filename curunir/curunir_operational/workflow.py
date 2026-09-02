@@ -1,10 +1,9 @@
-"""Alert → analyst review → recommendation → human decision workflow.
+"""Alert, analyst review, recommendation, human decision.
 
-Boundary rules enforced here: provider (SERVICE) actors can propose and the
-workflow can materialize, but only a HUMAN actor with sufficient role — and
-never the recommending provider — can record a decision; decisions bind to a
-frozen, recomputable evidence snapshot hash over version-pinned references;
-no path in this module executes any external action.
+A service actor can propose and the workflow can materialize, but only a human
+with sufficient role can record a decision, and never the provider that made
+the recommendation. A decision binds to a frozen evidence snapshot hash that
+can be recomputed. Nothing here executes an external action.
 """
 from __future__ import annotations
 
@@ -22,6 +21,10 @@ class WorkflowError(ValueError):
     pass
 
 
+class _AlertRaisedConcurrently(WorkflowError):
+    """Another writer took the dedup key between the check and the append."""
+
+
 def _provenance_from(record: Mapping[str, Any]) -> ProvenanceSummary:
     return ProvenanceSummary(
         mode=record.get("mode", "OPERATIONAL"), source_ids=tuple(record.get("source_ids", ())),
@@ -33,7 +36,8 @@ def _provenance_from(record: Mapping[str, Any]) -> ProvenanceSummary:
 
 
 def pin_evidence_refs(store: MissionDataStore, refs: Mapping[str, Any] | list | tuple) -> tuple[str, ...]:
-    """Pin plain object ids to their current version id so the snapshot is frozen."""
+    """Pin plain object ids to their current version id, so the snapshot is
+    frozen against later change."""
     versions: dict[str, int] = {}
     for record in store.records_of("object_version"):
         versions[record["object_id"]] = record["version"]
@@ -59,7 +63,7 @@ class WorkflowEngine:
     def __init__(self, store: MissionDataStore):
         self.store = store
 
-    # ---- alerts -------------------------------------------------------------
+    # ---- alerts ----
 
     def _alert_status(self, alert_id: str) -> str | None:
         status = None
@@ -73,27 +77,38 @@ class WorkflowEngine:
 
     def raise_alert(self, content: Mapping[str, Any], *, marking: Marking, recorded_time: str,
                     actor: str) -> tuple[str, bool]:
-        existing = self.store.find_alert_by_dedup(content["dedup_key"])
-        if existing is not None:
-            current = self._alert_status(existing) or "OPEN"
-            transition = AlertTransition(
-                transition_id=digest_id("altr", existing, recorded_time),
-                alert_id=existing, from_status=current, to_status=current,
-                actor_id=actor, actor_kind="SERVICE",
-                note=f"retriggered: {content['trigger']}", recorded_time=recorded_time, marking=marking,
+        dedup_key = content["dedup_key"]
+        existing = self.store.find_alert_by_dedup(dedup_key)
+        if existing is None:
+            alert = Alert(
+                alert_id=digest_id("alert", dedup_key),
+                rule_id=content["rule_id"], rule_version=content["rule_version"], trigger=content["trigger"],
+                affected_ids=tuple(content["affected_ids"]), evidence_refs=pin_evidence_refs(self.store, content["evidence_refs"]),
+                quality_note=content.get("quality_note", ""), severity=content["severity"],
+                severity_rationale=content["severity_rationale"], dedup_key=dedup_key,
+                expiry_condition=content.get("expiry_condition", ""), recorded_time=recorded_time, marking=marking,
             )
-            self.store.append("ALERT_TRANSITIONED", transition, recorded_time=recorded_time, actor=actor)
-            return existing, False
-        alert = Alert(
-            alert_id=digest_id("alert", content["dedup_key"]),
-            rule_id=content["rule_id"], rule_version=content["rule_version"], trigger=content["trigger"],
-            affected_ids=tuple(content["affected_ids"]), evidence_refs=pin_evidence_refs(self.store, content["evidence_refs"]),
-            quality_note=content.get("quality_note", ""), severity=content["severity"],
-            severity_rationale=content["severity_rationale"], dedup_key=content["dedup_key"],
-            expiry_condition=content.get("expiry_condition", ""), recorded_time=recorded_time, marking=marking,
+
+            def _still_unraised(store: MissionDataStore) -> None:
+                # Two alerts sharing one dedup key would share one alert_id.
+                if store.find_alert_by_dedup(dedup_key) is not None:
+                    raise _AlertRaisedConcurrently(dedup_key)
+
+            try:
+                self.store.append("ALERT_RAISED", alert, recorded_time=recorded_time, actor=actor,
+                                  condition=_still_unraised)
+                return alert.alert_id, True
+            except _AlertRaisedConcurrently:
+                existing = self.store.find_alert_by_dedup(dedup_key)
+        current = self._alert_status(existing) or "OPEN"
+        transition = AlertTransition(
+            transition_id=digest_id("altr", existing, recorded_time),
+            alert_id=existing, from_status=current, to_status=current,
+            actor_id=actor, actor_kind="SERVICE",
+            note=f"retriggered: {content['trigger']}", recorded_time=recorded_time, marking=marking,
         )
-        self.store.append("ALERT_RAISED", alert, recorded_time=recorded_time, actor=actor)
-        return alert.alert_id, True
+        self.store.append("ALERT_TRANSITIONED", transition, recorded_time=recorded_time, actor=actor)
+        return existing, False
 
     def transition_alert(self, alert_id: str, to_status: str, *, context: AccessContext, note: str,
                          recorded_time: str, marking: Marking) -> dict[str, Any]:
@@ -108,12 +123,21 @@ class WorkflowEngine:
             actor_id=context.actor_id, actor_kind=context.actor_kind, note=note,
             recorded_time=recorded_time, marking=marking,
         )
+
+        def _still_at(store: MissionDataStore) -> None:
+            # from_status must still be true when the transition is committed.
+            latest = WorkflowEngine(store)._alert_status(alert_id)
+            if latest != current:
+                raise WorkflowError(
+                    f"alert {alert_id} moved to {latest} while this transition "
+                    f"to {to_status} was being prepared")
+
         event = self.store.append(
             "ALERT_TRANSITIONED", transition,
-            recorded_time=recorded_time, actor=context.actor_id)
+            recorded_time=recorded_time, actor=context.actor_id, condition=_still_at)
         return event["record"]
 
-    # ---- proposal materialization ------------------------------------------
+    # ---- proposal materialization ----
 
     def materialize(self, proposal: Mapping[str, Any], *, actor_id: str, recorded_time: str) -> dict[str, Any]:
         inference = next((r for r in self.store.records_of("inference")
@@ -164,17 +188,15 @@ class WorkflowEngine:
             self.store.append("OBJECT_VERSION_APPENDED", updated, recorded_time=recorded_time, actor=actor_id)
             result.update(object_id=current["object_id"], version=updated.version)
         elif kind == "RECOMMENDATION_CANDIDATE":
-            inference = next((r for r in self.store.records_of("inference")
-                              if r["inference_id"] == proposal["inference_id"]), None)
             provider_id = inference["model_id"] if inference else "UNKNOWN_PROVIDER"
             record = self.recommend(content, provider_id=provider_id, marking=marking,
                                     recorded_time=recorded_time, actor=actor_id)
             result.update(recommendation_id=record["recommendation_id"], created=record["created"])
-        else:  # ASSESSMENT / ASSOCIATION_CANDIDATE stay proposals in V1
+        else:  # an assessment or association candidate stays a proposal
             result.update(materialized=False)
         return result
 
-    # ---- recommendations and decisions -------------------------------------
+    # ---- recommendations and decisions ----
 
     def recommend(self, content: Mapping[str, Any], *, provider_id: str, marking: Marking,
                   recorded_time: str, actor: str, alert_ids: tuple[str, ...] = ()) -> dict[str, Any]:
@@ -217,10 +239,12 @@ class WorkflowEngine:
     def enact_decision_effect(self, decision_id: str, *, object_id: str, attributes_patch: Mapping[str, Any],
                               rationale: str, recorded_time: str, actor: str,
                               epistemic_state: str = "INFERRED") -> dict[str, Any]:
-        """Recorded cross-workbench consequence of a human decision: a new
-        object version whose attributes carry the decision basis. Never called
-        by providers; only enacts ACCEPTED or MODIFIED decisions; the original
-        decision and its evidence snapshot stay inspectable."""
+        """Record the consequence of a human decision as a new object version
+        carrying the decision basis.
+
+        Only an accepted or modified decision produces one, and the decision
+        and its evidence snapshot stay inspectable.
+        """
         decision = next((d for d in self.store.records_of("decision") if d["decision_id"] == decision_id), None)
         if decision is None:
             raise WorkflowError(f"unknown decision: {decision_id}")

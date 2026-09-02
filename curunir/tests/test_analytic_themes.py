@@ -1,5 +1,6 @@
-"""Theme engine: independence-driven status, preserved membership history,
-contested state, lineage-preserving merge/split, deterministic discovery."""
+"""Themes: a theme rises only on independent sources, membership changes keep
+their history, a contradiction contests without erasing support, merge and split
+keep lineage, and discovery follows the world model."""
 from __future__ import annotations
 
 import pytest
@@ -11,23 +12,14 @@ from curunir_analytic.themes import (apply_merge, apply_split, create_theme,
                                      update_membership)
 from curunir_semantic.contracts import ClaimStateRecord
 
-from analytic_support import (GLEIF_ACME, MARK, T0, make_analytic, plant_page,
-                              statement_page)
+from analytic_support import (GLEIF_ACME, MARK, make_analytic, plant_page,
+                              seed_acme, statement_page)
 from semantic_support import plant_manifestation
 
 pytestmark = pytest.mark.no_db
 
 GLEIF_OTHER = GLEIF_ACME.replace(b"ACMELEI000000000001", b"OTHERLEI00000000002") \
     .replace(b"Acme Industri AS", b"Borg Verft AS")
-
-
-def _seed_acme(pipeline, ctx):
-    plant_manifestation(pipeline, source_id="gleif", native_id="lei/ACMELEI000000000001",
-                        body=GLEIF_ACME, media_type="application/json", retrieval_time=T0)
-    pipeline.process_new_evidence()
-    claims = ctx.store.current_claims()
-    return {c["predicate"]: c["claim_id"] for c in claims.values()
-            if c["subject_ref"] == "LEI:ACMELEI000000000001"}
 
 
 def test_theme_cannot_exist_unsupported(tmp_path):
@@ -38,9 +30,8 @@ def test_theme_cannot_exist_unsupported(tmp_path):
 
 def test_one_origin_family_stays_emerging_until_independent_family(tmp_path):
     pipeline, ctx = make_analytic(tmp_path)
-    by_predicate = _seed_acme(pipeline, ctx)
-    # a second derivative retrieval of the same registry record adds reach,
-    # not independence
+    by_predicate = seed_acme(pipeline, ctx)
+    # Fetching the same registry record again is more reach, not more independence.
     plant_manifestation(pipeline, source_id="gleif",
                         native_id="lei/ACMELEI000000000001?refresh",
                         body=GLEIF_ACME, media_type="application/json",
@@ -53,7 +44,7 @@ def test_one_origin_family_stays_emerging_until_independent_family(tmp_path):
     assert theme["status"] == "EMERGING"
     assert len(theme["basis"]["origin_families"]) == 1
 
-    # an independent origin family (a different site) promotes the theme
+    # A different site is an independent source, and promotes the theme.
     plant_page(pipeline, url="https://acme-industri.example.no/about",
                body=statement_page("Acme Industri AS remains active in Oslo"),
                retrieval_time="2026-08-17T15:00:00+00:00")
@@ -66,7 +57,6 @@ def test_one_origin_family_stays_emerging_until_independent_family(tmp_path):
     assert updated["status"] == "ACTIVE"
     assert len(updated["basis"]["origin_families"]) == 2
     assert updated["version"] == 2
-    # prior membership is preserved as version 1 in the log
     versions = ctx.store.analytic_versions("analytic_theme", theme["theme_id"])
     assert len(versions) == 2
     assert page_claim not in versions[0]["basis"]["supporting_claim_ids"]
@@ -75,7 +65,7 @@ def test_one_origin_family_stays_emerging_until_independent_family(tmp_path):
 
 def test_contradiction_makes_theme_contested_without_deleting_support(tmp_path):
     pipeline, ctx = make_analytic(tmp_path)
-    by_predicate = _seed_acme(pipeline, ctx)
+    by_predicate = seed_acme(pipeline, ctx)
     plant_page(pipeline, url="https://registerwatch.example.org/acme",
                body=statement_page("Acme Industri AS has ceased operations"),
                retrieval_time="2026-08-17T15:00:00+00:00")
@@ -95,7 +85,7 @@ def test_contradiction_makes_theme_contested_without_deleting_support(tmp_path):
 
 def test_degraded_basis_weakens_then_stales_theme(tmp_path):
     pipeline, ctx = make_analytic(tmp_path)
-    by_predicate = _seed_acme(pipeline, ctx)
+    by_predicate = seed_acme(pipeline, ctx)
     theme = create_theme(ctx, title="Acme registry standing",
                          supporting_claim_ids=[by_predicate["entity_status"]],
                          provenance_kind="RULE")
@@ -111,14 +101,13 @@ def test_degraded_basis_weakens_then_stales_theme(tmp_path):
     assert refreshed["basis"]["degraded_claim_count"] == 1
     kinds = {t["transition_type"] for t in ctx.store.transitions_for(theme["theme_id"])}
     assert "STALE" in kinds and "WEAKENED" in kinds
-    # refresh with no further change appends nothing
     again = refresh_theme(ctx, theme["theme_id"], caused_by="chg-1")
     assert again["version"] == refreshed["version"]
 
 
 def test_merge_is_human_only_and_preserves_lineage(tmp_path):
     pipeline, ctx = make_analytic(tmp_path)
-    by_predicate = _seed_acme(pipeline, ctx)
+    by_predicate = seed_acme(pipeline, ctx)
     left = create_theme(ctx, title="Acme standing",
                         supporting_claim_ids=[by_predicate["entity_status"]],
                         provenance_kind="RULE")
@@ -137,13 +126,12 @@ def test_merge_is_human_only_and_preserves_lineage(tmp_path):
     assert absorbed["status"] == "MERGED"
     assert ("MERGED_INTO", left["theme_id"]) in [tuple(p) for p in absorbed["lineage"]]
     assert by_predicate["legal_name"] in survivor["basis"]["supporting_claim_ids"]
-    # the absorbed theme's history is intact
     assert len(ctx.store.analytic_versions("analytic_theme", right["theme_id"])) == 2
 
 
 def test_split_preserves_lineage_both_ways(tmp_path):
     pipeline, ctx = make_analytic(tmp_path)
-    by_predicate = _seed_acme(pipeline, ctx)
+    by_predicate = seed_acme(pipeline, ctx)
     broad = create_theme(ctx, title="Acme affairs",
                          supporting_claim_ids=list(by_predicate.values()),
                          provenance_kind="RULE")
@@ -163,7 +151,7 @@ def test_split_preserves_lineage_both_ways(tmp_path):
 
 def test_resolution_is_human_only(tmp_path):
     pipeline, ctx = make_analytic(tmp_path)
-    by_predicate = _seed_acme(pipeline, ctx)
+    by_predicate = seed_acme(pipeline, ctx)
     theme = create_theme(ctx, title="Acme standing",
                          supporting_claim_ids=[by_predicate["entity_status"]],
                          provenance_kind="RULE")
@@ -173,13 +161,13 @@ def test_resolution_is_human_only(tmp_path):
     resolved = resolve_theme(ctx, theme["theme_id"], actor_id="jan",
                              actor_kind="HUMAN", note="issue closed")
     assert resolved["status"] == "RESOLVED"
-    # machine refresh does not reopen a resolved theme
+    # A machine refresh must not reopen what a person closed.
     assert refresh_theme(ctx, theme["theme_id"], caused_by="x")["status"] == "RESOLVED"
 
 
 def test_discovery_clusters_by_world_structure(tmp_path):
     pipeline, ctx = make_analytic(tmp_path)
-    _seed_acme(pipeline, ctx)
+    seed_acme(pipeline, ctx)
     plant_manifestation(pipeline, source_id="gleif", native_id="lei/OTHERLEI00000000002",
                         body=GLEIF_OTHER, media_type="application/json",
                         retrieval_time="2026-08-17T14:00:00+00:00")
@@ -192,13 +180,12 @@ def test_discovery_clusters_by_world_structure(tmp_path):
     for candidate in candidates:
         assert candidate["claim_ids"]
         assert "deterministic" in candidate["method"]
-    # discovery is stable: same input, same candidates
     assert candidates == discover_theme_candidates(ctx.store)
 
 
 def test_explain_theme_descends_to_anchors(tmp_path):
     pipeline, ctx = make_analytic(tmp_path)
-    by_predicate = _seed_acme(pipeline, ctx)
+    by_predicate = seed_acme(pipeline, ctx)
     theme = create_theme(ctx, title="Acme standing",
                          supporting_claim_ids=[by_predicate["entity_status"]],
                          provenance_kind="RULE")

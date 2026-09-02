@@ -1,4 +1,5 @@
-"""Regression locks for the fourth-round adversarial findings."""
+"""A model proposal is bound to what the person actually accepted: the kind, the
+role, the claims and the edges themselves — not the labels put on them."""
 from __future__ import annotations
 
 import pytest
@@ -12,9 +13,8 @@ from curunir_analytic.substrate import resolve_candidate
 from curunir_analytic.themes import create_theme
 from curunir_semantic.worldmodel import world_object_id
 
-from analytic_support import (GLEIF_ACME, MARK, T0, make_analytic, plant_page,
+from analytic_support import (MARK, T0, make_analytic, plant_page, seed_acme,
                               statement_page)
-from semantic_support import plant_manifestation
 
 pytestmark = pytest.mark.no_db
 
@@ -22,20 +22,12 @@ ACME_OBJECT = world_object_id("LEI:ACMELEI000000000001")
 NOW = "2026-08-17T12:00:00+00:00"
 
 
-def _seed(pipeline, ctx):
-    plant_manifestation(pipeline, source_id="gleif", native_id="lei/ACMELEI000000000001",
-                        body=GLEIF_ACME, media_type="application/json", retrieval_time=T0)
-    pipeline.process_new_evidence()
-    return {c["predicate"]: c["claim_id"] for c in ctx.store.current_claims().values()
-            if c["subject_ref"] == "LEI:ACMELEI000000000001"}
-
-
 def test_q1_model_cannot_rewrite_its_target_kind(tmp_path):
     pipeline, ctx = make_analytic(tmp_path)
-    by_predicate = _seed(pipeline, ctx)
+    by_predicate = seed_acme(pipeline, ctx)
     objective = create_objective(ctx, mission_context="m1", statement="o",
                                  depends_on=(("object", ACME_OBJECT),))
-    # the model emits its own target_kind + the other kind's binding fields
+    # The model names its own target kind and fills in another kind's fields.
     assist = AnalyticalAssist(
         package=analytical_assist_package("test", "stub", "1.0"),
         infer_fn=lambda task, payload: {
@@ -48,7 +40,7 @@ def test_q1_model_cannot_rewrite_its_target_kind(tmp_path):
                               inputs={}, input_refs=())
     resolved = resolve_candidate(ctx, proposed["proposal"]["proposal_id"],
                                  accept=True, actor_id="jan", actor_kind="HUMAN")
-    # the engine-declared kind won the merge: it spends only as a theme
+    # The kind the caller asked for wins, so the acceptance buys a theme only.
     assert resolved["content"]["target_kind"] == "analytic_theme"
     edge = ImpactEdge(edge_id="e-x", from_kind="object", from_id=ACME_OBJECT,
                       to_kind="mission_objective", to_id=objective["objective_id"],
@@ -64,7 +56,7 @@ def test_q1_model_cannot_rewrite_its_target_kind(tmp_path):
 
 def test_q2_model_assessment_is_fully_bound(tmp_path):
     pipeline, ctx = make_analytic(tmp_path)
-    by_predicate = _seed(pipeline, ctx)
+    by_predicate = seed_acme(pipeline, ctx)
     from curunir_analytic.contracts import StakeholderPosition
     assist = AnalyticalAssist(
         package=analytical_assist_package("test", "stub", "1.0"),
@@ -76,7 +68,7 @@ def test_q2_model_assessment_is_fully_bound(tmp_path):
                               inputs={}, input_refs=())
     resolved = resolve_candidate(ctx, proposed["proposal"]["proposal_id"],
                                  accept=True, actor_id="jan", actor_kind="HUMAN")
-    # (a) a model materialization can carry no positions at all
+    # Positions the model invented cannot ride in on the acceptance.
     with pytest.raises(ValueError, match="no positions"):
         create_assessment(
             ctx, entity_object_id=ACME_OBJECT, context_kind="ISSUE",
@@ -89,7 +81,7 @@ def test_q2_model_assessment_is_fully_bound(tmp_path):
             provenance_kind="MODEL",
             inference_id=resolved["inference_id"],
             proposal_id=resolved["proposal_id"])
-    # (b) a model-chosen role differing from the accepted one is refused
+    # A different role than the accepted one.
     with pytest.raises(ValueError, match="differs from what the human accepted"):
         create_assessment(
             ctx, entity_object_id=ACME_OBJECT, context_kind="ISSUE",
@@ -97,7 +89,7 @@ def test_q2_model_assessment_is_fully_bound(tmp_path):
             provenance_kind="MODEL",
             inference_id=resolved["inference_id"],
             proposal_id=resolved["proposal_id"])
-    # (c) unaccepted extra claims are refused
+    # An extra claim nobody accepted.
     with pytest.raises(ValueError, match="differs from what the human accepted"):
         create_assessment(
             ctx, entity_object_id=ACME_OBJECT, context_kind="ISSUE",
@@ -107,7 +99,7 @@ def test_q2_model_assessment_is_fully_bound(tmp_path):
             provenance_kind="MODEL",
             inference_id=resolved["inference_id"],
             proposal_id=resolved["proposal_id"])
-    # (d) the faithful materialization works
+    # Exactly what was accepted goes through.
     assessment = create_assessment(
         ctx, entity_object_id=ACME_OBJECT, context_kind="ISSUE",
         context_id="issue-1", role_in_context="regulated party",
@@ -120,12 +112,10 @@ def test_q2_model_assessment_is_fully_bound(tmp_path):
 
 
 def test_q7_edge_binding_commits_to_content_not_labels(tmp_path):
-    """Round-5 note N1: an accepted edge chain binds the edges' CONTENT; a
-    materialization reusing the accepted edge_id with different semantics is
-    refused."""
+    """An accepted edge chain binds the edges themselves, not their ids."""
     from curunir_analytic.impact import edge_chain_fingerprint
     pipeline, ctx = make_analytic(tmp_path)
-    by_predicate = _seed(pipeline, ctx)
+    by_predicate = seed_acme(pipeline, ctx)
     objective = create_objective(ctx, mission_context="m1", statement="o",
                                  depends_on=(("object", ACME_OBJECT),))
     accepted_edge = ImpactEdge(
@@ -143,10 +133,10 @@ def test_q7_edge_binding_commits_to_content_not_labels(tmp_path):
     resolved = resolve_candidate(ctx, proposed["proposal"]["proposal_id"],
                                  accept=True, actor_id="jan", actor_kind="HUMAN")
     swapped = ImpactEdge(
-        edge_id="e1",  # same label…
+        edge_id="e1",  # the accepted id…
         from_kind="object", from_id=ACME_OBJECT,
         to_kind="mission_objective", to_id=objective["objective_id"],
-        edge_kind="INFERENCE", effect_order="POTENTIAL",  # …different semantics
+        edge_kind="INFERENCE", effect_order="POTENTIAL",  # …on a different edge
         authority="SUPPORTED_INFERENCE",
         note="the entity is likely to be delisted", basis_ids=(),
         assumption_ids=())
@@ -164,7 +154,7 @@ def test_q7_edge_binding_commits_to_content_not_labels(tmp_path):
 
 def test_q4_phantom_edge_basis_is_refused(tmp_path):
     pipeline, ctx = make_analytic(tmp_path)
-    by_predicate = _seed(pipeline, ctx)
+    by_predicate = seed_acme(pipeline, ctx)
     objective = create_objective(ctx, mission_context="m1", statement="o",
                                  depends_on=(("object", ACME_OBJECT),))
     edge = ImpactEdge(edge_id="e1", from_kind="object", from_id=ACME_OBJECT,

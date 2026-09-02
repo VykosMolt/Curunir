@@ -13,7 +13,7 @@ class _RootFound(Exception):
 
 
 def reject_dtd(data: bytes) -> None:
-    """Refuse a real DTD declaration before entity definitions are processed."""
+    """Refuse a DTD declaration before any entity definition is processed."""
     parser = expat.ParserCreate()
 
     def doctype(*args) -> None:
@@ -29,6 +29,6 @@ def reject_dtd(data: bytes) -> None:
     except _DTDFound as error:
         raise ValueError("XML DOCTYPE/DTD refused before entity expansion") from error
     except (_RootFound, expat.ExpatError):
-        # A malformed document is still rejected by its actual parser. The
-        # guard only answers whether a real declaration occurred before root.
+        # The real parser still rejects a malformed document; this only
+        # answers whether a declaration appeared before the root element.
         pass

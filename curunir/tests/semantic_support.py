@@ -1,5 +1,5 @@
-"""Shared fixtures for the semantic-plane tests: a store with custody and a
-helper that plants deterministic manifestations the way the fabric would."""
+"""Shared fixtures for the semantic tests: a store with custody, a fixed clock,
+and a helper that plants manifestations the way the fabric would."""
 from __future__ import annotations
 
 import hashlib
@@ -26,6 +26,12 @@ def clock(start_minute: int = 1):
     return now
 
 
+def advance_clock_past(now_fn, target: str) -> None:
+    """Burn ticks off a fixture clock until it reads later than target."""
+    while now_fn() <= target:
+        pass
+
+
 def make_pipeline(tmp_path: Path, *, seeded: bool = True, start_minute: int = 1) -> SemanticPipeline:
     root = tmp_path / "store"
     if (root / "store_meta.json").exists():
@@ -45,8 +51,8 @@ def plant_manifestation(pipeline: SemanticPipeline, *, source_id: str, native_id
                         archive_capture_time: str | None = None,
                         request_url: str = "", final_url: str = "",
                         prior_manifestation_id: str | None = None) -> dict:
-    """Preserve bytes in custody and append the manifestation record, exactly
-    as the fabric executor would."""
+    """Put the bytes in custody and append the manifestation record, as the
+    fabric executor would."""
     digest = hashlib.sha256(body).hexdigest()
     path = Path(pipeline.custody_root) / "sha256" / digest[:2] / digest[2:4] / digest
     path.parent.mkdir(parents=True, exist_ok=True)

@@ -1,20 +1,8 @@
-"""Holdout-partition custody tests — the read boundary.
+"""Custody of a held-out partition: who may read its item text, and when.
 
-Two holdout generations were destroyed by two different mechanisms:
-
-* incident 306 (2026-07-28): the standing D42 loader deserialized all 750 rows
-  of the shared plaintext population before joining the 120 exposed
-  identifiers, so ``item_text_bytes_read = true`` for both V2 partitions;
-* the shard builder loaded every packet in the store and wrote 20 shards of 30
-  full item-text packets into each of three reviewer-seat directories, which
-  delivered 87 of 120 sealed units and 100 of 120 development-validation units
-  to blind seats — the same mechanism that had already destroyed V1.
-
-Every test below asserts the *reason* a refusal happened, not merely that
-something was raised, so a refactor cannot make a test pass by refusing for
-the wrong cause.  Each control is exercised in both directions: it permits the
-lawful path, and it FAILS when its protected property is violated.  A control
-that cannot be shown to fail has not been shown to exist.
+Every test names the reason a refusal happened, not just that something was
+raised, so a rewrite cannot pass by refusing for the wrong cause. Each control
+is exercised both ways: the lawful path works, and the unlawful one fails.
 """
 from __future__ import annotations
 
@@ -33,7 +21,7 @@ pytestmark = pytest.mark.no_db
 
 
 # ---------------------------------------------------------------------------
-# A file-open auditor, so "no bytes were read" is measured rather than assumed
+# A file-open auditor, so "nothing was read" is measured rather than assumed.
 # ---------------------------------------------------------------------------
 
 _OPENS: list[str] = []
@@ -114,7 +102,7 @@ def _open(croot, **kwargs):
 
 
 def test_seal_denies_a_direct_read_that_worked_before(tmp_path, croot, store):
-    assert store.read_text()  # positive control: readable before sealing
+    assert store.read_text()  # it is readable before the seal
     PC.seal_store("TEST_STORE", root=croot, relative_path=str(store),
                   reason="test store")
     assert stat.S_IMODE(store.stat().st_mode) == PC.SEALED_MODE
@@ -155,16 +143,16 @@ def test_directory_store_is_sealed_whole(tmp_path, croot):
             list(tree.iterdir())
         with pytest.raises(PermissionError):
             (tree / "aligned_001.json").read_text()
-        # a path *under* a sealed directory is recognised as sealed
+        # A path inside a sealed directory counts as sealed.
         assert PC.is_sealed_path(tree / "aligned_001.json",
                                  root=croot).store_id == "TEST_TREE"
     finally:
-        # leave nothing pytest's tmp reaper cannot remove
+        # Restore the mode so the temp directory can be cleaned up.
         os.chmod(tree, 0o755)
 
 
 # ---------------------------------------------------------------------------
-# One-shot lock — NEGATIVE CONTROL: a second opening must be refused
+# The one-shot lock: a second opening is refused
 # ---------------------------------------------------------------------------
 
 
@@ -178,7 +166,7 @@ def test_one_shot_lock_refuses_a_second_opening(croot, sealed):
     assert "one-shot lock" in str(excinfo.value)
     assert "opened before" in str(excinfo.value)
 
-    # and the refusal left the store sealed, not merely unread
+    # The refusal left the store sealed, not merely unread.
     assert stat.S_IMODE(sealed.stat().st_mode) == PC.SEALED_MODE
     with pytest.raises(PermissionError):
         sealed.read_text()
@@ -335,8 +323,7 @@ def test_observer_says_yes_and_names_the_reader(croot, sealed):
 
 
 def test_observer_never_says_no_when_the_ledger_is_tampered(croot, sealed):
-    """The failure that matters: deleting the evidence must not read as
-    innocence."""
+    """Deleting the evidence must not read as innocence."""
 
     with _open(croot):
         pass
@@ -443,8 +430,8 @@ def test_loader_refuses_a_partial_population(tmp_path, croot):
 
 def test_identifier_scan_ignores_an_identifier_shaped_string_in_item_text(
         tmp_path, croot):
-    """Positive control for the scanner: item text that happens to contain
-    ``"unit_id"`` is escaped in JSON, so it cannot be mistaken for the key."""
+    """Item text containing the string "unit_id" is escaped in JSON, so the
+    scanner does not mistake it for the key."""
 
     tricky = tmp_path / "tricky.jsonl"
     tricky.write_text(json.dumps(
@@ -455,8 +442,8 @@ def test_identifier_scan_ignores_an_identifier_shaped_string_in_item_text(
 
 
 def test_loader_refuses_a_duplicated_top_level_identifier(tmp_path, croot):
-    """Two top-level ``unit_id`` keys is genuinely ambiguous — ``json.loads``
-    would silently keep the last one.  The scanner refuses instead."""
+    """Two top-level unit_id keys are ambiguous, so the scanner refuses rather
+    than keeping the last one the way json.loads would."""
 
     tricky = tmp_path / "tricky.jsonl"
     tricky.write_text('{"unit_id": "a", "unit_id": "b"}\n')
@@ -492,7 +479,7 @@ def test_loader_returns_exactly_what_the_legacy_idiom_returned(croot, store):
 
 
 # ---------------------------------------------------------------------------
-# Shard authorisation — the second loss mechanism
+# Shard authorisation
 # ---------------------------------------------------------------------------
 
 
@@ -530,8 +517,7 @@ def test_authorised_load_never_deserializes_an_unauthorised_packet(
 
 
 def test_authorised_load_refuses_a_holdout_identifier(croot, store):
-    """The required negative test: an allowlist naming a holdout unit is
-    refused, not silently honoured."""
+    """An allowlist naming a holdout unit is refused, not quietly honoured."""
 
     PC.declare_ledger_scope("V3", note="test corpus", root=croot)
     PC.register_holdout_units("V3_SEALED", UNITS[3:], corpus_id="V3",
@@ -541,7 +527,7 @@ def test_authorised_load_refuses_a_holdout_identifier(croot, store):
         PC.load_authorised_packets(store, UNITS, what="shard build", root=croot)
     assert "registered holdout units" in str(excinfo.value)
     assert "V3_SEALED" in str(excinfo.value)
-    # the identifiers themselves are not leaked by the refusal
+    # The refusal must not name the identifiers it is protecting.
     assert UNITS[3] not in str(excinfo.value)
 
 
@@ -601,7 +587,7 @@ def test_shard_builder_refuses_an_unparseable_authorisation(tmp_path, croot,
 
 
 # ---------------------------------------------------------------------------
-# Holdout eligibility — NEVER-READ and NEVER-SHARDED and NEVER-JUDGED
+# Holdout eligibility: never read, never sharded, never judged
 # ---------------------------------------------------------------------------
 
 
@@ -613,7 +599,8 @@ def test_eligibility_refuses_a_corpus_nobody_was_watching(croot):
 
 
 def test_eligibility_refuses_a_unit_that_was_sharded(croot):
-    """The V2 mistake exactly: no reference answer, but already delivered."""
+    """A unit already delivered to a reviewer is not eligible, even with no
+    reference answer recorded for it."""
 
     PC.declare_ledger_scope("V3", note="test corpus", root=croot)
     PC.record_exposure("SHARDED", [UNITS[2]], corpus_id="V3", root=croot)
@@ -660,8 +647,8 @@ def test_exposure_kind_must_be_known(croot):
 
 
 def test_the_historical_holdout_stores_are_sealed():
-    """If this fails, a holdout-bearing store has been unsealed and left that
-    way.  Reseal it — do not relax the test."""
+    """A failure here means a holdout store was left unsealed. Reseal it; do not
+    relax the test."""
 
     present = [store for store in PC.SEALED_STORES if store.path.exists()]
     if not present:
@@ -683,13 +670,8 @@ def test_the_shared_population_named_by_incident_306_cannot_be_read():
 
 
 # ---------------------------------------------------------------------------
-# The ledger is identifier-bearing, so it may not be world-readable, and a
-# partition's membership may be committed to rather than published.
-#
-# FINDING_2 of artifacts/curunir_v6_readiness/v3_draw_verification/
-# V3_DRAW_VERIFICATION.json: all 280 drawn V3 round-2 identities sat in
-# first_access_log.jsonl at mode 0644, so the membership of the SEALED
-# partition was readable without unsealing anything.
+# The ledger names holdout identities, so it must not be world-readable, and a
+# registration may commit to its membership instead of listing it.
 # ---------------------------------------------------------------------------
 
 
@@ -708,9 +690,8 @@ def test_the_ledger_is_not_world_readable(croot):
 
 
 def test_the_ledger_mode_is_repaired_on_an_already_world_readable_file(croot):
-    """The negative case that actually happened: O_CREAT's mode argument is
-    ignored once the file exists, so a ledger created at 0644 stays 0644
-    forever unless the writer enforces the mode on every append."""
+    """O_CREAT's mode is ignored once the file exists, so the writer has to set
+    the mode again on every append."""
 
     root = PC.custody_root(croot).ensure()
     PC.declare_ledger_scope("V3", note="test corpus", root=croot)
@@ -790,8 +771,7 @@ def test_a_blinded_registration_whose_salt_is_lost_refuses_rather_than_passes(
 
 
 def test_a_plaintext_registration_still_behaves_exactly_as_before(croot):
-    """The historical form is not changed by the blinded one; every existing
-    ledger record keeps its meaning."""
+    """Adding the blinded form leaves the plaintext one working as before."""
 
     PC.declare_ledger_scope("V3", note="test corpus", root=croot)
     PC.register_holdout_units("V3_SEALED", UNITS[3:], corpus_id="V3",
@@ -818,17 +798,10 @@ def test_a_second_salt_for_one_partition_is_refused(croot):
 
 
 # ---------------------------------------------------------------------------
-# The adjudication read — the path that did not exist
-#
-# V3_ADJUDICATION_INFRA_STATUS.json FINDING-1: no custody API could lawfully
-# hand a drawn V3 unit to a packet builder.  load_authorised_packets() refuses
-# every registered holdout identity, which is what every drawn unit is, and
-# open_sealed_partition() would permit the read but consumes the one-shot lock
-# that V3_ADJUDICATION_PROTOCOL.json A8 reserves for the single sealed OPENING.
-# A partition that can never be adjudicated is preserved and worthless.
-#
-# Every control below is exercised in both directions: the lawful call is shown
-# to work, and the unlawful one is shown to be refused for its own reason.
+# The adjudication read: a narrow way to hand drawn units to a packet builder.
+# The two older APIs cannot do it — one refuses every registered holdout id,
+# the other would spend the one-shot lock reserved for the sealed opening.
+# Each control below is exercised both ways.
 # ---------------------------------------------------------------------------
 
 PARTITION = "V3_TEST_PARTITION"
@@ -838,12 +811,10 @@ OUTSIDE = UNITS[4:]
 
 
 def _adj_prereqs():
-    """The adjudication's OWN checklist, not the opening checklist.
+    """The adjudication's own checklist.
 
-    OPENING_PRECONDITIONS.json C-05 gates the opening; A7 requires the
-    reference to be frozen BEFORE the partition is opened, so gating the
-    adjudication read on the opening verifier would make lawful adjudication
-    impossible.
+    The reference has to be frozen before the partition is opened, so the
+    adjudication read cannot be gated on the opening checklist.
     """
 
     return {"draw_record_pinned": True, "identity_list_frozen": True,
@@ -852,12 +823,7 @@ def _adj_prereqs():
 
 @pytest.fixture
 def adjudication(tmp_path, croot, store):
-    """A sealed unit store whose drawn units are a blinded holdout partition.
-
-    This is the live V3 shape: ``v3_partition_r2_conformant`` registered both
-    partitions with ``blinded=True`` and sealed the candidate unit store to
-    mode 0.
-    """
+    """A sealed unit store whose drawn units form a blinded holdout partition."""
 
     PC.declare_ledger_scope("V3", note="test corpus", root=croot)
     PC.register_holdout_units(PARTITION, DRAWN, corpus_id="V3", blinded=True,
@@ -874,8 +840,8 @@ _DEFAULT_IDS = object()
 
 
 def _read(croot, ids=_DEFAULT_IDS, **kwargs):
-    """Call the adjudication read.  ``ids`` is passed through verbatim — including
-    ``None``, which the module must refuse rather than read as 'everything'."""
+    """Call the adjudication read, passing ids through untouched, including None,
+    which the module must refuse rather than read as "everything"."""
 
     kwargs.setdefault("store_id", "V3_UNIT_STORE")
     kwargs.setdefault("partition_id", PARTITION)
@@ -885,12 +851,12 @@ def _read(croot, ids=_DEFAULT_IDS, **kwargs):
         DRAWN if ids is _DEFAULT_IDS else ids, root=croot, **kwargs)
 
 
-# -- it works, and the old path still refuses ------------------------------
+# -- the new read works, and the old paths still refuse ----
 
 
 def test_the_adjudication_read_serves_a_registered_holdout_partition(
         croot, adjudication):
-    """The whole point: this is the call that was impossible."""
+    """A registered holdout partition can be read for adjudication."""
 
     rows = _read(croot)
 
@@ -902,11 +868,8 @@ def test_the_adjudication_read_serves_a_registered_holdout_partition(
 
 
 def test_the_old_paths_still_refuse_exactly_as_they_did(croot, adjudication):
-    """The repair adds a path; it does not relax the two that were strict.
-
-    If this test ever fails, the adjudication read has been built by widening
-    an existing API instead of adding a narrow one.
-    """
+    """The adjudication read is a new narrow path, not a widening of the two
+    existing strict ones."""
 
     with pytest.raises(PC.CustodyViolation) as excinfo:
         PC.load_authorised_packets(adjudication, DRAWN, what="shard build",
@@ -917,22 +880,19 @@ def test_the_old_paths_still_refuse_exactly_as_they_did(croot, adjudication):
         PC.assert_not_holdout(DRAWN, what="shard build", root=croot)
     assert "registered holdout units" in str(excinfo.value)
 
-    # ... and it still refuses AFTER an adjudication read has happened.
+    # It still refuses after an adjudication read has happened.
     _read(croot)
     with pytest.raises(PC.CustodyViolation):
         PC.assert_not_holdout(DRAWN, what="shard build", root=croot)
 
 
-# -- no code path can enumerate a population (A3 P8) -----------------------
+# -- no code path can enumerate a population ----
 
 
 def test_the_adjudication_read_has_no_population_enumerating_call_shape():
-    """P8 as a construction proof, not an assertion.
-
-    The signature is inspected: the ONLY unit-selecting parameter is the
-    identity list, it is positional, it has no default, and every other
-    parameter is keyword-only so no caller can pass a population by position.
-    """
+    """The signature itself rules out asking for a population: the only
+    unit-selecting parameter is a positional identity list with no default, and
+    everything else is keyword-only."""
 
     import inspect
 
@@ -952,7 +912,7 @@ def test_the_adjudication_read_has_no_population_enumerating_call_shape():
 
 
 def test_the_adjudication_read_body_calls_no_enumeration_primitive():
-    """The entry point may stream one file; it may not enumerate anything."""
+    """The entry point may stream one file but calls nothing that enumerates."""
 
     import ast
 
@@ -991,8 +951,7 @@ def test_the_adjudication_read_refuses_every_shape_that_means_everything(
         ("unit-000", "no call shape that means 'every unit'"),
         (DRAWN + [DRAWN[0]], "repeats an identifier"),
         ([""], "non-empty string"),
-        # a store path where the identity list goes: the shape that would hand
-        # the whole store to the reader
+        # A store path where the identity list belongs would hand over everything.
         (Path("units.jsonl"), "materialised list, tuple or set"),
         ((unit for unit in DRAWN), "materialised list, tuple or set"),
     ):
@@ -1003,7 +962,7 @@ def test_the_adjudication_read_refuses_every_shape_that_means_everything(
 
 def test_the_adjudication_read_never_materialises_an_unnamed_record(
         croot, adjudication, monkeypatch):
-    """Measured, not asserted: selection happens on the identifier."""
+    """Only the named records are deserialized; selection happens on the id."""
 
     seen: list[str] = []
     real_loads = json.loads
@@ -1033,7 +992,7 @@ def test_the_adjudication_read_opens_the_unit_store_exactly_once(
     assert opened.count(str(adjudication)) == 1, opened
 
 
-# -- membership, and the impossibility of reading both partitions ----------
+# -- membership, and never two partitions at once ----
 
 
 def test_an_identity_outside_the_partition_is_refused(croot, adjudication):
@@ -1050,7 +1009,7 @@ def test_an_identity_outside_the_partition_is_refused(croot, adjudication):
 
 
 def test_one_call_cannot_reach_two_partitions(croot, adjudication):
-    """Both partitions are readable, one at a time, never together."""
+    """Each partition is readable on its own, never both in one call."""
 
     assert set(_read(croot, DRAWN)) == set(DRAWN)
     assert set(_read(croot, OUTSIDE,
@@ -1117,19 +1076,19 @@ def test_a_directory_store_is_refused(tmp_path, croot):
         assert "is an opening by another name" in str(excinfo.value)
         assert stat.S_IMODE(tree.stat().st_mode) == PC.SEALED_DIR_MODE
     finally:
-        # leave nothing pytest's tmp reaper cannot remove
+        # Restore the mode so the temp directory can be cleaned up.
         os.chmod(tree, 0o755)
 
 
-# -- the one-shot lock is A8's, and the adjudication read does not spend it
+# -- the one-shot lock belongs to the opening, and the read does not spend it
 
 
 def test_the_adjudication_read_does_not_consume_the_one_shot_lock(
         croot, adjudication):
-    """A8: the lock guards the sealed store's OPENING, not its adjudication.
+    """The lock guards the opening, not the adjudication read.
 
-    The demonstration is in three parts, because only the third proves the
-    lock was still there to be taken.
+    Three parts: the lock starts free, reads leave it free, and an opening can
+    still take it afterwards.
     """
 
     lock = PC.OneShotLock(PC.custody_root(croot), "V3_UNIT_STORE")
@@ -1168,7 +1127,7 @@ def test_the_adjudication_read_records_the_lock_it_did_not_take(
     assert record["detail"]["one_shot_lock_consumed_by_this_read"] is False
 
 
-# -- the first-access log distinguishes the two event classes ---------------
+# -- the log tells the two kinds of access apart ----
 
 
 def test_the_log_distinguishes_an_adjudication_read_from_an_opening(
@@ -1213,7 +1172,7 @@ def test_an_adjudication_read_is_not_reported_as_an_opening(croot,
 
 def test_the_observer_never_says_no_about_an_adjudication_read_over_a_broken_log(
         croot, adjudication):
-    """The tri-state holds for the new question exactly as for the old one."""
+    """A broken log makes the adjudication answer UNKNOWN, never NO."""
 
     _read(croot)
     log = PC.custody_root(croot).access_log
@@ -1270,7 +1229,7 @@ def test_a_broken_log_blocks_the_adjudication_read(croot, adjudication):
     assert stat.S_IMODE(adjudication.stat().st_mode) == PC.SEALED_MODE
 
 
-# -- the adjudication's own prerequisite gate ------------------------------
+# -- the adjudication's own prerequisite gate ----
 
 
 def test_a_false_adjudication_prerequisite_refuses_and_is_recorded(
@@ -1312,7 +1271,7 @@ def test_a_refused_membership_is_recorded_before_it_is_raised(croot,
     assert not any(unit in json.dumps(denied) for unit in UNITS)
 
 
-# -- pinning, partial authorisation and the close record -------------------
+# -- pinning, partial authorisation, and the close record ----
 
 
 def test_a_mismatched_identity_pin_is_refused_before_anything_is_touched(
@@ -1367,12 +1326,9 @@ def test_the_close_record_reports_a_completed_read(croot, adjudication):
 
 
 # ---------------------------------------------------------------------------
-# FINDING-3: an exposure record may commit to its units instead of naming them
-#
-# The defect bites exactly when adjudication starts: recording the SHARDED
-# exposure of a holdout partition in the plaintext form republishes into the
-# shared ledger the membership that LEDGER_EXPOSURE_REPAIR.json blinded the
-# registration to withhold.
+# An exposure record may commit to its units instead of naming them, so that
+# recording an exposure does not republish the membership the registration
+# withheld.
 # ---------------------------------------------------------------------------
 
 
@@ -1399,11 +1355,8 @@ def test_a_blinded_exposure_does_not_publish_the_exposed_identities(croot):
 
 
 def test_the_unblinded_exposure_still_names_its_units(croot):
-    """The positive control: without it, the blinded form proves nothing.
-
-    A blinded record that hid nothing because the plaintext form hid it too
-    would pass every test above.
-    """
+    """The plaintext form does name its units, which is what makes the blinded
+    form worth testing."""
 
     PC.declare_ledger_scope("V3", note="test corpus", root=croot)
     record = PC.record_exposure("SHARDED", DRAWN, corpus_id="V3", root=croot)
@@ -1416,11 +1369,8 @@ def test_the_unblinded_exposure_still_names_its_units(croot):
 
 
 def test_a_blinded_exposure_still_makes_a_unit_ineligible(croot):
-    """The capability the blinding must not cost.
-
-    If a blinded SHARDED record read as silence, the blinding would have bought
-    disclosure hygiene by disabling the predicate it feeds.
-    """
+    """Blinding an exposure must not turn it into silence: the unit is still
+    ineligible afterwards."""
 
     PC.declare_ledger_scope("V3", note="test corpus", root=croot)
     PC.register_holdout_units(PARTITION, DRAWN, corpus_id="V3", blinded=True,
@@ -1468,7 +1418,7 @@ def test_a_partition_scoped_exposure_may_not_be_recorded_in_plaintext(croot):
 
 def test_the_exposure_commitment_resolves_under_the_registration_salt(croot):
     """One salt per partition, so a registration and an exposure commit to the
-    same identities and either can be tested against the other."""
+    same identities and either can be checked against the other."""
 
     PC.declare_ledger_scope("V3", note="test corpus", root=croot)
     registration = PC.register_holdout_units(PARTITION, DRAWN, corpus_id="V3",
@@ -1480,7 +1430,7 @@ def test_the_exposure_commitment_resolves_under_the_registration_salt(croot):
 
 
 # ---------------------------------------------------------------------------
-# FINDING-2: the seal registry is held at the ledger's mode, on every write
+# The seal registry is held at the ledger's mode on every write
 # ---------------------------------------------------------------------------
 
 
@@ -1498,9 +1448,8 @@ def test_the_seal_registry_is_not_world_readable(croot, store):
 
 def test_the_seal_registry_mode_is_repaired_on_an_existing_file(tmp_path,
                                                                 croot, store):
-    """O_CREAT's mode is ignored once the file exists, which is how a registry
-    created at 0644 stays 0644 forever.  Creation-time mode is not
-    enforcement; the writer has to re-apply it on every append."""
+    """O_CREAT's mode is ignored once the file exists, so the writer re-applies
+    it on every append."""
 
     second = tmp_path / "second.jsonl"
     second.write_text(_row("unit-100") + "\n")
@@ -1520,8 +1469,8 @@ def test_the_seal_registry_mode_is_repaired_on_an_existing_file(tmp_path,
 
 
 def test_the_append_writer_cannot_forget_the_mode():
-    """FINDING-2's root cause was a default: two call sites named the mode and
-    the third inherited 0o644.  A required parameter cannot be inherited."""
+    """The mode is a required keyword-only parameter, so no call site can inherit
+    a permissive default."""
 
     import inspect
 

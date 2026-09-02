@@ -1,18 +1,15 @@
-"""Historical analogue substrate — bounded, structural, never a forecast.
+"""Historical analogues: structural comparison, never a forecast.
 
-An episode is evidence-bound structured history: actors, ordered events,
-institutional setting, mechanism, constraints and outcome, each carried by
-claims. Retrieval compares a current situation (a theme, impact path or
-hypothesis) to episodes on EXPLICIT structural dimensions — actor overlap,
-event-type structure, temporal sequence, institutional setting, declared
-constraints — never on opaque text similarity alone. Every retrieved
-analogue exposes what matched, what did not, and its transfer risks; the
-record has no forecast field, so similar structure cannot silently become
-expected outcome.
+An episode is evidence-bound structured history — actors, ordered events,
+setting, mechanism, constraints and outcome, each carried by claims. Retrieval
+compares a situation to episodes on explicit structural dimensions rather than
+on text similarity, and every analogue exposes what matched, what did not, and
+its transfer risks. The record has no forecast field, so similar structure
+cannot become expected outcome.
 """
 from __future__ import annotations
 
-from typing import Any, Iterable, Mapping
+from typing import Any
 
 from argus.source_intelligence.models import digest_id
 
@@ -31,7 +28,7 @@ def record_episode(ctx: AnalyticContext, *, title: str, summary: str,
                    claim_ids: tuple[str, ...],
                    valid_from: str | None = None, valid_to: str | None = None,
                    caused_by: str = "") -> dict[str, Any]:
-    """Record one evidence-bound historical episode (idempotent by title)."""
+    """Record one evidence-bound historical episode, idempotent by title."""
     store = ctx.store
     episode_id = digest_id("episode", title)
     existing = store.current_analytics("historical_episode").get(episode_id)
@@ -83,7 +80,7 @@ def record_episode(ctx: AnalyticContext, *, title: str, summary: str,
 
 def _query_structure(store: AnalyticStore, query_kind: str,
                      query_id: str) -> dict[str, Any] | None:
-    """The structural fingerprint of the situation under analysis."""
+    """The situation's structure: its entities, event types and claims."""
     record = store.current_analytics(query_kind).get(query_id) \
         if query_kind in ("analytic_theme", "impact_path") else None
     hypothesis = store.current_hypotheses().get(query_id) \
@@ -107,7 +104,7 @@ def _query_structure(store: AnalyticStore, query_kind: str,
         entity_ids = set()
         event_types = []
         claim_ids = tuple(hypothesis["supporting_claim_ids"])
-    # entities referenced by the query's claims count toward actor structure
+    # entities named by the situation's claims count toward its actor structure
     claims = store.current_claims()
     for claim_id in claim_ids:
         claim = claims.get(claim_id)
@@ -123,10 +120,10 @@ def retrieve_analogues(ctx: AnalyticContext, *, query_kind: str, query_id: str,
                        min_matches: int = 1) -> list[dict[str, Any]]:
     """Retrieve structural analogues for a situation from the episode corpus.
 
-    Deterministic and explained: each analogue records per-dimension matches
-    with their evidence, per-dimension mismatches, and transfer risks derived
-    from the mismatches plus the standing caveat that structure is not
-    destiny. Returns typed failure when the query has no structure."""
+    Each analogue records its per-dimension matches with their evidence, its
+    mismatches, and the transfer risks those imply. Returns a typed failure when
+    the situation has no structure to compare.
+    """
     store = ctx.store
     structure = _query_structure(store, query_kind, query_id)
     if structure is None:
@@ -170,7 +167,7 @@ def retrieve_analogues(ctx: AnalyticContext, *, query_kind: str, query_id: str,
                 basis_ids=()))
 
         if len(shared_types) >= 2:
-            # sequence comparison only means something over shared vocabulary
+            # order only means something over the event types both share
             situation_seq = [t for t in structure["event_types"] if t in shared_types]
             episode_seq = [t for t in episode_event_types if t in shared_types]
             if situation_seq == episode_seq:
@@ -236,6 +233,7 @@ def explain_analogue(store: AnalyticStore, analogue_id: str) -> dict[str, Any]:
         return {"analogue_id": analogue_id, "status": "UNKNOWN_ANALOGUE"}
     episode = store.current_analytics("historical_episode").get(
         analogue["episode_id"], {})
+    claims = store.current_claims()
     return {
         "analogue_id": analogue_id,
         "situation": f"{analogue['query_kind']}:{analogue['query_id']}",
@@ -252,6 +250,6 @@ def explain_analogue(store: AnalyticStore, analogue_id: str) -> dict[str, Any]:
         "authority": analogue["authority"],
         "status": analogue["status"],
         "episode_evidence": [
-            store.current_claims().get(claim_id, {}).get("statement", claim_id)
+            claims.get(claim_id, {}).get("statement", claim_id)
             for claim_id in episode.get("claim_ids", ())[:8]],
     }

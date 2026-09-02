@@ -1,9 +1,8 @@
-"""Operational record contracts for the mission-data fabric.
+"""Record contracts for the mission-data fabric.
 
-Write-path discipline: records are constructed as frozen dataclasses (which
-validate), serialized once via `to_record()`, and appended to the event log.
-Read paths work on the plain-dict form. Unknown stays a valid value everywhere:
-quality dimensions, times and confidences may be "UNKNOWN" or None, never
+Records are frozen dataclasses that validate on construction, serialize once
+through ``to_record()``, and are read back as plain dicts. Unknown stays a
+valid value: quality, times and confidences may be "UNKNOWN" or None, never
 silently defaulted to certainty.
 """
 from __future__ import annotations
@@ -20,12 +19,12 @@ SOURCE_TYPES = ("SYSTEM", "SENSOR", "ORGANISATION", "REPORTER", "PUBLICATION", "
 SOURCE_STATUS = ("ACTIVE", "DEGRADED", "SUSPENDED", "RETIRED")
 VALIDATION_STATES = ("VALID", "INVALID", "UNSUPPORTED_SCHEMA_VERSION", "DUPLICATE")
 OBJECT_TYPES = ("LOCATION", "INFRASTRUCTURE", "ROUTE", "ASSET", "RESOURCE_STOCK", "MOVEMENT", "ORGANISATION", "OPERATIONAL_CONCERN", "OBSERVATION", "PLAN",
-                # V6 world-model extension: universal evidence-bound entity classes
+                # Evidence-bound entity classes shared with the semantic plane.
                 "PERSON", "GROUP", "WEB_DOMAIN", "INTELLECTUAL_WORK", "PUBLIC_IDENTIFIER")
 LIFECYCLES = ("PROPOSED", "ACTIVE", "SUPERSEDED", "RETIRED", "QUARANTINED")
 EPISTEMIC_STATES = ("OBSERVED", "REPORTED", "EXTRACTED", "INFERRED", "PREDICTED", "PLANNED", "DISPUTED", "CANCELLED", "CORRECTED", "UNKNOWN")
 RELATION_TYPES = ("LOCATED_AT", "MOVING_ALONG", "SUPPLIES", "DEPENDS_ON", "REPORTS_ON", "DERIVED_FROM", "CONFLICTS_WITH", "PLANNED_FOR", "AFFECTS", "REPLACES", "ASSOCIATED_WITH", "POSSIBLY_SAME_AS", "SAME_AS", "ALTERNATE_OF",
-                  # V6 world-model extension: compact typed predicates for the semantic plane
+                  # Typed predicates shared with the semantic plane.
                   "HOLDS_ROLE", "OWNS", "PUBLISHED_BY", "OPERATES", "SUCCESSOR_OF", "HAS_IDENTIFIER", "MENTIONS")
 RELATION_STATUS = ("PROPOSED", "ACTIVE", "REJECTED", "RETIRED")
 DERIVATIONS = ("MAPPING", "RULE", "MODEL", "ANALYST", "EVIDENCE")
@@ -42,8 +41,7 @@ RECOMMENDATION_KINDS = ("INFORMATION_REQUEST", "SOURCE_INSPECTION", "ROUTE_CHANG
 ACCREDITATION_STATES = ("SYNTHETIC_EVALUATION_ONLY", "UNACCREDITED")
 PROPOSAL_TYPES = ("ALERT_CANDIDATE", "ASSOCIATION_CANDIDATE", "ASSESSMENT", "RELATIONSHIP_CANDIDATE",
                   "STATE_CANDIDATE", "RECOMMENDATION_CANDIDATE",
-                  # V6 analytical layer: model-proposed theme/narrative/stakeholder/
-                  # impact candidates awaiting explicit human acceptance
+                  # Model-proposed analytical candidates awaiting human acceptance.
                   "ANALYTICAL_OBJECT_CANDIDATE")
 PROPOSAL_STATUS = ("PROPOSED", "ACCEPTED", "REJECTED")
 QUALITY_DIMENSIONS = ("schema_validity", "completeness", "freshness", "temporal_precision", "geospatial_precision",
@@ -89,25 +87,38 @@ class Record:
 @dataclass(frozen=True)
 class ExternalRef(Record):
     RECORD_TYPE = "external_ref"
-    system: str; external_id: str; imported_version: str; ingestion_id: str
-    source_time: str | None = None; sync_status: str = "UNKNOWN"
-    # entity identities (registry ids) bear on association; report identities
-    # (sighting/report numbers) do not — two reports from one system may still
-    # describe one entity.
+    system: str
+    external_id: str
+    imported_version: str
+    ingestion_id: str
+    source_time: str | None = None
+    sync_status: str = "UNKNOWN"
+    # A registry id says two records are the same entity; a report or sighting
+    # number does not, since one system may report one entity twice.
     identity_bearing: bool = True
 
     def __post_init__(self):
-        _member(self.sync_status, SYNC_STATES, "sync status"); require_aware_or_none(self.source_time)
+        _member(self.sync_status, SYNC_STATES, "sync status")
+        require_aware_or_none(self.source_time)
 
 
 @dataclass(frozen=True)
 class EvidenceRef(Record):
-    """Evidentiary provenance carried from ARGUS Source Intelligence, unstripped."""
+    """Evidentiary provenance carried over from ARGUS with nothing dropped."""
     RECORD_TYPE = "evidence_ref"
-    source_object_id: str; document_id: str; content_sha256: str; assertion_id: str
-    evidence_basis_id: str; identity_status: str; authority_state: str; independence_status: str
-    claim_basis_status: str; review_state: str; mapping_status: str
-    dependence_group_id: str | None = None; unresolved: tuple[str, ...] = ()
+    source_object_id: str
+    document_id: str
+    content_sha256: str
+    assertion_id: str
+    evidence_basis_id: str
+    identity_status: str
+    authority_state: str
+    independence_status: str
+    claim_basis_status: str
+    review_state: str
+    mapping_status: str
+    dependence_group_id: str | None = None
+    unresolved: tuple[str, ...] = ()
 
     def __post_init__(self):
         require_sha256(self.content_sha256)
@@ -116,8 +127,11 @@ class EvidenceRef(Record):
 @dataclass(frozen=True)
 class ProvenanceSummary(Record):
     RECORD_TYPE = "provenance_summary"
-    mode: str; source_ids: tuple[str, ...] = (); ingestion_ids: tuple[str, ...] = ()
-    transformation_ids: tuple[str, ...] = (); evidence: tuple[EvidenceRef, ...] = ()
+    mode: str
+    source_ids: tuple[str, ...] = ()
+    ingestion_ids: tuple[str, ...] = ()
+    transformation_ids: tuple[str, ...] = ()
+    evidence: tuple[EvidenceRef, ...] = ()
 
     def __post_init__(self):
         _member(self.mode, PROVENANCE_MODES, "provenance mode")
@@ -128,27 +142,50 @@ class ProvenanceSummary(Record):
 @dataclass(frozen=True)
 class SourceRecord(Record):
     RECORD_TYPE = "source"
-    source_id: str; source_type: str; source_system: str; external_id: str
-    operator: str; authority: str; reliability: dict[str, Any]; marking: Marking
-    status: str; note: str; created_time: str
+    source_id: str
+    source_type: str
+    source_system: str
+    external_id: str
+    operator: str
+    authority: str
+    reliability: dict[str, Any]
+    marking: Marking
+    status: str
+    note: str
+    created_time: str
 
     def __post_init__(self):
-        _member(self.source_type, SOURCE_TYPES, "source type"); _member(self.status, SOURCE_STATUS, "source status")
+        _member(self.source_type, SOURCE_TYPES, "source type")
+        _member(self.status, SOURCE_STATUS, "source status")
         require_aware(self.created_time)
 
 
 @dataclass(frozen=True)
 class IngestionEvent(Record):
     RECORD_TYPE = "ingestion"
-    ingestion_id: str; connector_id: str; connector_version: str; source_id: str
-    source_time: str | None; received_time: str; content_sha256: str
-    schema_id: str; schema_version: str; idempotency_key: str; validation: str
-    quarantined: bool; quarantine_reasons: tuple[str, ...]; duplicate_of: str | None
-    late: bool; payload_ref: str | None; marking: Marking
+    ingestion_id: str
+    connector_id: str
+    connector_version: str
+    source_id: str
+    source_time: str | None
+    received_time: str
+    content_sha256: str
+    schema_id: str
+    schema_version: str
+    idempotency_key: str
+    validation: str
+    quarantined: bool
+    quarantine_reasons: tuple[str, ...]
+    duplicate_of: str | None
+    late: bool
+    payload_ref: str | None
+    marking: Marking
 
     def __post_init__(self):
         _member(self.validation, VALIDATION_STATES, "validation state")
-        require_aware(self.received_time); require_aware_or_none(self.source_time); require_sha256(self.content_sha256)
+        require_aware(self.received_time)
+        require_aware_or_none(self.source_time)
+        require_sha256(self.content_sha256)
         if self.quarantined and not self.quarantine_reasons:
             raise ValueError("quarantine requires reasons")
 
@@ -156,13 +193,22 @@ class IngestionEvent(Record):
 @dataclass(frozen=True)
 class TransformationRecord(Record):
     RECORD_TYPE = "transformation"
-    transformation_id: str; implementation_id: str; implementation_version: str
-    mapping_id: str; mapping_version: str
-    input_refs: tuple[dict[str, Any], ...]; output_refs: tuple[dict[str, Any], ...]
-    actor: str; time: str; warnings: tuple[str, ...]; lossy_operations: tuple[str, ...]; validation: str
+    transformation_id: str
+    implementation_id: str
+    implementation_version: str
+    mapping_id: str
+    mapping_version: str
+    input_refs: tuple[dict[str, Any], ...]
+    output_refs: tuple[dict[str, Any], ...]
+    actor: str
+    time: str
+    warnings: tuple[str, ...]
+    lossy_operations: tuple[str, ...]
+    validation: str
 
     def __post_init__(self):
-        _member(self.validation, VALIDATION_STATES, "validation state"); require_aware(self.time)
+        _member(self.validation, VALIDATION_STATES, "validation state")
+        require_aware(self.time)
         for ref in (*self.input_refs, *self.output_refs):
             if "kind" not in ref or "ref" not in ref:
                 raise ValueError("transformation refs need kind and ref")
@@ -171,16 +217,32 @@ class TransformationRecord(Record):
 @dataclass(frozen=True)
 class ObjectVersion(Record):
     RECORD_TYPE = "object_version"
-    object_id: str; version: int; object_type: str; lifecycle: str
-    labels: tuple[str, ...]; external_refs: tuple[ExternalRef, ...]
-    valid_from: str | None; valid_to: str | None; source_time: str | None; time_precision: str
-    recorded_time: str; geometry: Geometry | None; attributes: dict[str, Any]
-    quality: dict[str, Any]; epistemic_state: str; marking: Marking; provenance: ProvenanceSummary
-    correction_of: str | None = None; correction_reason: str = ""; supersedes_version: int | None = None
+    object_id: str
+    version: int
+    object_type: str
+    lifecycle: str
+    labels: tuple[str, ...]
+    external_refs: tuple[ExternalRef, ...]
+    valid_from: str | None
+    valid_to: str | None
+    source_time: str | None
+    time_precision: str
+    recorded_time: str
+    geometry: Geometry | None
+    attributes: dict[str, Any]
+    quality: dict[str, Any]
+    epistemic_state: str
+    marking: Marking
+    provenance: ProvenanceSummary
+    correction_of: str | None = None
+    correction_reason: str = ""
+    supersedes_version: int | None = None
 
     def __post_init__(self):
-        _member(self.object_type, OBJECT_TYPES, "object type"); _member(self.lifecycle, LIFECYCLES, "lifecycle")
-        _member(self.epistemic_state, EPISTEMIC_STATES, "epistemic state"); _member(self.time_precision, TIME_PRECISIONS, "time precision")
+        _member(self.object_type, OBJECT_TYPES, "object type")
+        _member(self.lifecycle, LIFECYCLES, "lifecycle")
+        _member(self.epistemic_state, EPISTEMIC_STATES, "epistemic state")
+        _member(self.time_precision, TIME_PRECISIONS, "time precision")
         require_aware(self.recorded_time)
         for value in (self.valid_from, self.valid_to, self.source_time):
             require_aware_or_none(value)
@@ -198,16 +260,29 @@ class ObjectVersion(Record):
 @dataclass(frozen=True)
 class RelationshipVersion(Record):
     RECORD_TYPE = "relationship_version"
-    relationship_id: str; version: int; relation_type: str
-    source_object_id: str; target_object_id: str
-    valid_from: str | None; valid_to: str | None; recorded_time: str
-    evidence_refs: tuple[str, ...]; derivation: str; confidence: float | str
-    status: str; marking: Marking; provenance: ProvenanceSummary; rationale: str = ""
+    relationship_id: str
+    version: int
+    relation_type: str
+    source_object_id: str
+    target_object_id: str
+    valid_from: str | None
+    valid_to: str | None
+    recorded_time: str
+    evidence_refs: tuple[str, ...]
+    derivation: str
+    confidence: float | str
+    status: str
+    marking: Marking
+    provenance: ProvenanceSummary
+    rationale: str = ""
 
     def __post_init__(self):
-        _member(self.relation_type, RELATION_TYPES, "relation type"); _member(self.derivation, DERIVATIONS, "derivation")
-        _member(self.status, RELATION_STATUS, "relation status"); require_aware(self.recorded_time)
-        require_aware_or_none(self.valid_from); require_aware_or_none(self.valid_to)
+        _member(self.relation_type, RELATION_TYPES, "relation type")
+        _member(self.derivation, DERIVATIONS, "derivation")
+        _member(self.status, RELATION_STATUS, "relation status")
+        require_aware(self.recorded_time)
+        require_aware_or_none(self.valid_from)
+        require_aware_or_none(self.valid_to)
         if isinstance(self.confidence, str) and self.confidence != "UNKNOWN":
             raise ValueError("confidence is a float or 'UNKNOWN'")
         if self.version < 1:
@@ -217,17 +292,26 @@ class RelationshipVersion(Record):
 @dataclass(frozen=True)
 class ActivityRecord(Record):
     RECORD_TYPE = "activity"
-    activity_id: str; activity_type: str; epistemic_state: str
-    subject_ids: tuple[str, ...]; description: str
-    valid_from: str | None; valid_to: str | None; source_time: str | None
-    recorded_time: str; evidence_refs: tuple[str, ...]; marking: Marking; provenance: ProvenanceSummary
-    # V6 world-model extension: events carry role-typed participants and a
-    # bounded time precision; defaults keep every pre-extension record valid.
+    activity_id: str
+    activity_type: str
+    epistemic_state: str
+    subject_ids: tuple[str, ...]
+    description: str
+    valid_from: str | None
+    valid_to: str | None
+    source_time: str | None
+    recorded_time: str
+    evidence_refs: tuple[str, ...]
+    marking: Marking
+    provenance: ProvenanceSummary
+    # Events carry role-typed participants and a bounded time precision; the
+    # defaults keep older records valid.
     participants: tuple[tuple[str, str], ...] = ()  # (object_id, role)
     time_precision: str = "UNKNOWN"
 
     def __post_init__(self):
-        _member(self.epistemic_state, EPISTEMIC_STATES, "epistemic state"); require_aware(self.recorded_time)
+        _member(self.epistemic_state, EPISTEMIC_STATES, "epistemic state")
+        require_aware(self.recorded_time)
         _member(self.time_precision, TIME_PRECISIONS, "time precision")
         for value in (self.valid_from, self.valid_to, self.source_time):
             require_aware_or_none(value)
@@ -236,12 +320,20 @@ class ActivityRecord(Record):
 @dataclass(frozen=True)
 class AssociationProposal(Record):
     RECORD_TYPE = "association_proposal"
-    proposal_id: str; left_object_id: str; right_object_id: str; object_type: str
-    features: dict[str, Any]; outcome: str; rationale: tuple[str, ...]
-    engine_version: str; recorded_time: str; marking: Marking
+    proposal_id: str
+    left_object_id: str
+    right_object_id: str
+    object_type: str
+    features: dict[str, Any]
+    outcome: str
+    rationale: tuple[str, ...]
+    engine_version: str
+    recorded_time: str
+    marking: Marking
 
     def __post_init__(self):
-        _member(self.outcome, ASSOCIATION_OUTCOMES, "association outcome"); require_aware(self.recorded_time)
+        _member(self.outcome, ASSOCIATION_OUTCOMES, "association outcome")
+        require_aware(self.recorded_time)
         if self.left_object_id == self.right_object_id:
             raise ValueError("association requires two distinct objects")
 
@@ -249,24 +341,42 @@ class AssociationProposal(Record):
 @dataclass(frozen=True)
 class AssociationResolution(Record):
     RECORD_TYPE = "association_resolution"
-    resolution_id: str; proposal_id: str; resolution: str
-    actor_id: str; actor_kind: str; rationale: str; recorded_time: str; marking: Marking
+    resolution_id: str
+    proposal_id: str
+    resolution: str
+    actor_id: str
+    actor_kind: str
+    rationale: str
+    recorded_time: str
+    marking: Marking
 
     def __post_init__(self):
         _member(self.resolution, ASSOCIATION_RESOLUTIONS, "association resolution")
-        _member(self.actor_kind, ACTOR_KINDS, "actor kind"); require_aware(self.recorded_time)
+        _member(self.actor_kind, ACTOR_KINDS, "actor kind")
+        require_aware(self.recorded_time)
 
 
 @dataclass(frozen=True)
 class Alert(Record):
     RECORD_TYPE = "alert"
-    alert_id: str; rule_id: str; rule_version: str; trigger: str
-    affected_ids: tuple[str, ...]; evidence_refs: tuple[str, ...]; quality_note: str
-    severity: str; severity_rationale: str; dedup_key: str
-    expiry_condition: str; recorded_time: str; marking: Marking; status: str = "OPEN"
+    alert_id: str
+    rule_id: str
+    rule_version: str
+    trigger: str
+    affected_ids: tuple[str, ...]
+    evidence_refs: tuple[str, ...]
+    quality_note: str
+    severity: str
+    severity_rationale: str
+    dedup_key: str
+    expiry_condition: str
+    recorded_time: str
+    marking: Marking
+    status: str = "OPEN"
 
     def __post_init__(self):
-        _member(self.severity, SEVERITIES, "severity"); _member(self.status, ALERT_STATUS, "alert status")
+        _member(self.severity, SEVERITIES, "severity")
+        _member(self.status, ALERT_STATUS, "alert status")
         require_aware(self.recorded_time)
         if not self.evidence_refs:
             raise ValueError("alerts must be evidence-bound")
@@ -275,28 +385,51 @@ class Alert(Record):
 @dataclass(frozen=True)
 class AlertTransition(Record):
     RECORD_TYPE = "alert_transition"
-    transition_id: str; alert_id: str; from_status: str; to_status: str
-    actor_id: str; actor_kind: str; note: str; recorded_time: str; marking: Marking
+    transition_id: str
+    alert_id: str
+    from_status: str
+    to_status: str
+    actor_id: str
+    actor_kind: str
+    note: str
+    recorded_time: str
+    marking: Marking
 
     def __post_init__(self):
-        _member(self.from_status, ALERT_STATUS, "alert status"); _member(self.to_status, ALERT_STATUS, "alert status")
-        _member(self.actor_kind, ACTOR_KINDS, "actor kind"); require_aware(self.recorded_time)
+        _member(self.from_status, ALERT_STATUS, "alert status")
+        _member(self.to_status, ALERT_STATUS, "alert status")
+        _member(self.actor_kind, ACTOR_KINDS, "actor kind")
+        require_aware(self.recorded_time)
 
 
 @dataclass(frozen=True)
 class Recommendation(Record):
     RECORD_TYPE = "recommendation"
-    recommendation_id: str; alert_ids: tuple[str, ...]; action_kind: str; proposed_action: str
-    rationale: str; assumptions: tuple[str, ...]; alternatives: tuple[str, ...]
-    evidence_refs: tuple[str, ...]; evidence_snapshot_hash: str; uncertainty: str
-    expected_benefit: str; potential_risk: str; expiry: str | None
-    required_role: str; provider_id: str; recorded_time: str; marking: Marking
+    recommendation_id: str
+    alert_ids: tuple[str, ...]
+    action_kind: str
+    proposed_action: str
+    rationale: str
+    assumptions: tuple[str, ...]
+    alternatives: tuple[str, ...]
+    evidence_refs: tuple[str, ...]
+    evidence_snapshot_hash: str
+    uncertainty: str
+    expected_benefit: str
+    potential_risk: str
+    expiry: str | None
+    required_role: str
+    provider_id: str
+    recorded_time: str
+    marking: Marking
 
     def __post_init__(self):
         _member(self.action_kind, RECOMMENDATION_KINDS, "recommendation kind")
         if self.required_role not in ROLE_RANK:
             raise ValueError(f"unknown required role: {self.required_role}")
-        require_aware(self.recorded_time); require_aware_or_none(self.expiry); require_sha256(self.evidence_snapshot_hash)
+        require_aware(self.recorded_time)
+        require_aware_or_none(self.expiry)
+        require_sha256(self.evidence_snapshot_hash)
         if not self.evidence_refs:
             raise ValueError("recommendations must be evidence-bound")
 
@@ -304,35 +437,63 @@ class Recommendation(Record):
 @dataclass(frozen=True)
 class AnalystAction(Record):
     RECORD_TYPE = "analyst_action"
-    action_id: str; actor_id: str; actor_kind: str; actor_roles: tuple[str, ...]
-    kind: str; subject_kind: str; subject_id: str; note: str; recorded_time: str; marking: Marking
+    action_id: str
+    actor_id: str
+    actor_kind: str
+    actor_roles: tuple[str, ...]
+    kind: str
+    subject_kind: str
+    subject_id: str
+    note: str
+    recorded_time: str
+    marking: Marking
 
     def __post_init__(self):
         _member(self.kind, ANALYST_ACTION_KINDS, "analyst action kind")
-        _member(self.actor_kind, ACTOR_KINDS, "actor kind"); require_aware(self.recorded_time)
+        _member(self.actor_kind, ACTOR_KINDS, "actor kind")
+        require_aware(self.recorded_time)
 
 
 @dataclass(frozen=True)
 class DecisionRecord(Record):
     RECORD_TYPE = "decision"
-    decision_id: str; recommendation_id: str; actor_id: str; actor_role: str
-    state: str; modification: str; rationale: str; evidence_snapshot_hash: str
-    recorded_time: str; marking: Marking
+    decision_id: str
+    recommendation_id: str
+    actor_id: str
+    actor_role: str
+    state: str
+    modification: str
+    rationale: str
+    evidence_snapshot_hash: str
+    recorded_time: str
+    marking: Marking
 
     def __post_init__(self):
         _member(self.state, DECISION_STATES, "decision state")
         if self.actor_role not in ROLE_RANK:
             raise ValueError(f"unknown role: {self.actor_role}")
-        require_aware(self.recorded_time); require_sha256(self.evidence_snapshot_hash)
+        require_aware(self.recorded_time)
+        require_sha256(self.evidence_snapshot_hash)
 
 
 @dataclass(frozen=True)
 class ModelPackage(Record):
     RECORD_TYPE = "model_package"
-    model_id: str; version: str; provider: str; task: str
-    input_schema_id: str; output_schema_id: str; training_data: str; evaluation_summary: str
-    limitations: tuple[str, ...]; approved_uses: tuple[str, ...]; prohibited_uses: tuple[str, ...]
-    latency_profile: str; hardware: str; licence: str; accreditation_state: str
+    model_id: str
+    version: str
+    provider: str
+    task: str
+    input_schema_id: str
+    output_schema_id: str
+    training_data: str
+    evaluation_summary: str
+    limitations: tuple[str, ...]
+    approved_uses: tuple[str, ...]
+    prohibited_uses: tuple[str, ...]
+    latency_profile: str
+    hardware: str
+    licence: str
+    accreditation_state: str
     integrity_hash: str = ""
 
     def __post_init__(self):
@@ -352,39 +513,68 @@ def model_integrity_hash(package: ModelPackage) -> str:
 @dataclass(frozen=True)
 class AccreditationRecord(Record):
     RECORD_TYPE = "accreditation"
-    accreditation_id: str; model_id: str; model_version: str; evaluator: str
-    protocol: str; dataset: str; domain: str; metrics: dict[str, Any]
-    robustness_checks: tuple[str, ...]; security_checks: tuple[str, ...]
-    known_failure_modes: tuple[str, ...]; expires: str | None
-    approval_state: str; restrictions: tuple[str, ...]; recorded_time: str
+    accreditation_id: str
+    model_id: str
+    model_version: str
+    evaluator: str
+    protocol: str
+    dataset: str
+    domain: str
+    metrics: dict[str, Any]
+    robustness_checks: tuple[str, ...]
+    security_checks: tuple[str, ...]
+    known_failure_modes: tuple[str, ...]
+    expires: str | None
+    approval_state: str
+    restrictions: tuple[str, ...]
+    recorded_time: str
 
     def __post_init__(self):
         _member(self.approval_state, ACCREDITATION_STATES, "approval state")
-        require_aware(self.recorded_time); require_aware_or_none(self.expires)
+        require_aware(self.recorded_time)
+        require_aware_or_none(self.expires)
 
 
 @dataclass(frozen=True)
 class InferenceRecord(Record):
     RECORD_TYPE = "inference"
-    inference_id: str; model_id: str; model_version: str
-    input_refs: tuple[str, ...]; input_hash: str; output: dict[str, Any]; output_hash: str
-    started: str; completed: str; parameters: dict[str, Any]; errors: tuple[str, ...]
-    validation: str; marking: Marking; downstream_use: tuple[str, ...] = ()
+    inference_id: str
+    model_id: str
+    model_version: str
+    input_refs: tuple[str, ...]
+    input_hash: str
+    output: dict[str, Any]
+    output_hash: str
+    started: str
+    completed: str
+    parameters: dict[str, Any]
+    errors: tuple[str, ...]
+    validation: str
+    marking: Marking
+    downstream_use: tuple[str, ...] = ()
 
     def __post_init__(self):
         _member(self.validation, VALIDATION_STATES, "validation state")
-        require_aware(self.started); require_aware(self.completed)
-        require_sha256(self.input_hash); require_sha256(self.output_hash)
+        require_aware(self.started)
+        require_aware(self.completed)
+        require_sha256(self.input_hash)
+        require_sha256(self.output_hash)
 
 
 @dataclass(frozen=True)
 class AnalyticalProposal(Record):
     RECORD_TYPE = "analytical_proposal"
-    proposal_id: str; inference_id: str; proposal_type: str
-    content: dict[str, Any]; status: str; recorded_time: str; marking: Marking
+    proposal_id: str
+    inference_id: str
+    proposal_type: str
+    content: dict[str, Any]
+    status: str
+    recorded_time: str
+    marking: Marking
 
     def __post_init__(self):
-        _member(self.proposal_type, PROPOSAL_TYPES, "proposal type"); _member(self.status, PROPOSAL_STATUS, "proposal status")
+        _member(self.proposal_type, PROPOSAL_TYPES, "proposal type")
+        _member(self.status, PROPOSAL_STATUS, "proposal status")
         require_aware(self.recorded_time)
 
 
@@ -401,13 +591,21 @@ WORKFLOW_SUBJECT_KINDS = ("requirement", "analyst_task", "evidence_request")
 @dataclass(frozen=True)
 class InformationRequirement(Record):
     RECORD_TYPE = "information_requirement"
-    requirement_id: str; mission_context: str; question: str
-    affected_ids: tuple[str, ...]; priority: str; rationale: str
-    required_evidence_type: str; owning_role: str
-    created_time: str; due_time: str | None; status: str
-    closure_criteria: str; marking: Marking
-    # V6: escalation folds re-append; strict next-version keeps a stale
-    # concurrent fold from silently de-escalating priority
+    requirement_id: str
+    mission_context: str
+    question: str
+    affected_ids: tuple[str, ...]
+    priority: str
+    rationale: str
+    required_evidence_type: str
+    owning_role: str
+    created_time: str
+    due_time: str | None
+    status: str
+    closure_criteria: str
+    marking: Marking
+    # An escalation re-appends, so requiring the next version stops a stale
+    # concurrent fold from quietly lowering the priority.
     version: int = 1
 
     def __post_init__(self):
@@ -417,7 +615,8 @@ class InformationRequirement(Record):
         _member(self.status, REQUIREMENT_STATUS, "requirement status")
         if self.owning_role not in ROLE_RANK:
             raise ValueError(f"unknown owning role: {self.owning_role}")
-        require_aware(self.created_time); require_aware_or_none(self.due_time)
+        require_aware(self.created_time)
+        require_aware_or_none(self.due_time)
         if not self.question or not self.closure_criteria:
             raise ValueError("requirements need a question and closure criteria")
 
@@ -425,46 +624,66 @@ class InformationRequirement(Record):
 @dataclass(frozen=True)
 class EvidenceRequest(Record):
     RECORD_TYPE = "evidence_request"
-    request_id: str; requirement_id: str; request_kind: str; detail: str
-    affected_ids: tuple[str, ...]; status: str
-    created_time: str; due_time: str | None; marking: Marking
+    request_id: str
+    requirement_id: str
+    request_kind: str
+    detail: str
+    affected_ids: tuple[str, ...]
+    status: str
+    created_time: str
+    due_time: str | None
+    marking: Marking
 
     def __post_init__(self):
         _member(self.request_kind, EVIDENCE_REQUEST_KINDS, "evidence request kind")
         _member(self.status, EVIDENCE_REQUEST_STATUS, "evidence request status")
-        require_aware(self.created_time); require_aware_or_none(self.due_time)
+        require_aware(self.created_time)
+        require_aware_or_none(self.due_time)
 
 
 @dataclass(frozen=True)
 class AnalystTask(Record):
     RECORD_TYPE = "analyst_task"
-    task_id: str; assigned_role: str; assigned_actor: str; task_type: str
-    affected_ids: tuple[str, ...]; required_action: str; status: str
-    created_time: str; due_time: str | None; depends_on: tuple[str, ...]
-    evidence_refs: tuple[str, ...]; completion_result: str; marking: Marking
+    task_id: str
+    assigned_role: str
+    assigned_actor: str
+    task_type: str
+    affected_ids: tuple[str, ...]
+    required_action: str
+    status: str
+    created_time: str
+    due_time: str | None
+    depends_on: tuple[str, ...]
+    evidence_refs: tuple[str, ...]
+    completion_result: str
+    marking: Marking
 
     def __post_init__(self):
-        _member(self.task_type, TASK_TYPES, "task type"); _member(self.status, TASK_STATUS, "task status")
+        _member(self.task_type, TASK_TYPES, "task type")
+        _member(self.status, TASK_STATUS, "task status")
         if self.assigned_role not in ROLE_RANK:
             raise ValueError(f"unknown assigned role: {self.assigned_role}")
-        require_aware(self.created_time); require_aware_or_none(self.due_time)
+        require_aware(self.created_time)
+        require_aware_or_none(self.due_time)
 
 
 @dataclass(frozen=True)
 class WorkflowTransition(Record):
     RECORD_TYPE = "workflow_transition"
-    transition_id: str; subject_kind: str; subject_id: str
-    from_status: str; to_status: str; actor_id: str; actor_kind: str
-    evidence_refs: tuple[str, ...]; note: str; recorded_time: str; marking: Marking
+    transition_id: str
+    subject_kind: str
+    subject_id: str
+    from_status: str
+    to_status: str
+    actor_id: str
+    actor_kind: str
+    evidence_refs: tuple[str, ...]
+    note: str
+    recorded_time: str
+    marking: Marking
 
     def __post_init__(self):
         _member(self.subject_kind, WORKFLOW_SUBJECT_KINDS, "workflow subject kind")
-        _member(self.actor_kind, ACTOR_KINDS, "actor kind"); require_aware(self.recorded_time)
+        _member(self.actor_kind, ACTOR_KINDS, "actor kind")
+        require_aware(self.recorded_time)
 
-
-RECORD_CLASSES = {cls.RECORD_TYPE: cls for cls in (
-    SourceRecord, IngestionEvent, TransformationRecord, ObjectVersion, RelationshipVersion, ActivityRecord,
-    AssociationProposal, AssociationResolution, Alert, AlertTransition, Recommendation, AnalystAction,
-    DecisionRecord, ModelPackage, AccreditationRecord, InferenceRecord, AnalyticalProposal,
-    InformationRequirement, EvidenceRequest, AnalystTask, WorkflowTransition,
-)}

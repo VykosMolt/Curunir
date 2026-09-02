@@ -1,6 +1,6 @@
-"""Shared analytical substrate: contracts lock the epistemic law, the basis
-arithmetic counts dependence honestly, transitions are idempotent history,
-and model candidates cannot promote themselves."""
+"""The shared analytic substrate: what the contracts refuse to build, how the
+basis counts related sources, that a transition is recorded once per cause, and
+that a model candidate cannot accept itself."""
 from __future__ import annotations
 
 import pytest
@@ -13,15 +13,15 @@ from curunir_analytic.contracts import (AnalogueDimension, BasisSummary,
 from curunir_analytic.substrate import (DependencyIndex, record_candidate,
                                         record_transition, resolve_candidate)
 
-from analytic_support import (GLEIF_ACME, MARK, T0, make_analytic, plant_page,
-                              statement_page)
+from analytic_support import GLEIF_ACME, MARK, T0, make_analytic, plant_page
+from semantic_support import plant_manifestation
 
 pytestmark = pytest.mark.no_db
 
 NOW = "2026-08-17T12:00:00+00:00"
 
 
-# ---- contract invariants (the epistemic law) -----------------------------
+# ---- what the contracts refuse to build -----------------------------------
 
 
 def _basis(supporting=("c1",), families=("f1",), manifestations=1):
@@ -139,15 +139,14 @@ def test_analogue_requires_transfer_risks_and_is_never_observed():
             recorded_time=NOW, marking=MARK)
 
 
-# ---- basis arithmetic over real store state -------------------------------
+# ---- basis arithmetic over store state ------------------------------------
 
 
 def test_basis_counts_derivatives_as_one_family(tmp_path):
     pipeline, ctx = make_analytic(tmp_path)
-    # the same GLEIF record retrieved twice: one origin family, reach 2
+    # The same record fetched twice: two manifestations, one origin family.
     plant_page(pipeline, url="lei/ACMELEI000000000001", body=GLEIF_ACME.decode(),
                retrieval_time=T0, source_id="gleif")
-    from semantic_support import plant_manifestation
     plant_manifestation(pipeline, source_id="gleif", native_id="lei/ACMELEI000000000001?v=2",
                         body=GLEIF_ACME, media_type="application/json",
                         retrieval_time="2026-08-17T13:00:00+00:00")

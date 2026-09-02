@@ -1,12 +1,9 @@
-"""Provider-evaluation harness for analytical proposals.
+"""Harness comparing providers on identical access-filtered projections.
 
-Compares providers on identical access-filtered projections across evaluation
-dimensions: structured-output validity, determinism, latency, abstention,
-unsupported claims, evidence citation, access compliance, reproducibility and
-error handling. Providers stay proposals-only; the harness never materializes
-anything and never grants decision authority. V1/V2 compare the two
-deterministic providers; a learned-model comparison is NOT_RUN by policy (no
-safe local provider without dependency disruption).
+It scores structured-output validity, determinism, latency, abstention,
+unsupported claims, evidence citation, access compliance and reproducibility.
+Providers stay proposals-only: the harness materializes nothing and grants no
+decision authority.
 """
 from __future__ import annotations
 
@@ -14,6 +11,7 @@ import time
 from typing import Any, Callable, Mapping
 
 from .access import AccessContext, can_view
+from .analytics import DeterministicRuleProvider, MockAssessmentProvider
 from .canonical import sha256
 from .contracts import PROPOSAL_TYPES
 from .projection import Projection
@@ -46,7 +44,7 @@ def _referenced_object_ids(proposal: Mapping[str, Any]) -> set[str]:
 
 
 def evaluate_provider(name: str, run: Callable[[Projection, AccessContext, str], list[dict[str, Any]]],
-                      store: MissionDataStore, projection: Projection, empty_projection: Projection,
+                      projection: Projection, empty_projection: Projection,
                       context: AccessContext, low_context: AccessContext,
                       restricted_ids: set[str], *, times: list[str]) -> dict[str, Any]:
     started = time.monotonic()
@@ -82,15 +80,12 @@ def evaluate_provider(name: str, run: Callable[[Projection, AccessContext, str],
     }
 
 
-def run_provider_comparison(store_export_dir, make_eval_store: Callable[[str], MissionDataStore],
+def run_provider_comparison(make_eval_store: Callable[[str], MissionDataStore],
                             projection: Projection, empty_projection: Projection,
                             context: AccessContext, low_context: AccessContext, restricted_ids: set[str],
                             *, times: list[str]) -> dict[str, Any]:
-    """Each provider is evaluated against its OWN fresh copy of the scenario
-    store (via make_eval_store) so evaluation never mutates operational state
-    and provider inference writes stay isolated."""
-    from .analytics import DeterministicRuleProvider, MockAssessmentProvider
-
+    """Each provider is evaluated against its own fresh copy of the store, so
+    evaluation never touches operational state."""
     rules_store = make_eval_store("rules")
 
     def rules_runner(proj, ctx, when):
@@ -108,9 +103,9 @@ def run_provider_comparison(store_export_dir, make_eval_store: Callable[[str], M
         return [result] if result else []
 
     results = [
-        evaluate_provider("curunir-deterministic-rules@1.0", rules_runner, rules_store, projection, empty_projection,
+        evaluate_provider("curunir-deterministic-rules@1.0", rules_runner, projection, empty_projection,
                           context, low_context, restricted_ids, times=times),
-        evaluate_provider("mock-damage-assessment@1.0", mock_runner, mock_store, projection, empty_projection,
+        evaluate_provider("mock-damage-assessment@1.0", mock_runner, projection, empty_projection,
                           context, low_context, restricted_ids, times=times),
     ]
     return {

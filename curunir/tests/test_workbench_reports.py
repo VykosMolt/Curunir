@@ -1,6 +1,5 @@
-"""Report/dossier engine: sentence-level epistemic status, validation
-rejections, human-only approval, dissent, immutable approved versions,
-role projections, export."""
+"""Dossiers: per-sentence support status, validation, human-only approval,
+dissent, frozen approved versions, role views and export."""
 from __future__ import annotations
 
 import pytest
@@ -240,12 +239,10 @@ def test_role_views_derive_from_one_state(mission):
     operator = role_view(projection, report, "OPERATOR")
     assert analyst["version"] == executive["version"] == legal["version"] \
         == operator["version"] == report["version"]
-    # executive keeps uncertainty visible
     assert executive["uncertainty_note"]["UNRESOLVED"] == 1
-    # legal view expands lineage down to sources
+    # The legal view carries lineage all the way down to the source.
     legal_sentence = legal["sections"][0]["sentences"][0]
     assert legal_sentence["lineage"][0]["observations"][0]["anchors"][0]["source"]["source_id"] == "gleif"
-    # every projection preserves sentence status labels
     for view in (analyst, executive, legal):
         for section in view["sections"]:
             for sentence in section["sentences"]:

@@ -1,4 +1,4 @@
-"""One bridge from cryptographic authentication to authorized commands."""
+"""Turn a signed request into an authorized command."""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -46,8 +46,8 @@ class SignedOperations:
             store=self.store,
             root=self.root,
             context=context,
-            # The command starts at the target's security floor.  Individual
-            # admission paths may raise it further from their material inputs.
+            # Start at the target's marking; a command may raise it further
+            # from whatever it reads.
             marking=target_marking,
             now_fn=self.now_fn,
         )

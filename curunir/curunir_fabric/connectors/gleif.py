@@ -1,9 +1,4 @@
-"""GLEIF LEI registry — structured legal-entity lookup with pagination.
-
-SEARCH filters LEI records by legal name (page-number pagination); LOOKUP
-retrieves one LEI record. Records carry registration timestamps, successor
-links and jurisdiction facts that feed pivots and coverage accounting.
-"""
+"""GLEIF: SEARCH filters LEI records by name; LOOKUP fetches one record."""
 from __future__ import annotations
 
 import json

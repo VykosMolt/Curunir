@@ -1,32 +1,15 @@
-"""Model backends for the governed analytical-proposal seam.
+"""The providers behind the analytical-proposal seam: `anthropic`, `openai`,
+and `deterministic`, an offline backend needing no network or credential.
 
-`providers.AnalyticalAssist` already owns everything that makes a model call
-safe: it derives the effective marking from authoritative records, refuses
-egress before invoking, invokes exactly once, retains the complete outcome as an
-InferenceRecord (a failure included, as validation="INVALID"), converts a
-successful response only into a PROPOSED candidate awaiting a human, and never
-calls a provider again on replay. This module supplies the missing half — an
-actual provider — and nothing else. It makes no authorization decision, writes
-no record, and cannot promote anything.
+This module supplies a provider and nothing else — `providers.AnalyticalAssist`
+owns the egress refusal, the retained inference record and the human gate. It
+makes no authorization decision, writes no record, and cannot promote anything.
 
-Providers
----------
-`anthropic` and `openai`, each through its official SDK, plus `deterministic`,
-an offline backend that needs no network and no credential and is what the
-tests use.
-
-Credentials are deliberately *not* handled here. Each backend constructs a
-zero-argument client and lets the vendor SDK run its own resolution chain, so
-whatever that SDK supports, this supports — an API key, an auth token, an
-OAuth profile written by `ant auth login` (the subscription-backed path), or
-workload identity federation — and it keeps working when a vendor extends the
-chain. Reading a key here would replace a maintained resolver with a worse one.
-`base_url` is passed through for gateways, proxies and self-hosted endpoints.
-
-The SDKs are optional. They are imported lazily inside `build_backend`, so a
-checkout with neither installed behaves exactly as one with no provider
-configured: `AnalyticalAssist.available()` is False and the deterministic path
-and every analyst action remain fully available.
+Credentials are not handled here: each backend constructs a zero-argument
+client and lets the vendor SDK run its own resolution chain, so whatever that
+chain supports, this supports. `base_url` is passed through for gateways and
+self-hosted endpoints. Both SDKs are optional and imported lazily, so a checkout
+with neither behaves as one with no provider configured.
 """
 from __future__ import annotations
 
@@ -38,17 +21,15 @@ from typing import Any, Mapping
 from curunir_operational.contracts import ModelPackage
 
 from .providers import analytical_assist_package
-from .candidate_schema import (available_ids, candidate_schema, refusal_reason,
-                               unresolvable_ids)
+from .candidate_schema import (available_ids, candidate_schema, id_fields,
+                               refusal_reason, unresolvable_ids)
 
 PROVIDERS = ("anthropic", "openai", "deterministic")
 
 DEFAULT_MODELS = {"anthropic": "claude-opus-5", "openai": "gpt-5"}
 
-# The discipline the proposal must follow. Kind-independent on purpose: it is
-# the cacheable prefix, and a prefix that changed per analytical kind would
-# throw away the cache on every call. The per-kind constraint travels in the
-# response schema instead.
+# The discipline the proposal must follow. Kind-independent so it stays a
+# cacheable prefix; the per-kind constraint travels in the response schema.
 SYSTEM_CONTRACT = """\
 You propose a single analytical candidate for a human analyst to accept or \
 reject. You are not deciding anything; a person reviews every field you emit.
@@ -76,7 +57,7 @@ class BackendUnavailable(RuntimeError):
 
 @dataclass(frozen=True)
 class ProviderSpec:
-    """What to call and how. Never what credential to use."""
+    """What to call and how. Never which credential to use."""
     provider: str
     model: str = ""
     effort: str = "high"
@@ -103,15 +84,10 @@ class ModelBackend(ABC):
 
     @abstractmethod
     def _invoke(self, system: str, payload: str, schema: Mapping[str, Any]) -> str:
-        """Return the provider's raw response text. Must be JSON."""
+        """The provider's raw response text, which must be JSON."""
 
     def package(self) -> ModelPackage:
-        """The identity recorded by MODEL_REGISTERED — what actually ran.
-
-        Built by the existing `analytical_assist_package`, so the declared
-        limitations, approved uses and prohibited uses stay defined in one
-        place for every provider.
-        """
+        """The identity of what actually ran, as recorded by MODEL_REGISTERED."""
         return analytical_assist_package(
             self.spec.provider, f"{self.spec.provider}:{self.spec.model}",
             self.spec.model)
@@ -120,9 +96,8 @@ class ModelBackend(ABC):
               target_kind: str) -> Mapping[str, Any]:
         """Propose one candidate of `target_kind`, or raise.
 
-        Raising is a supported outcome: `AnalyticalAssist.propose` retains the
-        failure as an INVALID inference rather than letting a bad response
-        become plausible analytical content.
+        Raising is a supported outcome: the caller retains the failure as an
+        INVALID inference rather than letting a bad response become content.
         """
         reason = refusal_reason(target_kind)
         if reason is not None:
@@ -137,9 +112,8 @@ class ModelBackend(ABC):
             raise ValueError(f"provider response was not JSON: {error}") from None
         if not isinstance(content, dict):
             raise ValueError("provider response must be a JSON object")
-        # A candidate may only cite what it was shown. Enforced here so a
-        # fabricated identifier is a provider error retained as an INVALID
-        # inference, not a proposal a human has to catch by eye.
+        # a fabricated identifier becomes a provider error retained as an
+        # INVALID inference, not a proposal a human has to catch by eye
         dangling = unresolvable_ids(target_kind, content, available_ids(inputs))
         if dangling:
             raise ValueError("provider cited identifiers it was not shown: "
@@ -147,14 +121,27 @@ class ModelBackend(ABC):
         return content
 
 
+# The member of each closed vocabulary that commits to least, so an offline
+# candidate stays materializable: ABSENCE would additionally demand a deadline
+# and named coverage sources, a non-VERBATIM variant relation a mechanism, and
+# LIKELY_INFLUENCES a mechanism too.
+_SAFEST_ENUM_MEMBER = {
+    ("narrative_variant", "relation"): "UNRESOLVED_RELATION",
+    ("stakeholder_assessment", "context_kind"): "MISSION",
+    ("influence_assertion", "kind"): "INFLUENCE_UNRESOLVED",
+    ("forecast_indicator", "kind"): "PRESENCE",
+}
+
+_NO_IDENTIFIER = "(no identifier was supplied)"
+
+
 class DeterministicBackend(ModelBackend):
     """An offline backend: no network, no credential, no vendor SDK.
 
-    It does not pretend to reason. It fills each binding field from the request
-    in a fixed, inspectable way, so the seam, the schema, the id check, the
-    proposal record and the human resolution path can all be exercised end to
-    end — in tests and in a demo — without spending anything or leaving the
-    machine. Its proposals are labelled as such.
+    It does not reason. It fills each binding field from the request in a fixed,
+    inspectable way, so the seam, the schema, the id check, the proposal record
+    and the human resolution path can be exercised end to end. Its proposals say
+    so in their text.
     """
 
     def __init__(self, spec: ProviderSpec | None = None) -> None:
@@ -162,20 +149,49 @@ class DeterministicBackend(ModelBackend):
 
     def _invoke(self, system: str, payload: str, schema: Mapping[str, Any]) -> str:
         request = json.loads(payload)
+        target_kind = request["target_kind"]
+        evidence = request["evidence"] if isinstance(request["evidence"], Mapping) \
+            else {}
         shown = sorted(available_ids(request["evidence"]))
+        identifier_fields = set(id_fields(target_kind))
         out: dict[str, Any] = {}
         for name, shape in schema["properties"].items():
-            if shape.get("type") == "array":
-                out[name] = shown[:1] or ["(no identifier was supplied)"]
+            # filled by field name, not by JSON type: prose in a scalar id
+            # field would be a citation the provider was never shown
+            if name in identifier_fields:
+                out[name] = _fill_identifier(name, shape, evidence, shown)
             elif shape.get("type") == "number":
                 out[name] = 0.5
             elif shape.get("enum"):
-                out[name] = shape["enum"][-1]      # the most conservative member
+                member = _SAFEST_ENUM_MEMBER.get((target_kind, name))
+                out[name] = member if member in shape["enum"] else shape["enum"][0]
             elif name in ("horizon_time",):
                 out[name] = "2026-12-31T23:59:59+00:00"
             else:
                 out[name] = f"deterministic offline proposal for {request['task']}"
         return json.dumps(out)
+
+
+def _fill_identifier(name: str, shape: Mapping[str, Any],
+                     evidence: Mapping[str, Any], shown: list[str]) -> Any:
+    """The identifier this field asks for, taken from the payload where it
+    supplies one."""
+    supplied = evidence.get(name)
+    if shape.get("type") == "array":
+        if isinstance(supplied, (list, tuple)):
+            picked = [v for v in supplied if isinstance(v, str) and v]
+            if picked:
+                return picked
+        if isinstance(supplied, str) and supplied:
+            return [supplied]
+        return shown[:1] or [_NO_IDENTIFIER]
+    if isinstance(supplied, str) and supplied:
+        return supplied
+    if isinstance(supplied, (list, tuple)):
+        for value in supplied:
+            if isinstance(value, str) and value:
+                return value
+    return shown[0] if shown else _NO_IDENTIFIER
 
 
 class AnthropicBackend(ModelBackend):
@@ -191,8 +207,8 @@ class AnthropicBackend(ModelBackend):
             response = self._client.messages.create(
                 model=self.spec.model,
                 max_tokens=self.spec.max_tokens,
-                # Kind-independent prefix, cached: the volatile evidence sits
-                # after it in `messages`, so the cache survives across calls.
+                # cached prefix: the volatile evidence sits after it in
+                # `messages`, so the cache survives across calls
                 system=[{"type": "text", "text": system,
                          "cache_control": {"type": "ephemeral"}}],
                 thinking={"type": "adaptive"},
@@ -216,8 +232,7 @@ class AnthropicBackend(ModelBackend):
 
 
 class OpenAIBackend(ModelBackend):
-    """GPT through the official `openai` SDK, using Chat Completions
-    structured outputs (`response_format` with a strict JSON schema)."""
+    """GPT through the official `openai` SDK, using structured outputs."""
 
     def __init__(self, spec: ProviderSpec, client: Any) -> None:
         super().__init__(spec)
@@ -251,11 +266,7 @@ class OpenAIBackend(ModelBackend):
 
 
 def build_backend(spec: ProviderSpec) -> ModelBackend:
-    """Construct a backend, or raise BackendUnavailable with the exact reason.
-
-    The vendor client is constructed with no credential argument on purpose;
-    see the module docstring.
-    """
+    """Construct a backend, or raise BackendUnavailable with the reason."""
     if spec.provider == "deterministic":
         return DeterministicBackend(spec)
     options: dict[str, Any] = {"timeout": spec.timeout_s}
@@ -285,7 +296,7 @@ def build_backend(spec: ProviderSpec) -> ModelBackend:
 
 
 def availability() -> dict[str, Any]:
-    """What this environment could actually run, without calling anything."""
+    """What this environment could run, without calling anything."""
     report: dict[str, Any] = {"providers": {}}
     for name in PROVIDERS:
         if name == "deterministic":
@@ -307,21 +318,13 @@ def availability() -> dict[str, Any]:
 def assist_from_environment(env: Mapping[str, str] | None = None):
     """Build a configured `AnalyticalAssist`, or None if none is configured.
 
-    Read from the environment so switching provider is a deployment decision,
-    not a code change:
+    Read from ``CURUNIR_MODEL_PROVIDER`` (unset means no provider, which is a
+    safe state), ``CURUNIR_MODEL_ID``, ``CURUNIR_MODEL_EFFORT``,
+    ``CURUNIR_MODEL_BASE_URL`` and ``CURUNIR_MODEL_MAX_TOKENS``, so switching
+    provider is a deployment decision.
 
-    * ``CURUNIR_MODEL_PROVIDER`` — anthropic | openai | deterministic. Unset
-      means no provider, which is a supported and safe state.
-    * ``CURUNIR_MODEL_ID`` — defaults to the vendor default above.
-    * ``CURUNIR_MODEL_EFFORT`` — low | medium | high | xhigh | max.
-    * ``CURUNIR_MODEL_BASE_URL`` — for a gateway, proxy or self-hosted endpoint.
-    * ``CURUNIR_MODEL_MAX_TOKENS``.
-
-    The egress ceiling is deliberately **not** environment-configurable.
-    `allowed_input_marking` stays None, which is the existing
-    public-releasable-only mode: an environment variable that widened what may
-    leave the deployment would be the wrong shape of control for that decision.
-    Widening it is a code and review change.
+    The egress ceiling stays out of the environment: widening what may leave the
+    deployment is a code and review change.
     """
     import os
     env = os.environ if env is None else env

@@ -1,5 +1,5 @@
-"""Forecast lifecycle: authored probabilities only, append-only movement,
-typed resolution, coverage-gated absence, terminal immutability."""
+"""Forecast lifecycle: only a person sets a probability, every move is appended,
+resolution needs evidence, and a settled forecast can no longer be changed."""
 from __future__ import annotations
 
 import pytest
@@ -15,8 +15,8 @@ from curunir_fabric.contracts import ExecutionRecord
 from curunir_semantic.contracts import ClaimStateRecord
 from curunir_semantic.worldmodel import world_object_id
 
-from analytic_support import (GLEIF_ACME, GLEIF_ACME_SUSPENDED, MARK, T0,
-                              make_analytic)
+from analytic_support import (GLEIF_ACME_SUSPENDED, MARK, make_analytic,
+                              seed_acme)
 from semantic_support import plant_manifestation
 
 pytestmark = pytest.mark.no_db
@@ -34,14 +34,6 @@ def _rule(expected="INACTIVE"):
         expected_value=expected,
         absence_min_successful_sources=1,
         absence_required_source_ids=("gleif",))
-
-
-def _seed(pipeline, ctx):
-    plant_manifestation(pipeline, source_id="gleif", native_id="lei/ACMELEI000000000001",
-                        body=GLEIF_ACME, media_type="application/json", retrieval_time=T0)
-    pipeline.process_new_evidence()
-    return {c["predicate"]: c["claim_id"] for c in ctx.store.current_claims().values()
-            if c["subject_ref"] == ACME}
 
 
 def _forecast(ctx, by_predicate, probability=0.35, expected="INACTIVE",
@@ -108,11 +100,11 @@ def test_probability_is_authored_never_machine_made():
 
 def test_recreation_cannot_silently_move_a_probability(tmp_path):
     pipeline, ctx = make_analytic(tmp_path)
-    by_predicate = _seed(pipeline, ctx)
+    by_predicate = seed_acme(pipeline, ctx)
     forecast = _forecast(ctx, by_predicate, probability=0.35)
     with pytest.raises(ValueError, match="explicit[\\s\\S]*update"):
         _forecast(ctx, by_predicate, probability=0.62)
-    # a same-probability re-call folds evidence and completes, never duplicates
+    # Re-calling with the same probability folds in new evidence, not a duplicate.
     again = _forecast(ctx, by_predicate, probability=0.35,
                       supporting_claim_ids=[by_predicate["entity_status"],
                                             by_predicate["legal_name"]])
@@ -122,7 +114,7 @@ def test_recreation_cannot_silently_move_a_probability(tmp_path):
 
 def test_update_is_append_only_with_reason_and_actor(tmp_path):
     pipeline, ctx = make_analytic(tmp_path)
-    by_predicate = _seed(pipeline, ctx)
+    by_predicate = seed_acme(pipeline, ctx)
     forecast = _forecast(ctx, by_predicate, probability=0.35)
     with pytest.raises(ValueError, match="human act"):
         update_probability(ctx, forecast["forecast_id"], probability=0.62,
@@ -149,7 +141,7 @@ def test_update_is_append_only_with_reason_and_actor(tmp_path):
 
 def test_model_update_goes_through_the_gate(tmp_path):
     pipeline, ctx = make_analytic(tmp_path)
-    by_predicate = _seed(pipeline, ctx)
+    by_predicate = seed_acme(pipeline, ctx)
     forecast = _forecast(ctx, by_predicate, probability=0.35)
     assist = AnalyticalAssist(
         package=analytical_assist_package("test", "stub", "1.0"),
@@ -161,7 +153,7 @@ def test_model_update_goes_through_the_gate(tmp_path):
                               inputs={}, input_refs=())
     resolved = resolve_candidate(ctx, proposed["proposal"]["proposal_id"],
                                  accept=True, actor_id="jan", actor_kind="HUMAN")
-    # a different number than accepted is refused by binding
+    # The number written must be the one the human accepted.
     with pytest.raises(ValueError, match="differs from what the human accepted"):
         update_probability(ctx, forecast["forecast_id"], probability=0.9,
                            reason="model says", actor_id="", actor_kind="SERVICE",
@@ -180,7 +172,7 @@ def test_model_update_goes_through_the_gate(tmp_path):
 
 def test_degraded_basis_flags_but_never_moves_the_number(tmp_path):
     pipeline, ctx = make_analytic(tmp_path)
-    by_predicate = _seed(pipeline, ctx)
+    by_predicate = seed_acme(pipeline, ctx)
     forecast = _forecast(ctx, by_predicate, probability=0.35)
     state = ClaimStateRecord(
         state_id="st-1", claim_id=by_predicate["entity_status"], state="DISPUTED",
@@ -202,9 +194,9 @@ def test_degraded_basis_flags_but_never_moves_the_number(tmp_path):
 
 def test_machine_true_resolution_is_evidence_bound(tmp_path):
     pipeline, ctx = make_analytic(tmp_path)
-    by_predicate = _seed(pipeline, ctx)
+    by_predicate = seed_acme(pipeline, ctx)
     forecast = _forecast(ctx, by_predicate, probability=0.35, expected="INACTIVE")
-    # the registry updates: entity_status becomes INACTIVE (same family, newer)
+    # The registry now reads INACTIVE, from the same source, later.
     v1 = next(m for m in ctx.store.records_of("fabric_manifestation"))
     plant_manifestation(pipeline, source_id="gleif",
                         native_id="lei/ACMELEI000000000001",
@@ -218,7 +210,6 @@ def test_machine_true_resolution_is_evidence_bound(tmp_path):
     assert resolved["outcome"] == "TRUE"
     assert by_predicate["entity_status"] in resolved["resolution_evidence_refs"]
     assert resolved["resolver_kind"] == "SERVICE"
-    # a settled forecast is immutable
     with pytest.raises(ValueError, match="settled"):
         update_probability(ctx, forecast["forecast_id"], probability=0.9,
                            reason="x", actor_id="jan", actor_kind="HUMAN")
@@ -229,11 +220,11 @@ def test_machine_true_resolution_is_evidence_bound(tmp_path):
 
 def test_false_by_absence_is_coverage_gated(tmp_path):
     pipeline, ctx = make_analytic(tmp_path)
-    by_predicate = _seed(pipeline, ctx)
-    # horizon in the past relative to the ticking clock
+    by_predicate = seed_acme(pipeline, ctx)
+    # A horizon the ticking clock has already passed.
     forecast = _forecast(ctx, by_predicate, probability=0.35,
                          expected="NEVER_SO", horizon="2026-08-17T12:04:00+00:00")
-    # claim evidence predates the horizon and no coverage since → NOT resolved
+    # Nothing was collected after the horizon, so silence proves nothing.
     waiting = refresh_forecast(ctx, forecast["forecast_id"], caused_by="tick")
     assert waiting["status"] == "HORIZON_PASSED", \
         "silence without coverage is not FALSE"
@@ -241,7 +232,7 @@ def test_false_by_absence_is_coverage_gated(tmp_path):
             if r["kind"] == "COVERAGE_GAP"
             and r["subject_id"] == forecast["forecast_id"]]
     assert gaps, "the coverage block is durable, reviewable state"
-    # the declared coverage is then achieved: gleif successfully re-searched
+    # Now the declared source is searched and finds nothing.
     execution = ExecutionRecord(
         execution_id="exec-cov-1", plan_id="", query_id="q1", source_id="gleif",
         connector_id="gleif-lei-v1", connector_version="1", operation="LOOKUP",
@@ -261,7 +252,7 @@ def test_false_by_absence_is_coverage_gated(tmp_path):
 
 def test_human_resolution_requires_evidence_and_human(tmp_path):
     pipeline, ctx = make_analytic(tmp_path)
-    by_predicate = _seed(pipeline, ctx)
+    by_predicate = seed_acme(pipeline, ctx)
     forecast = _forecast(ctx, by_predicate, probability=0.35)
     with pytest.raises(ValueError, match="requires a human"):
         resolve_forecast_human(ctx, forecast["forecast_id"], outcome="TRUE",

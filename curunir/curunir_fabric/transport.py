@@ -1,9 +1,8 @@
-"""Bounded public-web transport with complete SSRF mediation.
+"""HTTP transport that only talks to public addresses.
 
-Every product acquisition uses this path. Each hop is parsed, resolved, and
-classified before a socket is opened; the connection is made to one of those
-validated addresses rather than resolving the hostname a second time. Redirects
-are followed explicitly, so a forbidden target is rejected before its request.
+Every hop is resolved and checked before a socket opens, and the connection is
+made to the checked address, so a hostname cannot resolve differently later.
+Redirects are followed one hop at a time under the same check.
 """
 from __future__ import annotations
 
@@ -22,7 +21,7 @@ MAX_REDIRECTS = 8
 
 
 class UnsafeUrlError(ValueError):
-    """The requested URL cannot be proven to target the public internet."""
+    """The URL does not provably point at the public internet."""
 
 
 Resolver = Callable[[str, int], tuple[str, ...]]
@@ -71,7 +70,7 @@ def _public_addresses(host: str, port: int) -> tuple[str, ...]:
 
 def resolve_public_url(url: str, resolver: Resolver = _public_addresses
                        ) -> tuple[str, str, int, str, tuple[str, ...]]:
-    """Return normalized request components and the validated address set."""
+    """Split a URL into scheme, host, port and target, and resolve the host to public addresses."""
     try:
         parts = urlsplit(url)
         scheme = parts.scheme.casefold()
@@ -132,7 +131,7 @@ def _request_once(*, scheme: str, host: str, port: int, target: str,
                   addresses: tuple[str, ...], request_headers: Mapping[str, str],
                   timeout_seconds: float, maximum_bytes: int
                   ) -> tuple[int, dict[str, str], bytes, bool]:
-    """GET one already-validated hop, connecting only to its pinned addresses."""
+    """GET one hop, connecting only to the addresses already checked."""
     last_error: OSError | None = None
     deadline = time.monotonic() + timeout_seconds
     for address in addresses:
@@ -202,7 +201,7 @@ class SafePublicTransport:
                     scheme=scheme, host=host, port=port, target=target,
                     addresses=addresses, request_headers=request_headers,
                     timeout_seconds=remaining, maximum_bytes=maximum_bytes)
-            except Exception as error:  # transport boundary; caller records typed failure
+            except Exception as error:  # Any transport failure becomes a recorded outcome.
                 if isinstance(error, MemoryError):
                     raise
                 return _blocked(
@@ -221,12 +220,7 @@ class SafePublicTransport:
                 next_url = urljoin(current, location)
                 if next_url in redirects or next_url == current:
                     return _blocked("REDIRECT_LOOP", next_url, tuple(redirects))
-                # Resolve before recording/following: an unsafe hop never opens a socket.
-                try:
-                    resolve_public_url(next_url, self.resolver)
-                except UnsafeUrlError as error:
-                    return _blocked(f"SSRF_BLOCKED_REDIRECT: {error}", next_url,
-                                    tuple((*redirects, next_url)))
+                # The next loop iteration resolves and checks the hop before any socket opens.
                 redirects.append(next_url)
                 current = next_url
                 continue

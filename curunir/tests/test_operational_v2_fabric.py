@@ -1,5 +1,5 @@
-"""V2 fabric-level tests: information requirements/tasks, delta synchronization,
-schema evolution, hazard-impact rule, cross-workbench decision effect, stress."""
+"""Fabric-level behaviour: information requirements and tasks, delta sync, schema
+evolution, and a bounded stress run."""
 from __future__ import annotations
 
 import json
@@ -38,7 +38,7 @@ def seed_store(tmp_path):
     return store
 
 
-# ---- information requirements + analyst tasks -------------------------------
+# ---- information requirements and analyst tasks ----
 
 def test_requirement_lifecycle_and_human_only_closure(tmp_path):
     store = seed_store(tmp_path)
@@ -51,16 +51,15 @@ def test_requirement_lifecycle_and_human_only_closure(tmp_path):
     request = missions.request_evidence(req["requirement_id"], request_kind="UPDATED_INFRASTRUCTURE_REPORT",
                                         detail="inspect BR-7", affected_ids=("infra-BR-7",), due_time=t(24),
                                         recorded_time=t(2), marking=BASE_MARKING, actor="analyst")
-    # a service actor / model cannot close a requirement
+    # A service actor cannot close a requirement.
     with pytest.raises(MissionWorkflowError):
         missions.transition("requirement", req["requirement_id"], "ANSWERED", actor_id="rule-engine",
                             actor_kind="SERVICE", evidence_refs=("eng-1",), note="model says ok",
                             recorded_time=t(3), marking=BASE_MARKING)
-    # answering requires evidence references
+    # Answering needs evidence references.
     with pytest.raises(MissionWorkflowError):
         missions.transition("requirement", req["requirement_id"], "ANSWERED", actor_id="analyst",
                             actor_kind="HUMAN", evidence_refs=(), note="", recorded_time=t(3), marking=BASE_MARKING)
-    # human closure with evidence
     missions.transition("requirement", req["requirement_id"], "ANSWERED", actor_id="analyst", actor_kind="HUMAN",
                         evidence_refs=("eng-1",), note="assessment filed", recorded_time=t(4), marking=BASE_MARKING)
     trail = missions.audit_trail("requirement", req["requirement_id"])
@@ -78,10 +77,10 @@ def test_task_completion_requires_assigned_actor(tmp_path):
                                 depends_on=(), recorded_time=t(1), marking=BASE_MARKING, actor="lead")
     missions.transition("analyst_task", task["task_id"], "IN_PROGRESS", actor_id="eng-ruiz", actor_kind="HUMAN",
                         evidence_refs=(), note="", recorded_time=t(2), marking=BASE_MARKING)
-    with pytest.raises(MissionWorkflowError):  # someone else cannot complete it
+    with pytest.raises(MissionWorkflowError):  # only the assigned actor can finish it
         missions.transition("analyst_task", task["task_id"], "DONE", actor_id="other", actor_kind="HUMAN",
                             evidence_refs=(), note="done", recorded_time=t(3), marking=BASE_MARKING)
-    with pytest.raises(MissionWorkflowError):  # abandonment needs a reason
+    with pytest.raises(MissionWorkflowError):  # abandoning needs a reason
         missions.transition("analyst_task", task["task_id"], "ABANDONED", actor_id="eng-ruiz", actor_kind="HUMAN",
                             evidence_refs=(), note="", recorded_time=t(3), marking=BASE_MARKING)
     missions.transition("analyst_task", task["task_id"], "DONE", actor_id="eng-ruiz", actor_kind="HUMAN",
@@ -90,7 +89,7 @@ def test_task_completion_requires_assigned_actor(tmp_path):
     assert overdue_view["analyst_tasks"][0]["status"] == "DONE"
 
 
-# ---- delta synchronization --------------------------------------------------
+# ---- delta synchronization ----
 
 def build_two_phase_store(tmp_path):
     store = seed_store(tmp_path)
@@ -103,10 +102,11 @@ def build_two_phase_store(tmp_path):
 
 def test_delta_apply_duplicate_missingbase_wrongbase_tamper(tmp_path):
     store, base_seq = build_two_phase_store(tmp_path)
-    # stale target truncated at base_seq
+    # Build a stale copy of the store, truncated at base_seq.
     store.export_to(tmp_path / "exp")
     lines = (tmp_path / "exp" / "events.jsonl").read_text().splitlines()
-    (tmp_path / "target").mkdir(); (tmp_path / "target" / "payloads").mkdir()
+    (tmp_path / "target").mkdir()
+    (tmp_path / "target" / "payloads").mkdir()
     import shutil
     shutil.copyfile(tmp_path / "exp" / "store_meta.json", tmp_path / "target" / "store_meta.json")
     (tmp_path / "target" / "events.jsonl").write_text("\n".join(lines[:base_seq]) + "\n")
@@ -119,16 +119,16 @@ def test_delta_apply_duplicate_missingbase_wrongbase_tamper(tmp_path):
     receipt = import_delta_bundle(target, tmp_path / "delta")
     assert receipt["status"] == "APPLIED" and receipt["applied_events"] == 2
     assert target.head()["head_hash"] == store.head()["head_hash"]
-    # duplicate delta → idempotent
+    # Applying the same delta twice changes nothing.
     assert import_delta_bundle(target, tmp_path / "delta")["status"] == "DUPLICATE_DELTA"
-    # missing base: a target with only 1 event
-    (tmp_path / "mb").mkdir(); (tmp_path / "mb" / "payloads").mkdir()
+    # A target holding only one event has no base for this delta.
+    (tmp_path / "mb").mkdir()
+    (tmp_path / "mb" / "payloads").mkdir()
     shutil.copyfile(tmp_path / "exp" / "store_meta.json", tmp_path / "mb" / "store_meta.json")
     (tmp_path / "mb" / "events.jsonl").write_text(lines[0] + "\n")
     for p in (tmp_path / "exp" / "payloads").iterdir():
         shutil.copyfile(p, tmp_path / "mb" / "payloads" / p.name)
     assert import_delta_bundle(MissionDataStore(tmp_path / "mb"), tmp_path / "delta")["conflict"] == "MISSING_BASE"
-    # tamper
     events_file = tmp_path / "delta" / "delta_events.jsonl"
     events_file.write_text(events_file.read_text().replace("DEGRADED", "FORGED"))
     assert not verify_delta_bundle(tmp_path / "delta")["valid"]
@@ -139,13 +139,13 @@ def test_full_bundle_round_trips(tmp_path):
     manifest = build_full_bundle(store, tmp_path / "full")
     assert manifest["base_seq"] == 0
     fresh = make_store(tmp_path, name="fresh_target", store_id="x")
-    # a full bundle applies onto a genesis store
+    # A full bundle applies onto an empty store.
     receipt = import_delta_bundle(fresh, tmp_path / "full")
     assert receipt["status"] == "APPLIED"
     assert fresh.head()["head_hash"] == store.head()["head_hash"]
 
 
-# ---- schema evolution -------------------------------------------------------
+# ---- schema evolution ----
 
 BASE_SCHEMA = {"schema_id": "s", "version": "1.0", "media_type": "application/json", "payload_kind": "document",
                "fields": {"id": {"type": "string", "required": True},
@@ -166,27 +166,25 @@ def test_schema_evolution_paths(tmp_path):
                                             "grade": {"type": "string", "required": True, "enum": ["A", "B", "C"]},
                                             "when": {"type": "string", "required": True, "format": "iso-datetime"}}}
     registry.register_schema(v2, recorded_time=T0, actor="f")
-    # old producer, new consumer: v1 payload declaring 1.0 validated under v1.1 (compatible)
+    # An old producer's payload still validates under the newer compatible version.
     old_payload = {"schema_version": "1.0", "id": "x", "grade": "A", "when": T0}
     assert registry.validate_payload("s", "1.1", old_payload)["status"] == "VALID"
-    # missing optional field is fine
     assert registry.validate_payload("s", "1.1", {"id": "x", "grade": "A", "when": T0})["status"] == "VALID"
-    # renamed field: v2 shape without version, against v1 → INVALID (missing grade ok, missing nothing... ref unmapped)
-    renamed = {"id": "x", "ref": "y", "grade": "C", "when": T0}  # C not in v1 enum
+    # A v2-shaped payload checked against v1.
+    renamed = {"id": "x", "ref": "y", "grade": "C", "when": T0}  # grade C is not in the v1 enum
     assert registry.validate_payload("s", "1.0", renamed)["status"] == "INVALID"
-    # unsupported enum under own version handled; unsupported future version
+    # A payload declaring a version the registry does not have.
     assert registry.validate_payload("s", "1.0", {"schema_version": "9.9", "id": "x", "grade": "A", "when": T0})["status"] \
         == "UNSUPPORTED_SCHEMA_VERSION"
-    # original payload preserved: the schema definitions retain source and are exportable
     export = registry.export_definitions()
     assert {d["version"] for d in export["schemas"]} == {"1.0", "1.1", "2.0"}
 
 
-# ---- stress (smaller n for CI speed; determinism is the assertion) ----------
+# ---- stress ----
 
 def test_stress_bounded_deterministic(tmp_path):
     result = run_stress(tmp_path / "stress", n=1200, families=6)
-    assert result["store_events"] > result["records_ingested"]  # each valid record fans out
+    assert result["store_events"] > result["records_ingested"]  # one record makes several events
     assert result["quarantined_ingestions"] >= 1
     assert result["duplicate_ingestions"] >= 1
     assert result["late_ingestions"] >= 1

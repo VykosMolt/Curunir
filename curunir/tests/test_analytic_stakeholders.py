@@ -1,6 +1,6 @@
-"""Stakeholder/influence engine: contextual assessments, position vs interest
-separation, temporal position change, identity caveats, typed evidence-bound
-influence, deterministic discovery from world-model relations."""
+"""Stakeholders and influence: a stated position is kept apart from an inferred
+interest, a changed position keeps its history, identity doubt travels with the
+assessment, and discovery derives only what the world model already states."""
 from __future__ import annotations
 
 import pytest
@@ -13,7 +13,7 @@ from curunir_analytic.stakeholders import (add_position, assert_influence,
 from curunir_analytic.contracts import StakeholderPosition
 from curunir_semantic.worldmodel import world_object_id
 
-from analytic_support import (GLEIF_ACME, MARK, T0, make_analytic, plant_page,
+from analytic_support import (MARK, make_analytic, plant_page, seed_acme,
                               statement_page)
 from semantic_support import plant_manifestation
 
@@ -31,19 +31,11 @@ WIKIDATA_ACME = b"""{
 }"""
 
 
-def _seed(pipeline, ctx):
-    plant_manifestation(pipeline, source_id="gleif", native_id="lei/ACMELEI000000000001",
-                        body=GLEIF_ACME, media_type="application/json", retrieval_time=T0)
-    pipeline.process_new_evidence()
-    return {c["predicate"]: c["claim_id"] for c in ctx.store.current_claims().values()
-            if c["subject_ref"] == "LEI:ACMELEI000000000001"}
-
-
 def test_position_and_inferred_interest_stay_separate(tmp_path):
     pipeline, ctx = make_analytic(tmp_path)
-    by_predicate = _seed(pipeline, ctx)
-    # the world model must link the entity to its site (OPERATES from
-    # Wikidata) for a site statement to be an OBSERVED public position
+    by_predicate = seed_acme(pipeline, ctx)
+    # A statement on the site counts as the entity's own only once the world
+    # model links entity to site.
     plant_manifestation(pipeline, source_id="wikidata", native_id="Q77777",
                         body=WIKIDATA_ACME, media_type="application/json",
                         retrieval_time="2026-08-17T12:30:00+00:00")
@@ -53,9 +45,8 @@ def test_position_and_inferred_interest_stay_separate(tmp_path):
     pipeline.process_new_evidence()
     statement_claim = next(c["claim_id"] for c in ctx.store.current_claims().values()
                            if "supports the proposed" in c["object_or_value"])
-    # the assessed entity is the one the world model links to the site; the
-    # LEI entity's equivalence is a PROPOSED association, deliberately not
-    # assumed here
+    # Assess the object the site belongs to. Its sameness with the LEI entity
+    # is only a proposal, so it is not assumed here.
     qid_object = world_object_id("WIKIDATA_QID:Q77777")
     assessment = create_assessment(
         ctx, entity_object_id=qid_object, context_kind="ISSUE",
@@ -86,7 +77,7 @@ def test_position_and_inferred_interest_stay_separate(tmp_path):
 
 def test_position_changes_preserve_prior_state(tmp_path):
     pipeline, ctx = make_analytic(tmp_path)
-    by_predicate = _seed(pipeline, ctx)
+    by_predicate = seed_acme(pipeline, ctx)
     assessment = create_assessment(
         ctx, entity_object_id=ACME_OBJECT, context_kind="ISSUE",
         context_id="emissions-rule", role_in_context="regulated party",
@@ -119,7 +110,7 @@ def test_position_changes_preserve_prior_state(tmp_path):
 
 def test_identity_ambiguity_travels_with_assessment(tmp_path):
     pipeline, ctx = make_analytic(tmp_path)
-    _seed(pipeline, ctx)
+    seed_acme(pipeline, ctx)
     plant_manifestation(pipeline, source_id="wikidata", native_id="Q77777",
                         body=WIKIDATA_ACME, media_type="application/json",
                         retrieval_time="2026-08-17T13:00:00+00:00")
@@ -133,7 +124,7 @@ def test_identity_ambiguity_travels_with_assessment(tmp_path):
         supporting_claim_ids=list(ctx.store.current_claims())[:1])
     assert assessment["identity_caveats"], \
         "open identity ambiguity must surface on the assessment"
-    # resolving the review item clears the caveat on refresh, as a transition
+    # A person resolves the ambiguity; the caveat should clear on refresh.
     from curunir_semantic.contracts import ReviewItem
     item = ambiguities[0]
     resolved = ReviewItem(item_id=item["item_id"], kind=item["kind"],
@@ -153,7 +144,7 @@ def test_identity_ambiguity_travels_with_assessment(tmp_path):
 
 def test_influence_is_typed_and_history_preserving(tmp_path):
     pipeline, ctx = make_analytic(tmp_path)
-    by_predicate = _seed(pipeline, ctx)
+    by_predicate = seed_acme(pipeline, ctx)
     other = world_object_id("LEI:OTHERLEI00000000002")
     formal = assert_influence(
         ctx, source_object_id=ACME_OBJECT, target_object_id=other,
@@ -170,7 +161,7 @@ def test_influence_is_typed_and_history_preserving(tmp_path):
     assert formal["influence_id"] != informal["influence_id"]
     assert {formal["kind"], informal["kind"]} == {"FORMAL_AUTHORITY_OVER",
                                                   "LIKELY_INFLUENCES"}
-    # idempotent while active
+    # Asserting the same influence again must not make a second version.
     again = assert_influence(
         ctx, source_object_id=ACME_OBJECT, target_object_id=other,
         kind="LIKELY_INFLUENCES", mechanism="x", authority="SUPPORTED_INFERENCE")
@@ -186,7 +177,7 @@ def test_influence_is_typed_and_history_preserving(tmp_path):
 
 def test_discovery_derives_only_what_world_model_states(tmp_path):
     pipeline, ctx = make_analytic(tmp_path)
-    _seed(pipeline, ctx)
+    seed_acme(pipeline, ctx)
     plant_manifestation(pipeline, source_id="wikidata", native_id="Q77777",
                         body=WIKIDATA_ACME, media_type="application/json",
                         retrieval_time="2026-08-17T13:00:00+00:00")
@@ -201,7 +192,6 @@ def test_discovery_derives_only_what_world_model_states(tmp_path):
     assert position["kind"] == "FORMAL_ROLE"
     assert position["authority"] == "OBSERVED"
     assert position["relationship_ids"], "role must be backed by the relation"
-    # no interests, stances or informal influence were invented
     assert all(p["kind"] == "FORMAL_ROLE" for p in assessment["positions"])
     assert all(p["stance"] == "UNRESOLVED" for p in assessment["positions"])
     explanation = explain_assessment(ctx.store, assessment["assessment_id"])
@@ -210,7 +200,7 @@ def test_discovery_derives_only_what_world_model_states(tmp_path):
 
 def test_owns_relation_yields_observed_influence(tmp_path):
     pipeline, ctx = make_analytic(tmp_path)
-    by_predicate = _seed(pipeline, ctx)
+    by_predicate = seed_acme(pipeline, ctx)
     from curunir_operational.contracts import (EvidenceRef, ProvenanceSummary,
                                                RelationshipVersion)
     other = world_object_id("LEI:OTHERLEI00000000002")

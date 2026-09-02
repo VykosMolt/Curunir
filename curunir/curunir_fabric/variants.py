@@ -1,17 +1,10 @@
-"""Deterministic multilingual name-variant generation.
-
-Rule-based, dependency-free, and honest about what it is: script
-transliteration and diacritic folding by fixed tables, plus caller-supplied
-aliases and local-language labels (typically harvested from Wikidata lookups
-and world-model records). Model-proposed variants are welcome upstream but
-enter the plan as origin=MODEL query specs, never through this module.
-"""
+"""Name variants for search: transliteration and diacritic folding by fixed tables."""
 from __future__ import annotations
 
 import unicodedata
 from dataclasses import dataclass
 
-# BGN/PCGN-style simplified romanization (Russian-centred, lossy by nature)
+# Simplified BGN/PCGN romanization. Lossy by nature.
 _CYRILLIC_TO_LATIN = {
     "а": "a", "б": "b", "в": "v", "г": "g", "д": "d", "е": "e", "ё": "e", "ж": "zh",
     "з": "z", "и": "i", "й": "y", "к": "k", "л": "l", "м": "m", "н": "n", "о": "o",
@@ -28,7 +21,7 @@ _GREEK_TO_LATIN = {
     "ω": "o",
 }
 
-# basic phonetic Latin → Cyrillic (digraphs first); marked as approximate
+# Rough phonetic Latin to Cyrillic; digraphs are replaced first.
 _LATIN_TO_CYRILLIC_DIGRAPHS = (
     ("shch", "щ"), ("zh", "ж"), ("kh", "х"), ("ts", "ц"), ("ch", "ч"), ("sh", "ш"),
     ("yu", "ю"), ("ya", "я"), ("yo", "ё"), ("ye", "е"),
@@ -102,12 +95,7 @@ class NameVariant:
 def name_variants(name: str, *, languages: tuple[str, ...] = (), scripts: tuple[str, ...] = (),
                   aliases: tuple[str, ...] = (),
                   local_labels: tuple[tuple[str, str], ...] = ()) -> tuple[NameVariant, ...]:
-    """Deterministic query-variant expansion for one name.
-
-    ``local_labels`` are (language, label) pairs from evidence (e.g. Wikidata
-    labels/aliases) and become LOCAL_LANGUAGE variants; ``aliases`` are
-    caller-known alternative names (former names go in as aliases too).
-    """
+    """Query variants for one name. ``local_labels`` are (language, label) pairs."""
     source_script = _dominant_script(name)
     seen: set[str] = set()
     variants: list[NameVariant] = []

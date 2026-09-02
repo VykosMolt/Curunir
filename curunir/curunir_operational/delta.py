@@ -1,8 +1,8 @@
-"""Privileged, full-fidelity incremental store synchronization.
+"""Full-fidelity incremental synchronization between stores.
 
-A delta is admitted as one transaction only when its authenticated base,
-complete envelope suffix, and every referenced payload have been validated.
-Access-filtered dissemination uses PACE bundles, never this format.
+A delta is admitted as one transaction, and only once its base, its whole
+envelope suffix and every referenced payload have been validated. This format
+is unfiltered; filtered dissemination goes through a PACE bundle instead.
 """
 from __future__ import annotations
 
@@ -38,9 +38,8 @@ from .store import (
 DELTA_FORMAT = "curunir-operational-delta-v1"
 AUDIENCE = "PRIVILEGED_STORE_SYNC"
 
-# These fields name content-addressed store payloads by contract.  The generic
-# scanner below additionally preserves payloads used by future record families
-# when the referenced digest exists in the source store.
+# These fields name stored payloads by contract. The scanner below also picks
+# up any other string that happens to name a payload the source store holds.
 PAYLOAD_FIELDS: dict[str, tuple[str, ...]] = {
     "ingestion": ("payload_ref",),
     "fabric_manifestation": ("content_sha256",),
@@ -93,7 +92,7 @@ def _source_payload_refs(
     return refs
 
 
-# Kept as a narrow compatibility name for the historical exploit property.
+# Older name kept for the store-integrity tests.
 _referenced_payloads = _source_payload_refs
 
 
@@ -418,5 +417,6 @@ def build_full_bundle(
     out_dir: str | Path,
 ) -> dict[str, Any]:
     manifest = build_delta_bundle(store, out_dir, base_seq=0)
-    assert manifest["base_entry_hash"] == CHAIN_GENESIS
+    if manifest["base_entry_hash"] != CHAIN_GENESIS:
+        raise StoreError("a full bundle must start from the chain genesis")
     return manifest

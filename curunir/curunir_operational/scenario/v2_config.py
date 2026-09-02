@@ -1,10 +1,10 @@
-"""V2 configuration: hazard ingestion (GDACS-shaped), the second workbench,
-schema-evolution fixtures, and the shared object fabric setup. Data only."""
+"""Configuration for the second scenario set: hazard ingestion, the second
+workbench, schema-evolution fixtures and the shared fabric. Data only."""
 from __future__ import annotations
 
 from curunir_operational.access import AccessContext, Marking
 
-# ---- markings and access contexts ------------------------------------------
+# ---- markings and access contexts ----
 
 CIVDEF = "CIVDEF-AUTH"
 BASE_MARKING = Marking(owning_authority=CIVDEF, releasability=("CORRIDOR-OPS",))
@@ -14,7 +14,7 @@ ENGINEERING = Marking(owning_authority=CIVDEF, compartments=("ENGINEERING-ASSESS
                       releasability=("CORRIDOR-OPS",), min_role="ANALYST")
 PUBLIC_EVIDENCE = Marking(owning_authority=CIVDEF, releasability=("PUBLIC-EVIDENCE", "CORRIDOR-OPS"))
 
-# six V2 access contexts
+# The six access contexts these scenarios read through.
 CONTEXTS = {
     "logistics": AccessContext("ctx-log", "log-analyst", "HUMAN", ("ANALYST",), (),
                                ("CORRIDOR-OPS",), CIVDEF),
@@ -33,7 +33,7 @@ CONTEXTS = {
 STALENESS_HOURS = {"RESOURCE_STOCK": 36.0, "OBSERVATION": 48.0, "INFRASTRUCTURE": 96.0,
                    "ROUTE": 96.0, "MOVEMENT": 48.0, "OPERATIONAL_CONCERN": 72.0}
 
-# ---- hazard schema (GDACS FeatureCollection shape) -------------------------
+# ---- hazard schema, shaped like a GDACS feature collection ----
 
 HAZARD_SCHEMA = {
     "schema_id": "gdacs-hazard", "version": "1.0", "media_type": "application/geo+json",
@@ -73,7 +73,7 @@ HAZARD_PIPELINE = {
     "marking": BASE_MARKING.to_record(),
 }
 
-# ---- schema evolution: engineering assessment feed v1 → v1.1 → v2 ----------
+# ---- schema evolution: engineering assessment feed, v1 to v1.1 to v2 ----
 
 ENGINEERING_SCHEMA_V1 = {
     "schema_id": "eng-assessment", "version": "1.0", "media_type": "application/json",
@@ -83,11 +83,11 @@ ENGINEERING_SCHEMA_V1 = {
                "condition": {"type": "string", "required": True, "enum": ["SOUND", "DEGRADED", "FAILED"]},
                "assessed_time": {"type": "string", "required": True, "format": "iso-datetime"}},
 }
-# v1.1: adds an optional field, backward compatible
+# v1.1 adds an optional field and stays compatible.
 ENGINEERING_SCHEMA_V1_1 = {**ENGINEERING_SCHEMA_V1, "version": "1.1", "compatible_with": ["1.0"],
                            "fields": {**ENGINEERING_SCHEMA_V1["fields"],
                                       "inspector": {"type": "string", "required": False}}}
-# v2: renames asset→asset_ref, changes the condition enum, incompatible
+# v2 renames asset to asset_ref and changes the condition enum: incompatible.
 ENGINEERING_SCHEMA_V2 = {
     "schema_id": "eng-assessment", "version": "2.0", "media_type": "application/json",
     "payload_kind": "document", "description": "engineering assessment v2 (renamed + new enum)",
@@ -111,7 +111,7 @@ ENGINEERING_MAPPING_V1 = {
                 {"source_field": "assessed_time", "target": "source_time", "transform": "iso_time"}],
     "quality_effects": {"mapping_confidence": 0.9},
 }
-# v2 mapping handles the renamed field explicitly
+# The v2 mapping names the renamed field explicitly.
 ENGINEERING_MAPPING_V2 = {
     "mapping_id": "eng-map", "version": "2.0", "input_schema_id": "eng-assessment",
     "input_schema_version": "2.0", "output_object_type": "OBSERVATION",
@@ -138,7 +138,7 @@ ENGINEERING_PIPELINE_V2 = {**ENGINEERING_PIPELINE_V1, "version": "2.0", "schema_
                            "mappings": [{"mapping_id": "eng-map", "version": "2.0"}],
                            "observation": {"target_field": "asset_ref", "target_prefix": "infra-"}}
 
-# ---- second workbench ------------------------------------------------------
+# ---- second workbench ----
 
 INFRASTRUCTURE_WORKBENCH = {
     "workshop_id": "INFRASTRUCTURE_RESILIENCE_AND_CIVIL_PROTECTION_WORKBENCH_V2", "version": "1.0",

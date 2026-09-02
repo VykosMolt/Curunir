@@ -1,5 +1,5 @@
-"""Indicator locks: fires only on post-arming evidence, executes exactly the
-human's pre-authorized effect, absence is coverage-gated, firing is one-shot."""
+"""Indicators fire only on evidence that arrives after arming, apply exactly the
+effect a person authorized, need coverage before absence counts, and fire once."""
 from __future__ import annotations
 
 import pytest
@@ -10,24 +10,14 @@ from curunir_analytic.indicators import arm_indicator, check_indicators
 from curunir_fabric.contracts import ExecutionRecord
 from curunir_analytic.contracts import ResolutionRule
 
-from analytic_support import (GLEIF_ACME, GLEIF_ACME_SUSPENDED, MARK, T0,
-                              make_analytic)
-from semantic_support import plant_manifestation
+from analytic_support import (GLEIF_ACME_SUSPENDED, MARK, make_analytic,
+                              seed_acme)
+from semantic_support import advance_clock_past, plant_manifestation
 
 pytestmark = pytest.mark.no_db
 
 HORIZON = "2026-08-17T18:00:00+00:00"
 ACME = "LEI:ACMELEI000000000001"
-
-
-def _seed(pipeline, ctx):
-    plant_manifestation(pipeline, source_id="gleif",
-                        native_id="lei/ACMELEI000000000001",
-                        body=GLEIF_ACME, media_type="application/json",
-                        retrieval_time=T0)
-    pipeline.process_new_evidence()
-    return {c["predicate"]: c["claim_id"] for c in ctx.store.current_claims().values()
-            if c["subject_ref"] == ACME}
 
 
 def _forecast(ctx, by_predicate, probability=0.35):
@@ -90,7 +80,7 @@ def test_pre_authorized_effect_requires_a_human():
 
 def test_absence_indicator_requires_deadline_and_coverage(tmp_path):
     pipeline, ctx = make_analytic(tmp_path)
-    by_predicate = _seed(pipeline, ctx)
+    by_predicate = seed_acme(pipeline, ctx)
     forecast = _forecast(ctx, by_predicate)
     with pytest.raises(ValueError, match="deadline"):
         arm_indicator(ctx, description="no filing appears",
@@ -106,7 +96,7 @@ def test_absence_indicator_requires_deadline_and_coverage(tmp_path):
 
 def test_arming_requires_a_live_forecast(tmp_path):
     pipeline, ctx = make_analytic(tmp_path)
-    by_predicate = _seed(pipeline, ctx)
+    by_predicate = seed_acme(pipeline, ctx)
     with pytest.raises(ValueError, match="unknown forecast"):
         arm_indicator(ctx, description="d", forecast_ids=("nope",),
                       kind="PRESENCE", direction="SUPPORTS")
@@ -117,9 +107,9 @@ def test_arming_requires_a_live_forecast(tmp_path):
 
 def test_presence_never_fires_on_pre_arming_evidence(tmp_path):
     pipeline, ctx = make_analytic(tmp_path)
-    by_predicate = _seed(pipeline, ctx)
+    by_predicate = seed_acme(pipeline, ctx)
     forecast = _forecast(ctx, by_predicate)
-    # the ACTIVE status observation already exists; watch for ACTIVE
+    # ACTIVE was already observed before this indicator was armed.
     indicator = arm_indicator(
         ctx, description=f"entity_status for {ACME} reads ACTIVE",
         forecast_ids=(forecast["forecast_id"],),
@@ -135,7 +125,7 @@ def test_presence_never_fires_on_pre_arming_evidence(tmp_path):
 
 def test_presence_fires_and_executes_the_authorized_effect_exactly(tmp_path):
     pipeline, ctx = make_analytic(tmp_path)
-    by_predicate = _seed(pipeline, ctx)
+    by_predicate = seed_acme(pipeline, ctx)
     forecast = _forecast(ctx, by_predicate, probability=0.35)
     indicator = _arm_presence(ctx, forecast)
     armed = ctx.store.current_forecasts()[forecast["forecast_id"]]
@@ -159,7 +149,7 @@ def test_presence_fires_and_executes_the_authorized_effect_exactly(tmp_path):
 
 def test_service_cannot_ride_an_unfired_indicator(tmp_path):
     pipeline, ctx = make_analytic(tmp_path)
-    by_predicate = _seed(pipeline, ctx)
+    by_predicate = seed_acme(pipeline, ctx)
     forecast = _forecast(ctx, by_predicate)
     indicator = _arm_presence(ctx, forecast)
     with pytest.raises(ValueError, match="FIRED indicator"):
@@ -171,13 +161,12 @@ def test_service_cannot_ride_an_unfired_indicator(tmp_path):
 
 def test_service_cannot_bend_the_authorized_target(tmp_path):
     pipeline, ctx = make_analytic(tmp_path)
-    by_predicate = _seed(pipeline, ctx)
+    by_predicate = seed_acme(pipeline, ctx)
     forecast = _forecast(ctx, by_predicate)
     indicator = _arm_presence(ctx, forecast, effect=_presence_effect(0.62))
     _flip_to_suspended(pipeline, ctx)
     check_indicators(ctx)
-    # indicator is FIRED and already applied 0.62; a service re-using it for
-    # a DIFFERENT number is refused
+    # The indicator already applied 0.62; it cannot be reused for another number.
     with pytest.raises(ValueError, match="exact"):
         update_probability(ctx, forecast["forecast_id"], probability=0.9,
                            reason="stretching the authorization", actor_id="svc",
@@ -187,7 +176,7 @@ def test_service_cannot_bend_the_authorized_target(tmp_path):
 
 def test_review_only_effect_flags_and_never_moves_the_number(tmp_path):
     pipeline, ctx = make_analytic(tmp_path)
-    by_predicate = _seed(pipeline, ctx)
+    by_predicate = seed_acme(pipeline, ctx)
     forecast = _forecast(ctx, by_predicate, probability=0.35)
     _arm_presence(ctx, forecast, effect=IndicatorEffect(mode="REVIEW_ONLY"))
     _flip_to_suspended(pipeline, ctx)
@@ -203,7 +192,7 @@ def test_review_only_effect_flags_and_never_moves_the_number(tmp_path):
 
 def test_firing_is_one_shot(tmp_path):
     pipeline, ctx = make_analytic(tmp_path)
-    by_predicate = _seed(pipeline, ctx)
+    by_predicate = seed_acme(pipeline, ctx)
     forecast = _forecast(ctx, by_predicate)
     _arm_presence(ctx, forecast)
     _flip_to_suspended(pipeline, ctx)
@@ -250,7 +239,7 @@ def _successful_execution(ctx, execution_id="exec-abs-1"):
 
 def test_absence_waits_for_its_deadline(tmp_path):
     pipeline, ctx = make_analytic(tmp_path)
-    by_predicate = _seed(pipeline, ctx)
+    by_predicate = seed_acme(pipeline, ctx)
     forecast = _forecast(ctx, by_predicate)
     indicator = _arm_absence(ctx, forecast, deadline="2026-08-17T23:00:00+00:00")
     check_indicators(ctx)
@@ -260,11 +249,10 @@ def test_absence_waits_for_its_deadline(tmp_path):
 
 def test_absence_without_coverage_blocks_instead_of_firing(tmp_path):
     pipeline, ctx = make_analytic(tmp_path)
-    by_predicate = _seed(pipeline, ctx)
+    by_predicate = seed_acme(pipeline, ctx)
     forecast = _forecast(ctx, by_predicate, probability=0.35)
     indicator = _arm_absence(ctx, forecast, deadline="2026-08-17T12:08:00+00:00")
-    while ctx.now_fn() <= "2026-08-17T12:08:00+00:00":
-        pass
+    advance_clock_past(ctx.now_fn, "2026-08-17T12:08:00+00:00")
     check_indicators(ctx)
     blocked = ctx.store.current_indicators()[indicator["indicator_id"]]
     assert blocked["status"] == "COVERAGE_BLOCKED", \
@@ -279,12 +267,11 @@ def test_absence_without_coverage_blocks_instead_of_firing(tmp_path):
 
 def test_absence_fires_only_with_coverage_achieved(tmp_path):
     pipeline, ctx = make_analytic(tmp_path)
-    by_predicate = _seed(pipeline, ctx)
+    by_predicate = seed_acme(pipeline, ctx)
     forecast = _forecast(ctx, by_predicate)
     indicator = _arm_absence(ctx, forecast, deadline="2026-08-17T12:10:00+00:00")
-    while ctx.now_fn() <= "2026-08-17T12:10:00+00:00":
-        pass
-    # the search that counts SEES the deadline: it completes at/after it
+    advance_clock_past(ctx.now_fn, "2026-08-17T12:10:00+00:00")
+    # Only a search finishing at or after the deadline counts as coverage.
     _successful_execution(ctx)
     check_indicators(ctx)
     fired = ctx.store.current_indicators()[indicator["indicator_id"]]
@@ -295,13 +282,12 @@ def test_absence_fires_only_with_coverage_achieved(tmp_path):
 
 def test_absence_is_defeated_by_the_observation_arriving(tmp_path):
     pipeline, ctx = make_analytic(tmp_path)
-    by_predicate = _seed(pipeline, ctx)
+    by_predicate = seed_acme(pipeline, ctx)
     forecast = _forecast(ctx, by_predicate)
     indicator = _arm_absence(ctx, forecast, deadline="2026-08-17T12:30:00+00:00")
     _flip_to_suspended(pipeline, ctx)
     _successful_execution(ctx)
-    while ctx.now_fn() <= "2026-08-17T12:30:00+00:00":
-        pass
+    advance_clock_past(ctx.now_fn, "2026-08-17T12:30:00+00:00")
     check_indicators(ctx)
     retired = ctx.store.current_indicators()[indicator["indicator_id"]]
     assert retired["status"] == "RETIRED", \

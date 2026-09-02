@@ -1,27 +1,20 @@
-"""Adapter carrying ARGUS Source Intelligence evidence into the operational plane.
+"""Adapter carrying ARGUS evidence bundles into the operational plane.
 
-Consumes evidence bundles shaped in the Source Intelligence vocabulary
-(SourceObject / DocumentEnvelope / assertion / KernelAdmissionProposal /
-SourceRelationship field names) and preserves their stronger semantics:
-identifiers, content hashes, identity/authority/independence/claim-basis and
-review states, mapping precision, and source dependence. Nothing is stripped
-to a bare URL; absent assessments stay UNKNOWN rather than being fabricated.
-The adapter reads evidence records; it never writes into Source Intelligence
-stores and never opens human-review gates.
+Identifiers, content hashes, review and independence states, mapping precision
+and source dependence all survive the crossing; nothing is stripped to a bare
+URL and an absent assessment stays UNKNOWN. The adapter only reads.
 """
 from __future__ import annotations
 
-import json
 from typing import Any, Mapping
 
-from .canonical import digest_id
+from .canonical import digest_id, parse_json_strict
 from .connectors import MissionDataConnector
 from .contracts import EvidenceRef
 
 ARGUS_EVIDENCE_MEDIA_TYPE = "application/vnd.curunir.argus-evidence+json"
 
-# Source-relationship types (Source Intelligence vocabulary) that make two
-# publications DEPENDENT on the same underlying basis.
+# Relationship types that make two publications rest on the same basis.
 DEPENDENT_RELATION_TYPES = frozenset({
     "SAME_PUBLICATION", "SAME_CONTENT", "RENDERING_VARIANT", "TRANSLATION", "MIRROR",
     "SYNDICATION", "QUOTED_FROM", "SUMMARIZES", "DERIVED_FROM", "COMMON_PRIMARY_SOURCE",
@@ -34,7 +27,7 @@ class ArgusEvidenceConnector(MissionDataConnector):
     media_type = ARGUS_EVIDENCE_MEDIA_TYPE
 
     def parse(self, body: bytes) -> Any:
-        bundle = json.loads(body.decode("utf-8"))
+        bundle = parse_json_strict(body, label="evidence bundle")
         validate_evidence_bundle(bundle)
         return bundle
 
@@ -54,8 +47,8 @@ def validate_evidence_bundle(bundle: Mapping[str, Any]) -> None:
 
 
 def dependence_group_id(bundle: Mapping[str, Any]) -> str | None:
-    """Deterministic group id over the dependent-source set (sorted union), so
-    every member of the group computes the same id regardless of import order."""
+    """Group id over the sorted dependent-source set, so every member computes
+    the same id whatever the import order."""
     own = bundle["source_object"]["source_object_id"]
     members = {own}
     for relation in bundle.get("source_relationships", []):

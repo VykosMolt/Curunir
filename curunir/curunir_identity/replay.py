@@ -1,4 +1,4 @@
-"""Independent replay verification of retained action signatures."""
+"""Re-verify stored action signatures from the log alone."""
 from __future__ import annotations
 
 from typing import Any

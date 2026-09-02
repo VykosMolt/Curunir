@@ -1,5 +1,4 @@
-// DOM + shared components. Text-first epistemic labels; colour reinforces,
-// never replaces, meaning.
+// DOM helpers and shared components. Status is always shown as a word; colour only adds to it.
 
 export function h(tag, attrs = {}, ...children) {
   const el = document.createElement(tag);
@@ -8,7 +7,6 @@ export function h(tag, attrs = {}, ...children) {
     if (k === "class") el.className = v;
     else if (k === "dataset") Object.assign(el.dataset, v);
     else if (k.startsWith("on") && typeof v === "function") el.addEventListener(k.slice(2), v);
-    else if (k === "html") el.innerHTML = v;
     else el.setAttribute(k, v === true ? "" : v);
   }
   for (const child of children.flat(Infinity)) {
@@ -66,15 +64,16 @@ export function fmtTime(t) {
   return String(t).replace("T", " ").replace(/\+00:00$/, "Z").slice(0, 16);
 }
 
-// pivot link into another workbench route
+// Link to another workbench route.
 export function pivot(route, label) {
   return h("a", { href: `#${route}` }, label ?? route);
 }
 
-// route for a record family id — the shared pivot map
+// The route that shows a record of this kind.
 export function recordRoute(kind, id) {
   const map = {
-    object: `/entities/${id}`, activity: `/events/${id}`, event: `/events/${id}`,
+    object: `/entities/${id}`, object_version: `/entities/${id}`,
+    activity: `/events/${id}`, event: `/events/${id}`,
     semantic_claim: `/claims/${id}`, fabric_manifestation: `/evidence/${id}`,
     fabric_source_descriptor: `/sources/${id}`, analytic_theme: `/themes/${id}`,
     analytic_narrative: `/narratives/${id}`, hypothesis: `/hypotheses/${id}`,
@@ -84,6 +83,8 @@ export function recordRoute(kind, id) {
     workbench_report: `/reports/${id}`, review_item: `/review`,
     collection_route: `/collection`, fabric_watch: `/watches`,
     analyst_task: `/tasks`, information_requirement: `/investigation`,
+    decision: `/activity`, analyst_action: `/activity`, alert: `/activity`,
+    recommendation: `/activity`,
     analytic_assumption: `/record/analytic_assumption/${id}`,
     semantic_observation: `/record/semantic_observation/${id}`,
     response_option: `/record/response_option/${id}`,
@@ -91,8 +92,7 @@ export function recordRoute(kind, id) {
   return map[kind] || `/record/${kind}/${id}`;
 }
 
-// A short, stable handle. An operator refers to a record by the tail of its
-// id; the whole hash is custody detail, not vocabulary.
+// A short handle for a record: its family and the tail of its id.
 export function handle(kind, id) {
   const family = String(kind || "").replace(/^(semantic|analytic|fabric|workbench)_/, "")
     .replace(/_/g, " ");
@@ -100,7 +100,7 @@ export function handle(kind, id) {
   return `${family || "record"} \u00b7${tail}`;
 }
 
-// The full identifier, rendered only in Auditor mode.
+// The full id; CSS shows it only in auditor mode.
 export function ident(id) {
   if (id === undefined || id === null || id === "") return null;
   return h("code", { class: "ident" }, String(id));
@@ -108,8 +108,7 @@ export function ident(id) {
 
 export function refLink(kind, id, label) {
   if (id === "REDACTED") return h("span", { class: "faint" }, "[not accessible]");
-  // A caller that knows what the record SAYS passes a label; only fall back to
-  // an identifier when nothing better exists, and demote it when we do.
+  // Show the label when the caller has one; fall back to a handle plus the id.
   const shown = label ?? handle(kind, id);
   const link = pivot(recordRoute(kind, id), shown);
   if (label !== undefined && label !== null) return link;
@@ -170,8 +169,7 @@ export function svg(tag, attrs = {}, ...children) {
 }
 
 export function probabilityChart(versions, { width = 560, height = 170, onPoint } = {}) {
-  // Authored versions only — the polyline connects recorded judgments; no
-  // interpolation pretends to be history.
+  // One point per authored version; nothing is interpolated.
   const pad = { l: 42, r: 14, t: 12, b: 26 };
   const root = svg("svg", { viewBox: `0 0 ${width} ${height}`, class: "svg-panel",
     role: "img", "aria-label": "Authored probability history" });

@@ -1,27 +1,19 @@
-"""World-model integration: observations → entities, relations, events, claims.
+"""Turn observations into world-model entities, relations, events and claims.
 
-State lives in the shared operational records — ObjectVersion,
-RelationshipVersion, ActivityRecord — appended to the same hash-chained store,
-with EVIDENTIARY provenance descending through EvidenceRefs to manifestations
-and anchored observations. The proposition ledger (SemanticClaim) versions
-forward beside them, carrying independence arithmetic over dependence groups.
+The rules this module keeps:
 
-Discipline enforced here:
-  * knowledge time is the append's recorded_time; valid time comes only from
-    what the source states (or, for historical manifestations, from when the
-    archived state was captured) — a 2008 capture discovered today updates
-    2008, not today;
-  * machine integration lands as epistemic_state EXTRACTED with review_state
-    UNREVIEWED; acceptance is a separate recorded act;
-  * identity is deterministic only within one identifier scheme; cross-scheme
-    equivalence goes through the reversible association engine as a proposal,
+  * valid time comes from what the source says, or from when an archived state
+    was captured — a 2008 capture found today updates 2008, not today;
+  * machine output is recorded as EXTRACTED and UNREVIEWED; accepting it is a
+    separate act;
+  * identifiers from different schemes are matched by a reversible proposal,
     never a silent merge;
-  * a re-run over the same evidence appends nothing (idempotent).
+  * re-running over the same evidence appends nothing.
 """
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Iterable, Mapping
 from urllib.parse import urlparse
 
@@ -31,12 +23,14 @@ from curunir_operational.association import AssociationEngine
 from curunir_operational.contracts import (ActivityRecord, EvidenceRef, ExternalRef,
                                            ObjectVersion, ProvenanceSummary, RelationshipVersion)
 
-from .contracts import SemanticClaim
+from curunir_operational.canonical import parse_time
+
+from .contracts import ClaimStateRecord, ReviewItem, SemanticClaim
 from .store import SemanticStore
 
 INTEGRATOR_VERSION = "curunir-semantic-integrator-0.1"
 
-# subject scheme → world-model object type
+# how a subject's identifier scheme maps to a world-model object type
 _SCHEME_TYPES = {
     "LEI": "ORGANISATION", "SEC_CIK": "ORGANISATION", "WIKIDATA_QID": "ORGANISATION",
     "OPENCORPORATES": "ORGANISATION", "ISIN": "PUBLIC_IDENTIFIER", "TICKER": "PUBLIC_IDENTIFIER",
@@ -56,13 +50,12 @@ def normalize_url_key(url: str) -> str:
 
 
 def origin_key(manifestation: Mapping[str, Any]) -> str:
-    """The underlying origin family a manifestation's information comes from.
+    """Which publisher a manifestation's information really comes from.
 
-    Independence counting is per publisher, not per response: three GLEIF
-    responses restating one record are one origin (GLEIF), and a live
-    retrieval and an archived capture of the same site are one origin (the
-    site). Distinct publishers stay distinct families — which still does not
-    prove independence, only non-identity; the basis note carries that caveat.
+    Independence is counted per publisher, not per response: three GLEIF
+    responses restating one record are one origin, and a live fetch and an
+    archived capture of the same site are one origin. Different publishers are
+    only different, which is not proof that they are independent.
     """
     def _site(url: str) -> str:
         host = urlparse(url if "://" in url else f"https://{url}").hostname or url
@@ -71,9 +64,8 @@ def origin_key(manifestation: Mapping[str, Any]) -> str:
     source = manifestation["source_id"]
     native = manifestation.get("native_id") or manifestation.get("request_url", "")
     if source == "wayback":
-        # capture references are "<14-digit timestamp>/<original url>"; an
-        # enumeration's identity is the plain target URL itself — both belong
-        # to the archived site's family, never to web.archive.org
+        # A capture reference is "<14-digit timestamp>/<original url>" and an
+        # enumeration is the plain URL. Both belong to the archived site.
         timestamp, sep, original = native.partition("/")
         if sep and timestamp.isdigit() and len(timestamp) == 14 and original:
             return _site(original)
@@ -159,11 +151,11 @@ def _provenance(ctx: IntegrationContext, observations: list[Mapping[str, Any]]) 
 
 def _valid_times(document: Mapping[str, Any],
                  observations: list[Mapping[str, Any]]) -> tuple[str | None, str | None, str]:
-    """(valid_from, source_time, precision) under the bitemporal policy.
+    """Return (valid_from, source_time, precision) for a document.
 
-    source_time comes only from what the source states (or the archive
-    capture time); it never defaults to retrieval time — knowledge time must
-    not leak into the valid-time axis."""
+    source_time comes only from what the source states, or from the archive
+    capture time. It never falls back to retrieval time, which is when we
+    learned something, not when it was true."""
     stated_valid = _first(o.get("valid_from") for o in observations)
     source_time = _first([_first(o.get("source_time") for o in observations),
                           document.get("source_time")])
@@ -204,9 +196,8 @@ def integrate_document(ctx: IntegrationContext, document: Mapping[str, Any],
         if attributes_obs:
             object_id = _integrate_entity(ctx, document, subject_ref, attributes_obs, result)
         elif relation_obs or event_obs or claim_only_obs:
-            # subjects without attribute observations still exist as objects:
-            # claims, relations and alerts must never reference an id that no
-            # ObjectVersion carries
+            # A subject with no attribute observations still needs an object:
+            # nothing may reference an id that no object version carries.
             anchor_observation = (relation_obs + event_obs + claim_only_obs)[0]
             object_id = _ensure_stub_object(ctx, subject_ref, document, anchor_observation)
         for observation in relation_obs:
@@ -223,10 +214,10 @@ def integrate_document(ctx: IntegrationContext, document: Mapping[str, Any],
 
 
 def _current_object(store: SemanticStore, object_id: str) -> Mapping[str, Any] | None:
-    """Current version under the projection's rule — latest validity point,
-    ties broken by version number — never raw log order, so a late-arriving
-    older record cannot masquerade as current here."""
-    from curunir_operational.canonical import parse_time
+    """The object's current version: latest valid point, ties broken by version.
+
+    Not log order, so a late-arriving older record cannot pose as current.
+    """
     versions = [v for v in store.records_of("object_version") if v["object_id"] == object_id]
     if not versions:
         return None
@@ -256,10 +247,9 @@ def _integrate_entity(ctx: IntegrationContext, document: Mapping[str, Any], subj
         else:
             attributes[observation["attribute"]] = observation["value"]
 
-    # idempotency is judged against the object's whole history by observation
-    # identity — not against "current", whose valid point may postdate this
-    # document (a historical record must neither re-append forever nor be
-    # judged by a state it did not produce)
+    # Judge "already integrated" against the object's whole history by
+    # observation id, not against the current version, whose valid point may be
+    # later than this document's.
     versions = [v for v in store.records_of("object_version") if v["object_id"] == object_id]
     current = _current_object(store, object_id)
     if versions:
@@ -269,10 +259,8 @@ def _integrate_entity(ctx: IntegrationContext, document: Mapping[str, Any], subj
         if all(o["observation_id"] in seen_assertions for o in observations):
             result["objects"].append({"object_id": object_id, "unchanged": True})
             return object_id
-    # the new version carries the prior version's attributes and labels
-    # forward, so it inherits the prior version's marking joined with this
-    # document's — a compartmented entity's other-names/attributes are never
-    # re-materialized into a lower-marked version by a later, lower run
+    # The new version carries the previous attributes and labels forward, so it
+    # must be at least as restricted as the version it copies them from.
     write_marking = ctx.marking
     if current is not None:
         attributes = {**current.get("attributes", {}), **attributes}
@@ -307,10 +295,9 @@ def _integrate_entity(ctx: IntegrationContext, document: Mapping[str, Any], subj
     store.append("OBJECT_VERSION_APPENDED", version, recorded_time=now, actor=ctx.actor)
     result["objects"].append({"object_id": object_id, "version": version.version})
 
-    # cross-scheme identifiers: reversible equivalence proposals, never merges.
-    # The identifier agreement here is third-party ASSERTED (one source claims
-    # another registry's identifier), so auto-acceptance is withheld and the
-    # ambiguity is queued for review.
+    # Identifiers from another scheme become reversible equivalence proposals,
+    # never merges: one source claiming another registry's identifier is
+    # hearsay, so a human reviews it.
     engine = AssociationEngine(store)
     for scheme_name, identifier, observation in identifier_refs:
         if scheme_name == scheme and identifier == value:
@@ -318,11 +305,8 @@ def _integrate_entity(ctx: IntegrationContext, document: Mapping[str, Any], subj
         other_id = world_object_id(f"{scheme_name}:{identifier}")
         other = _current_object(store, other_id)
         if other_id != object_id and other is not None:
-            # the equivalence proposal (and its review item) reveals that two
-            # objects are the same — mark it with the join of both endpoints,
-            # mirroring propose_cross_scheme_associations; the in-line path
-            # must not leak on a lower-marked route that names a compartmented
-            # object's identifier
+            # The proposal says two objects are the same, so it is at least as
+            # restricted as either of them.
             pair_marking = most_restrictive(
                 [write_marking]
                 + ([marking_from_record(other["marking"])]
@@ -341,7 +325,6 @@ def _integrate_entity(ctx: IntegrationContext, document: Mapping[str, Any], subj
 def _queue_identity_ambiguity(ctx: IntegrationContext, proposal: Mapping[str, Any],
                               observation: Mapping[str, Any] | None,
                               known_item_ids: set[str] | None = None) -> None:
-    from .contracts import ReviewItem
     store = ctx.store
     item_id = digest_id("review-identity", proposal["left_object_id"],
                         proposal["right_object_id"])
@@ -360,9 +343,8 @@ def _queue_identity_ambiguity(ctx: IntegrationContext, proposal: Mapping[str, An
                + "; ".join(proposal["rationale"])[:240],
         evidence_refs=(observation["observation_id"],) if observation else (),
         status="OPEN", resolution_note="", recorded_time=now,
-        # the ambiguity item is ABOUT the proposal (it names the equivalence of
-        # two objects); it inherits the proposal's marking, which is the join
-        # of both endpoints' markings — never a lower context default
+        # The item names the equivalence, so it inherits the proposal's
+        # marking rather than the context default.
         marking=marking_from_record(proposal["marking"])
         if isinstance(proposal.get("marking"), dict) else ctx.marking)
     store.append("REVIEW_ITEM_RECORDED", item, recorded_time=now, actor=ctx.actor)
@@ -370,7 +352,7 @@ def _queue_identity_ambiguity(ctx: IntegrationContext, proposal: Mapping[str, An
 
 def _ensure_stub_object(ctx: IntegrationContext, subject_ref: str,
                         document: Mapping[str, Any], observation: Mapping[str, Any]) -> str:
-    """A relation/event endpoint must exist as an object, even minimally."""
+    """Create a bare object for a relation or event endpoint that has none."""
     store = ctx.store
     object_id = world_object_id(subject_ref)
     if _current_object(store, object_id) is not None:
@@ -457,21 +439,17 @@ def _integrate_event(ctx: IntegrationContext, document: Mapping[str, Any], subje
 def _integrate_claim(ctx: IntegrationContext, document: Mapping[str, Any], subject_ref: str,
                      subject_object_id: str | None, observation: Mapping[str, Any],
                      result: dict) -> None:
-    """Version the proposition ledger for claim-worthy observations."""
+    """Record or advance the claim an observation bears on."""
     store = ctx.store
     subject_id = subject_object_id or world_object_id(subject_ref)
     claim_id = digest_id("claim", subject_id, observation["attribute"])
     versions = [c for c in store.records_of("semantic_claim") if c["claim_id"] == claim_id]
     seen_observations = {o for c in versions for o in c["observation_ids"]}
     if observation["observation_id"] in seen_observations:
-        # the evidence is accounted — but the standing tail (state reset or
-        # unadjudicated-standing review item) may have been lost to an
-        # interruption after the claim append; completing it here makes the
-        # PROCESSING_FAILED retry repair the gap instead of reporting
-        # PROCESSED over partial state. Gated on THIS observation being the
-        # one that produced the latest advance: a re-entry over any older
-        # observation must not re-stamp standing (a later human adjudication
-        # would be falsely 'reset by fresh evidence' that never arrived).
+        # The evidence is already recorded, but the standing bookkeeping that
+        # should follow it may have been lost to an interruption. Finish it
+        # here — only when this observation is the one that produced the latest
+        # advance, so an older observation cannot re-stamp a human's judgment.
         if len(versions) >= 2 \
                 and observation["observation_id"] in versions[-1]["observation_ids"] \
                 and observation["observation_id"] \
@@ -482,16 +460,18 @@ def _integrate_claim(ctx: IntegrationContext, document: Mapping[str, Any], subje
                                    observation_id=observation["observation_id"])
         return
 
-    def _state_time(observation_ids: Iterable[str]) -> str:
-        """When the observed source state was current — never knowledge time.
+    all_observations = {o["observation_id"]: o
+                        for o in store.records_of("semantic_observation")}
 
-        A HISTORICAL manifestation speaks for its capture moment; a live
-        retrieval speaks for its retrieval moment. Ranking on this axis keeps
-        a 2008 capture retrieved today from displacing today's state."""
+    def _state_time(observation_ids: Iterable[str]) -> str:
+        """When the observed state was current at the source, not when we saw it.
+
+        An archived manifestation speaks for its capture moment, a live one for
+        its retrieval moment, so a 2008 capture fetched today cannot displace
+        today's state."""
         times = []
         for oid in observation_ids:
-            record = next((o for o in store.records_of("semantic_observation")
-                           if o["observation_id"] == oid), None)
+            record = all_observations.get(oid)
             if record:
                 manifestation = ctx.manifestation(record["manifestation_id"])
                 if manifestation:
@@ -509,33 +489,27 @@ def _integrate_claim(ctx: IntegrationContext, document: Mapping[str, Any], subje
         new_group = dependence_group_for(new_manifestation) if new_manifestation else ""
         if current["object_or_value"] == observation["value"]:
             if new_group and new_group in set(current["dependence_group_ids"]):
-                return  # same value, same origin family: churn, not new basis
+                return  # same value from the same publisher adds no basis
             supporting = sorted(set(current["observation_ids"]) | {observation["observation_id"]})
         else:
-            # a different value supersedes only when it reflects strictly
-            # newer SOURCE STATE from within the claim's own origin family
-            # (the source updated itself). Older or historical states never
-            # displace current state, and a conflicting value from an
-            # independent origin is a contradiction to surface, not a
-            # supersession — newer is not automatically truer across sources.
+            # A different value replaces the current one only when the same
+            # publisher has newer source state. A conflicting value from another
+            # publisher is a contradiction to surface, not an update: newer is
+            # not automatically truer across sources.
             new_time = _state_time([observation["observation_id"]])
             current_time = _state_time(current["observation_ids"])
-            from curunir_operational.canonical import parse_time
-            # parsed comparison: connector-supplied capture/source times keep
-            # their own offsets, and raw strings would misorder them against
-            # UTC retrieval times
+            # Compare parsed times: capture and source times keep their own
+            # offsets and would sort wrongly as raw strings.
             if not new_time or not current_time \
                     or parse_time(new_time) <= parse_time(current_time):
-                # unknown ordering is treated as not-newer: the observation
-                # stays recorded as evidence but does not displace the claim
+                # Unknown order counts as not newer. The observation stays in
+                # the log as evidence but does not move the claim.
                 return
             if new_group and new_group not in set(current["dependence_group_ids"]):
                 _record_claim_conflict(ctx, current, observation, result)
                 return
     groups = set()
     observation_records = []
-    all_observations = {o["observation_id"]: o
-                        for o in store.records_of("semantic_observation")}
     for observation_id in supporting:
         record = all_observations.get(observation_id)
         if record is not None:
@@ -574,35 +548,26 @@ def _integrate_claim(ctx: IntegrationContext, document: Mapping[str, Any], subje
 
 def _ensure_claim_standing(ctx: IntegrationContext, claim_id: str, version: int, *,
                            new_value: str, observation_id: str) -> None:
-    """Standing bookkeeping after fresh evidence advanced a claim's value —
-    idempotent, so an interrupted run is completed by any later re-entry.
+    """Settle a claim's standing after new evidence changed its value.
 
-    Only machine-bookkeeping states (STALE, SUPERSEDED) are machine-reset,
-    and only when the state PRECEDES the advance: a standing recorded after
-    the advance is a later judgment about the advanced claim, not something
-    "fresh evidence" may touch. RETRACTED, CORRECTED, DISPUTED and
-    SOURCE_WITHDRAWN carry adjudication weight: a SERVICE actor never
-    reverts them; the tension is queued for review instead."""
+    The machine may only clear its own bookkeeping states (STALE, SUPERSEDED),
+    and only when they predate the advance. RETRACTED, CORRECTED, DISPUTED and
+    SOURCE_WITHDRAWN are human judgments: the machine queues them for review
+    instead of reverting them. Safe to re-run.
+    """
     store = ctx.store
-    from curunir_operational.canonical import parse_time
     latest_version = next((c for c in reversed(store.records_of("semantic_claim"))
                            if c["claim_id"] == claim_id), None)
     state_record = store.claim_states().get(claim_id)
     if latest_version is not None and state_record is not None \
             and parse_time(state_record["recorded_time"]) \
             >= parse_time(latest_version["recorded_time"]):
-        # the standing postdates (or shares the instant of) the advance:
-        # nothing to complete — parsed comparison, never raw strings whose
-        # offsets can misorder, and ties fail safe toward NOT resetting.
-        # The in-line call always sees a strictly earlier standing (the
-        # advance's own append moved the clock past it).
+        # The standing is as new as the advance, so there is nothing to
+        # complete. A tie fails safe toward not resetting.
         return
     prior_state = store.claim_state(claim_id)
-    from .contracts import ClaimStateRecord, ReviewItem
-    # standing records NAME the claim's prior standing; they inherit the PRIOR
-    # STATE RECORD's marking (which a compartmented conflict wrote SPECIAL) —
-    # NOT the claim's current version, which the advancing PUBLIC run has
-    # already superseded to a lower marking by the time we get here
+    # The new record names the claim's prior standing, so it inherits that
+    # state record's marking — not the claim's current, possibly lower one.
     standing_marking = most_restrictive([ctx.marking, marking_from_record(state_record["marking"])]) \
         if state_record and isinstance(state_record.get("marking"), dict) else ctx.marking
     if prior_state in ("STALE", "SUPERSEDED"):
@@ -636,19 +601,18 @@ def _ensure_claim_standing(ctx: IntegrationContext, claim_id: str, version: int,
 
 def _record_claim_conflict(ctx: IntegrationContext, current_claim: Mapping[str, Any],
                            observation: Mapping[str, Any], result: dict) -> None:
-    """An independent origin disagrees with the current proposition: mark the
-    claim DISPUTED and queue it for review with both bases visible. History
-    is preserved; nothing is auto-resolved."""
-    from .contracts import ClaimStateRecord, ReviewItem
+    """Mark a claim DISPUTED and queue it when another publisher disagrees.
+
+    Nothing is resolved automatically and no history is lost.
+    """
     store = ctx.store
     now = ctx.now_fn()
     claim_id = current_claim["claim_id"]
     reason = (f"independent source {observation['source_id']} reports "
               f"{observation['value'][:120]!r} against current "
               f"{current_claim['object_or_value'][:120]!r}")
-    # the DISPUTED state and CONTRADICTED item embed the compartmented claim's
-    # value verbatim — they inherit the claim's marking joined with this
-    # integration's, never a lower context default
+    # Both records quote the claim's value, so they are at least as restricted
+    # as the claim itself.
     conflict_marking = most_restrictive([ctx.marking, marking_from_record(current_claim["marking"])]) \
         if isinstance(current_claim.get("marking"), dict) else ctx.marking
     if store.claim_state(claim_id) != "DISPUTED":
@@ -672,9 +636,11 @@ def _record_claim_conflict(ctx: IntegrationContext, current_claim: Mapping[str, 
 
 
 def propose_cross_scheme_associations(ctx: IntegrationContext) -> list[dict[str, Any]]:
-    """Order-independent equivalence sweep: two distinct objects sharing an
-    identity-bearing external identifier become a reversible association
-    proposal (never a merge). Pairs already proposed are not re-proposed."""
+    """Propose an equivalence wherever two objects share an identifier.
+
+    The result does not depend on the order objects were seen in, proposals are
+    reversible and never merges, and a pair is proposed only once.
+    """
     store = ctx.store
     latest: dict[str, Mapping[str, Any]] = {}
     for version in store.records_of("object_version"):
@@ -687,10 +653,8 @@ def propose_cross_scheme_associations(ctx: IntegrationContext) -> list[dict[str,
     recorded_proposals = {tuple(sorted((p["left_object_id"], p["right_object_id"]))): p
                           for p in store.records_of("association_proposal")}
     proposed_pairs = set(recorded_proposals)
-    # a proposal whose review item was lost to an interruption between the
-    # two appends would otherwise sit unadjudicated forever: the sweep
-    # completes the queueing idempotently for every recorded proposal (the
-    # known-item set is computed once, not per proposal)
+    # A proposal whose review item was lost to an interruption would sit
+    # unseen forever, so re-queue every recorded proposal.
     known_item_ids = {r["item_id"] for r in store.records_of("review_item")}
     for proposal in recorded_proposals.values():
         _queue_identity_ambiguity(ctx, proposal, None, known_item_ids)
@@ -703,9 +667,8 @@ def propose_cross_scheme_associations(ctx: IntegrationContext) -> list[dict[str,
                 pair = (left, right)
                 if pair in proposed_pairs:
                     continue
-                # the proposal (and its review item) reveals that two objects
-                # are equivalent — it is at least as restricted as the more
-                # restricted endpoint, never the pipeline default
+                # The proposal says two objects are the same, so it is at
+                # least as restricted as either of them.
                 pair_marking = most_restrictive(
                     [ctx.marking]
                     + [marking_from_record(latest[o]["marking"])
@@ -722,7 +685,7 @@ def propose_cross_scheme_associations(ctx: IntegrationContext) -> list[dict[str,
 
 
 def integrate_all(ctx: IntegrationContext) -> dict[str, int]:
-    """Integrate every normalized document in the store, idempotently."""
+    """Integrate every normalized document in the store; safe to re-run."""
     totals = {"objects": 0, "relationships": 0, "activities": 0, "claims": 0,
               "associations": 0}
     for document in ctx.store.records_of("semantic_document"):

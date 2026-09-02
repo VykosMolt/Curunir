@@ -1,13 +1,6 @@
-"""Coverage and failure accounting per information need.
+"""Per-need coverage: which sources were searched, failed, or never tried.
 
-Derived from recorded plans and executions against the registered source
-population — never from optimism. The rule that matters:
-
-    "we did not find it"  !=  "it does not exist"
-    "we never looked"     !=  either of the above
-
-Every registered source gets an explicit state for the need; unregistered
-source families remain a visible gap, not an invisible one.
+"Not found" is not "does not exist", and "never looked" is neither.
 """
 from __future__ import annotations
 
@@ -22,7 +15,7 @@ _RELEVANT_OUTCOMES = ("EXECUTED_WITH_RESULTS", "EXECUTED_EMPTY", "SOURCE_FAILED"
 
 
 def _need_time_before_coverage(need: dict, profile: dict) -> bool:
-    """True when the need's window ends before the source's coverage begins."""
+    """True when the need's time window ends before the source's coverage starts."""
     need_end = need["time_bounds"][1]
     coverage_start = profile["time_coverage"][0]
     return bool(need_end and coverage_start and need_end < coverage_start)
@@ -102,7 +95,7 @@ def assess_coverage(store: FabricStore, registry: RegistryView, need_id: str, *,
 
 
 def coverage_summary(store: FabricStore, need_id: str) -> dict[str, list[str]]:
-    """Latest coverage state per source, grouped by state."""
+    """Latest coverage state per source for one need, grouped by state."""
     latest: dict[str, dict] = {}
     for record in store.records_of("fabric_coverage"):
         if record["need_id"] == need_id:

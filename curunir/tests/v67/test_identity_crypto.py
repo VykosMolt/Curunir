@@ -1,10 +1,9 @@
-"""V6.7 cryptographic actor identity — retained historical exploit locks.
+"""Cryptographic actor identity, on real Ed25519 keys.
 
-Real Ed25519. An actor holds a private key; the server holds only enrolled
-public keys. These locks pin: challenge-response authentication, session expiry,
-revocation stopping future use, key rotation with historical verification,
-signed load-bearing actions bound to actor+target+version+mission+nonce, and
-replay re-verification distinguishing genuine / tampered / revoked-at-time.
+The actor holds the private key and the server only enrolled public keys. These
+tests cover challenge-response login, session expiry, revocation, rotation with
+old signatures still verifying, actions bound to actor, target, version, mission
+and nonce, and replay telling genuine from tampered or revoked-at-the-time.
 """
 from __future__ import annotations
 
@@ -82,7 +81,7 @@ def _do(store, registry, sessions, session, private_pem, *, nonce,
     return commit_action(store, verified, record_actor=session.actor_id)
 
 
-# ---- authentication ---------------------------------------------------------
+# ---- authentication ----
 
 
 def test_authenticate_requires_the_private_key(tmp_path):
@@ -91,7 +90,7 @@ def test_authenticate_requires_the_private_key(tmp_path):
     session = _login(registry, sessions, "analyst-a", pem_a)
     assert session.actor_id == "analyst-a" and session.actor_kind == "HUMAN"
 
-    # a different (unenrolled) key cannot authenticate as analyst-a
+    # An unenrolled key cannot authenticate as analyst-a.
     from curunir_identity import sign as sign_payload
     other_pem, _ = generate_keypair()
     ch = sessions.issue_challenge("analyst-a")
@@ -109,11 +108,9 @@ def test_challenge_is_single_use_and_expires(tmp_path):
     sig = sign_payload(pem_a, sessions.challenge_payload("analyst-a", ch["nonce"]))
     sessions.authenticate(registry, actor_id="analyst-a", nonce=ch["nonce"],
                           signature_hex=sig)
-    # the same nonce cannot be used again
     with pytest.raises(AuthError):
         sessions.authenticate(registry, actor_id="analyst-a", nonce=ch["nonce"],
                               signature_hex=sig)
-    # an unsigned expired challenge is refused
     ch2 = sessions.issue_challenge("analyst-a")
     clock.advance(sessions.challenge_ttl + 1)
     sig2 = sign_payload(pem_a, sessions.challenge_payload("analyst-a", ch2["nonce"]))
@@ -127,11 +124,10 @@ def test_session_expires_and_dies_on_revocation(tmp_path):
     pem_a = _actor(registry, "analyst-a")
     session = _login(registry, sessions, "analyst-a", pem_a)
     assert sessions.resolve(registry, session.session_id).actor_id == "analyst-a"
-    # expiry
     clock.advance(sessions.session_ttl + 1)
     with pytest.raises(AuthError):
         sessions.resolve(registry, session.session_id)
-    # a fresh session dies the instant its key is revoked (mid-session)
+    # Revoking the key kills a live session immediately.
     session2 = _login(registry, sessions, "analyst-a", pem_a)
     key = registry.active_key_for("analyst-a")
     registry.revoke(key["key_id"], reason="lost laptop")
@@ -139,7 +135,7 @@ def test_session_expires_and_dies_on_revocation(tmp_path):
         sessions.resolve(registry, session2.session_id)
 
 
-# ---- signed actions ---------------------------------------------------------
+# ---- signed actions ----
 
 
 def test_signed_action_binds_actor_mission_nonce_and_version(tmp_path):
@@ -164,26 +160,24 @@ def test_signed_action_binds_actor_mission_nonce_and_version(tmp_path):
         f.update(over)
         return sign_action(pem_a, **f)
 
-    # a well-formed action is accepted and recorded
     out = _do(store, registry, sessions, session, pem_a, nonce="n1")
     assert out["action_id"] and len(store.records_of("signed_action")) == 1
 
-    # replaying the same signed command (same nonce) is refused
+    # The same nonce cannot be used twice.
     with pytest.raises(SignatureRejected) as e:
         _do(store, registry, sessions, session, pem_a, nonce="n1")
     assert e.value.status == REPLAYED_NONCE
 
-    # a signature for report-1 v1 cannot be replayed against another version
+    # A signature for one version does not carry to another.
     with pytest.raises(SignatureRejected) as e:
         verify(build(nonce="n2"), current="report-1@v2")
     assert e.value.status == STALE_VERSION
 
-    # a signature for report-1 cannot be transplanted onto report-2 (same version)
+    # Nor onto a different report at the same version.
     with pytest.raises(SignatureRejected) as e:
         verify(build(nonce="n2b"), current="report-2@v1", target_id="report-2")
     assert e.value.status == WRONG_TARGET
 
-    # wrong mission
     with pytest.raises(SignatureRejected) as e:
         verify(build(nonce="n3", mission_id="other-mission"), current="report-1@v1")
     assert e.value.status == WRONG_MISSION
@@ -207,14 +201,13 @@ def test_cannot_sign_as_another_actor_or_tamper(tmp_path):
                   target_id="report-1", target_version_token="report-1@v1",
                   mission_id=MISSION, command={"disposition": "APPROVED"})
 
-    # payload claims analyst-b, but the session is analyst-a
+    # The payload claims analyst-b while the session belongs to analyst-a.
     signed = sign_action(pem_a, actor_id="analyst-b", actor_kind="HUMAN",
                          nonce="n1", timestamp=sessions.now_fn(), **common)
     with pytest.raises(SignatureRejected) as e:
         verify(signed)
     assert e.value.status == WRONG_ACTOR
 
-    # tampering the payload after signing breaks the signature
     good = sign_action(pem_a, actor_id="analyst-a", actor_kind="HUMAN",
                        nonce="n2", timestamp=sessions.now_fn(), **common)
     tampered = {**good["payload"], "command": {"disposition": "REJECTED"}}
@@ -224,8 +217,7 @@ def test_cannot_sign_as_another_actor_or_tamper(tmp_path):
 
 
 def test_action_timestamp_must_be_near_server_time(tmp_path):
-    # a live actor cannot back/post-date an act to move it across a deadline or
-    # a later key revocation (adversarial-review Finding 3)
+    # An act cannot be back- or post-dated across a deadline or a key revocation.
     store, clock, registry, sessions = _fixture(tmp_path)
     pem_a = _actor(registry, "analyst-a")
     session = _login(registry, sessions, "analyst-a", pem_a)
@@ -246,25 +238,24 @@ def test_action_timestamp_must_be_near_server_time(tmp_path):
         assert e.value.status == CLOCK_SKEW
 
 
-# ---- key lifecycle + replay -------------------------------------------------
+# ---- key lifecycle and replay ----
 
 
 def test_rotation_keeps_history_verifiable(tmp_path):
     store, clock, registry, sessions = _fixture(tmp_path)
     pem_a = _actor(registry, "analyst-a")
     session = _login(registry, sessions, "analyst-a", pem_a)
-    _do(store, registry, sessions, session, pem_a, nonce="n1")  # signed under old key
+    _do(store, registry, sessions, session, pem_a, nonce="n1")  # under the old key
     old_key = registry.active_key_for("analyst-a")["key_id"]
 
-    # rotate to a new key
     clock.advance(60)
     new_pem, new_pub = generate_keypair()
     registry.rotate(actor_id="analyst-a", new_public_key_hex=new_pub)
     assert registry.current(old_key)["status"] == RETIRED
     new_session = _login(registry, sessions, "analyst-a", new_pem)
-    _do(store, registry, sessions, new_session, new_pem, nonce="n2")  # under new key
+    _do(store, registry, sessions, new_session, new_pem, nonce="n2")  # under the new key
 
-    # both historical actions still verify against the key valid at their time
+    # Each action still verifies against the key that was valid when it was made.
     result = verify_all(store)
     assert result["all_genuine"], result
     assert result["count"] == 2
@@ -277,12 +268,12 @@ def test_revocation_stops_future_but_keeps_history_unless_compromised(tmp_path):
     _do(store, registry, sessions, session, pem_a, nonce="n1")
     key_id = registry.active_key_for("analyst-a")["key_id"]
 
-    # ordinary revocation: the past action stays GENUINE
+    # An ordinary revocation leaves the past action genuine.
     clock.advance(60)
     registry.revoke(key_id, reason="rotated out of service")
     assert verify_all(store)["all_genuine"]
 
-    # compromise: the same past action is retroactively distrusted
+    # A compromise makes the same past action untrusted after the fact.
     registry.revoke(key_id, reason="key exfiltrated", compromised=True)
     result = verify_all(store)
     assert not result["all_genuine"]
@@ -296,13 +287,13 @@ def test_replay_detects_tampered_record(tmp_path):
     _do(store, registry, sessions, session, pem_a, nonce="n1")
     record = dict(store.records_of("signed_action")[0])
 
-    # forge the command in the stored payload → digest no longer matches
+    # Forging the stored command breaks the digest.
     record["signed_payload"] = {**record["signed_payload"],
                                 "command": {"disposition": "REJECTED"}}
     from curunir_identity.replay import verify_signed_action
     assert verify_signed_action(registry, record) == DIGEST_MISMATCH
 
-    # forge the command AND fix the digest → the signature no longer verifies
+    # Fixing the digest as well still leaves the signature wrong.
     from curunir_operational.canonical import sha256
     record["payload_digest"] = sha256(dict(record["signed_payload"]))
     assert verify_signed_action(registry, record) == SIGNATURE_INVALID
@@ -315,14 +306,13 @@ def test_service_actor_is_distinct_from_human(tmp_path):
     out = _do(store, registry, sessions, session, svc_pem, nonce="n1",
               action_type="watch_tick")
     assert out["action_id"]
-    # the recorded action carries SERVICE — a human-only gate (enforced by the
-    # command layer on actor_kind) can distinguish it and refuse
+    # The record names SERVICE, which is what a human-only gate refuses on.
     assert store.records_of("signed_action")[0]["actor_kind"] == "SERVICE"
 
 
 def test_active_key_cap_bounds_enrollment_and_auth_work(tmp_path):
-    # review finding 5 (F2-round-B): an actor's active-key count is bounded, so
-    # an enrol flood cannot make authenticate O(K).
+    # An actor's active-key count is bounded, so an enrol flood cannot slow
+    # authentication down.
     from curunir_identity.registry import MAX_ACTIVE_KEYS_PER_ACTOR
     from curunir_identity import generate_keypair, sign
     store, clock, registry, sessions = _fixture(tmp_path)
@@ -332,11 +322,10 @@ def test_active_key_cap_bounds_enrollment_and_auth_work(tmp_path):
         registry.enroll(actor_id="analyst-a", actor_kind="HUMAN", public_key_hex=pub)
         pems.append(pem)
     assert len(registry.active_keys_for("analyst-a")) == MAX_ACTIVE_KEYS_PER_ACTOR
-    # the next new key is refused
     _, over = generate_keypair()
     with pytest.raises(ValueError, match="maximum"):
         registry.enroll(actor_id="analyst-a", actor_kind="HUMAN", public_key_hex=over)
-    # every enrolled device key still authenticates (multi-device, no lock-out)
+    # Every enrolled device still authenticates.
     for pem in (pems[0], pems[-1]):
         ch = sessions.issue_challenge("analyst-a")
         sig = sign(pem, sessions.challenge_payload("analyst-a", ch["nonce"]))
@@ -345,23 +334,23 @@ def test_active_key_cap_bounds_enrollment_and_auth_work(tmp_path):
 
 
 def test_session_eviction_hits_the_flooding_actor_not_victims(monkeypatch):
-    # review finding 5: at the session cap, authenticate evicts the AUTHENTICATING
-    # actor's OWN oldest session, never another actor's live session.
+    # At the session cap, the authenticating actor loses its own oldest session,
+    # never someone else's live one.
     from curunir_identity import sessions as sess_mod
     from curunir_identity.sessions import Session, SessionManager
     monkeypatch.setattr(sess_mod, "MAX_SESSIONS", 3)
     sm = SessionManager(now_fn=lambda: "2026-08-17T12:00:00+00:00")
     sm._sessions = {
         "vb": Session("vb", "analyst-b", "HUMAN", "kb",
-                      "2026-08-17T11:00:00+00:00", "2026-08-17T13:00:00+00:00"),  # oldest globally
+                      "2026-08-17T11:00:00+00:00", "2026-08-17T13:00:00+00:00"),  # the oldest of all
         "a1": Session("a1", "analyst-a", "HUMAN", "ka",
                       "2026-08-17T11:30:00+00:00", "2026-08-17T13:00:00+00:00"),
         "a2": Session("a2", "analyst-a", "HUMAN", "ka",
                       "2026-08-17T11:45:00+00:00", "2026-08-17T13:00:00+00:00"),
     }
-    sm._prune_sessions("2026-08-17T12:00:00+00:00", "analyst-a")  # analyst-a re-auth at cap
-    assert "vb" in sm._sessions      # the victim's live session survives
-    assert "a1" not in sm._sessions  # the flooder's OWN oldest was evicted
+    sm._prune_sessions("2026-08-17T12:00:00+00:00", "analyst-a")  # analyst-a re-authenticates
+    assert "vb" in sm._sessions
+    assert "a1" not in sm._sessions
 
 
 def test_active_key_cap_is_atomic_across_store_instances(tmp_path):

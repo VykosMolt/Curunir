@@ -1,16 +1,8 @@
-/* Curunír workbench — "Quiet Instrument"
+/* Curunír workbench stylesheet.
  *
- * Editorial reading surface, operator density underneath.
- *
- * Three rules this file exists to enforce:
- *   1. The VALUE is the largest thing on screen. A predicate is a label; a
- *      provenance line is a whisper. What the evidence says is the headline.
- *   2. Epistemic status is a WORD. Colour and rule-weight reinforce it and
- *      never carry it alone — a monochrome screenshot must lose no meaning.
- *   3. Identifiers and hashes are not the operator's vocabulary. They live
- *      behind Auditor mode, and nowhere else.
- *
- * No webfonts. This tool does not make outbound requests for typography.
+ * Three rules: the value is the largest thing on screen; status is shown as a
+ * word, with colour only reinforcing it; identifiers and hashes appear only in
+ * auditor mode. No webfonts, so the page makes no outbound requests.
  */
 
 /* ---- palette: "Archive" -------------------------------------------------- */
@@ -77,7 +69,7 @@ body {
   -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility;
 }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
-/* the reading surface takes focus so the keyboard can scroll it; that is not
+/* the reading surface takes focus for keyboard scrolling; that is not
    an interaction, so it must not draw a focus ring */
 #main:focus, #main:focus-visible { outline: none; }
 .hidden { display: none !important; }

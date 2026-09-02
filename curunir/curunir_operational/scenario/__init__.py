@@ -1,10 +1,7 @@
-"""SYNTHETIC_CIVIL_DEFENCE_LOGISTICS_CORRIDOR_V1.
+"""Scenario fixtures and runners for the shared logistics slice.
 
-Fully fictitious scenario fixtures and runner for the shared logistics
-visibility vertical slice. Everything here is synthetic: the "Vessia Corridor"
-region, its facilities, coordinates (open North Atlantic, no real-world
-facility implied), organisations, sources and events are invented. The core
-`curunir_operational` modules must never import from this package — the
-dependency points one way only.
+Everything here is invented: the Vessia Corridor, its facilities, coordinates
+(open North Atlantic), organisations, sources and events. The core modules
+must never import from this package; the dependency points one way.
 """
 SCENARIO_ID = "SYNTHETIC_CIVIL_DEFENCE_LOGISTICS_CORRIDOR_V1"

@@ -1,8 +1,8 @@
-"""Single reuse point for canonical serialization, hashing and identifiers.
+"""One place for canonical serialization, hashing and identifiers.
 
-Every hash, canonical byte sequence and deterministic identifier in the
-operational plane flows through this module, so the coupling to the wider
-repository stays confined to one replaceable seam (see sovereignty manifest).
+Every hash, canonical byte sequence and deterministic id in the operational
+plane goes through here, so the dependency on the wider repository stays in
+one replaceable seam.
 """
 from __future__ import annotations
 
@@ -11,10 +11,8 @@ import math
 from datetime import datetime, timezone
 from typing import Any, Mapping
 
-from argus.prospective.freezing import canonical_bytes, sha256, write_json  # noqa: F401 (re-exported)
-from argus.source_intelligence.models import digest_id, require_aware, require_sha256, stable_json  # noqa: F401
-from argus.extract import propose_mentions  # noqa: F401
-from argus.public_web_transport_v4 import retrieve_public_bytes_v4  # noqa: F401
+from argus.prospective.freezing import canonical_bytes, sha256  # noqa: F401 (re-exported)
+from argus.source_intelligence.models import digest_id, require_aware, require_sha256  # noqa: F401
 
 CONTRACT_VERSION = "curunir-operational-contracts-v1"
 
@@ -36,13 +34,11 @@ MAX_CANONICAL_DEPTH = 256
 
 
 def validate_interchange(value: Any, *, _depth: int = 0) -> None:
-    """Validate the value domain shared by records, signatures, and imports.
+    """Check that a value is ordinary JSON: string keys, finite numbers,
+    well-formed Unicode, bounded nesting.
 
-    The external kernel supplies canonical ordering and hashing.  Curunír owns
-    the stricter interchange boundary: canonical state is ordinary JSON with
-    string keys, finite numbers, well-formed Unicode, and bounded nesting.  A
-    value refused here cannot be persisted through another serializer and then
-    become unreadable or byte-divergent later.
+    A value refused here cannot be written by one serializer and then read
+    back differently, or not at all, by another.
     """
     if _depth > MAX_CANONICAL_DEPTH:
         raise ValueError("canonical value exceeds the maximum nesting depth")
@@ -106,11 +102,11 @@ def parse_json_strict(data: bytes | str, *, label: str = "JSON") -> Any:
 
 def parse_external_json(data: bytes | str, *, label: str = "external JSON"
                         ) -> tuple[Any, bool]:
-    """Parse foreign JSON without losing duplicate-key or Unicode defects.
+    """Parse foreign JSON without hiding duplicate-key or Unicode defects.
 
-    A lone surrogate in a source string is repaired to U+FFFD and disclosed by
-    the returned flag. Structural ambiguity, non-finite numbers, unsupported
-    depth, invalid UTF-8, and key collisions remain loud refusals.
+    A lone surrogate is repaired to U+FFFD and the returned flag says so.
+    Ambiguous structure, non-finite numbers, excessive depth, invalid UTF-8 and
+    key collisions stay refusals.
     """
     repaired = False
 

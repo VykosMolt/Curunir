@@ -1,5 +1,4 @@
-"""Shared scenario setup so multiple scenarios reuse one fabric wiring without
-duplicating ingestion, provenance or access logic."""
+"""Shared setup so several scenarios reuse one fabric wiring."""
 from __future__ import annotations
 
 from typing import Any, Iterable, Mapping

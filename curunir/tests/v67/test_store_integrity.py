@@ -1,8 +1,5 @@
-"""V6.7 historical store exploits, classified by invariant.
-
-These tests attack the shared durability/admission mechanisms rather than the
-old round-by-round call sites.
-"""
+"""Store durability and admission: the hash chain, a torn tail, and what the
+store will and will not accept."""
 from __future__ import annotations
 
 import hashlib
@@ -78,9 +75,8 @@ def test_store_admission_is_the_causal_marking_floor(tmp_path, monkeypatch):
     assert event["record"]["marking"]["compartments"] == ["SENSITIVE-INFRA"]
     assert event["record"]["marking"]["min_role"] == "ANALYST"
 
-    # Negative control: sever exactly the claimed dependency.  The same weak
-    # input then remains weak, proving the preceding result came from the
-    # canonical admission primitive rather than the fixture or schema.
+    # Cut the dependency the result is claimed to rest on. The same input then
+    # stays weak, which shows the result came from admission, not the fixture.
     monkeypatch.setattr(store_module, "admit_marking", lambda _store, record: dict(record))
     severed = make_store(tmp_path, "severed")
     severed.append(

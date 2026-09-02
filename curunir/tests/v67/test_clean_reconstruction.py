@@ -1,4 +1,4 @@
-"""The committed V6.7 tree reconstructs only with its exact external kernel."""
+"""The committed tree reconstructs only against its exact external kernel."""
 from __future__ import annotations
 
 import json

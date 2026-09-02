@@ -1,10 +1,7 @@
-"""Semantic store: the fabric store plus semantic event types.
+"""The fabric store plus the semantic event types and replayed views over them.
 
-One store root now carries the full loop under a single hash chain: mission
-workflow, source registry, plans, executions, manifestations, coverage,
-watches, normalized documents, observations, claims and their lifecycle,
-semantic changes, hypotheses, discriminators, collection routes and the
-review queue — with the inherited export/import/replay guarantees.
+One store root carries the whole loop under a single hash chain, and keeps the
+fabric store's export, import and replay guarantees.
 """
 from __future__ import annotations
 
@@ -25,22 +22,16 @@ SEMANTIC_EVENT_TYPES = {
 
 class SemanticStore(FabricStore):
     EVENT_TYPES = {**FabricStore.EVENT_TYPES, **SEMANTIC_EVENT_TYPES}
-    # the four re-appended families replay latest-wins; strict next-version
-    # enforcement (inside the append lock, after catch-up) makes a stale
-    # writer raise instead of silently shadowing another writer's update —
-    # and guarantees log order equals version order, keeping latest_by_id
-    # correct
+    # These families are re-appended and replay latest-wins. Requiring the next
+    # version number makes a stale writer raise instead of silently shadowing
+    # someone else's update, and keeps log order equal to version order.
     VERSIONED_RECORD_TYPES = {
         **FabricStore.VERSIONED_RECORD_TYPES,
         "hypothesis": "hypothesis_id",
         "discriminator": "discriminator_id",
         "collection_route": "route_id",
         "review_item": "item_id",
-        # the proposition ledger itself: version plumbing already exists
-        # (next_claim_version); enforcement makes a stale writer's claim
-        # version raise instead of shadowing current propositions
         "semantic_claim": "claim_id",
-        # escalation folds re-append requirements
         "information_requirement": "requirement_id",
     }
 
@@ -49,10 +40,10 @@ class SemanticStore(FabricStore):
         known = self.latest_by_id(record_type, id_field).get(record_id)
         return (known.get("version", 1) + 1) if known else 1
 
-    # ---- replayed views over semantic records ---------------------------
+    # ---- replayed views ---------------------------------------------
 
     def current_claims(self) -> dict[str, dict]:
-        """Latest version per claim_id; every prior version stays in the log."""
+        """Latest version per claim; every prior version stays in the log."""
         current: dict[str, dict] = {}
         for record in self.records_of("semantic_claim"):
             known = current.get(record["claim_id"])
@@ -61,7 +52,7 @@ class SemanticStore(FabricStore):
         return current
 
     def claim_states(self) -> dict[str, dict]:
-        """Latest lifecycle state per claim; claims without one are CURRENT."""
+        """Latest lifecycle state per claim; a claim without one is CURRENT."""
         return self.latest_by_id("semantic_claim_state", "claim_id")
 
     def claim_state(self, claim_id: str) -> str:

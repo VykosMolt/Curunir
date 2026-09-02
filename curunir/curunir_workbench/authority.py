@@ -1,8 +1,8 @@
-"""Authoritative report controls over raw retained state.
+"""What the stored records say about whether a report may be approved.
 
-Presentation projections answer what an actor may read.  This module answers
-whether an approval may commit.  A hidden control record therefore blocks; it
-is never interpreted as absent.
+A view answers what an actor may read; this module answers whether an approval
+may commit, so it reads the raw store. A record the approver cannot see blocks
+the approval instead of counting as absent.
 """
 from __future__ import annotations
 
@@ -53,14 +53,13 @@ def _basis_closure(
     store: WorkbenchStore,
     direct_refs: Iterable[str],
 ) -> tuple[tuple[dict, ...], tuple[str, ...]]:
-    """Walk raw material dependencies to a fixpoint.
+    """Follow every reference from the report until nothing new turns up.
 
-    Two reverse relationships are part of report semantics rather than the
-    general information-flow graph: an observation/manifestation may be cited
-    as support for the claims derived from it, and an objective is evaluated
-    through assumptions and impact paths that name it.  They live here so the
-    approval gate cannot omit them while the marking registry retains its
-    correct dependency direction.
+    Two of the steps run backwards: citing an observation or a manifestation
+    also pulls in the claims drawn from it, and citing an objective pulls in the
+    assumptions and impact paths that name it. Both belong to what a report
+    rests on, so the approval gate follows them even though the marking registry
+    records the dependency the other way round.
     """
     queue = [MaterialReference("*", ref) for ref in direct_refs]
     records: list[dict] = []
@@ -142,9 +141,9 @@ def _submission_actors(store: WorkbenchStore, report_id: str) -> set[str]:
         for disposition in store.report_dispositions(report_id)
         if disposition["disposition"] == "SUBMITTED"
     }
-    # The IN_REVIEW version is the durable first half of submit_report.  If a
-    # crash loses the companion disposition, its event actor still binds the
-    # submitter and prevents self-approval.
+    # Submitting writes the IN_REVIEW version first. If the disposition after
+    # it is lost, that event's actor still names the submitter, so they still
+    # cannot approve their own report.
     actors.update(
         event["actor"]
         for event in store.events()
@@ -186,8 +185,8 @@ def authoritative_approval_state(
             else:
                 hidden_basis.append(concern)
 
-        # A raw dependency outside the approving context is itself a control
-        # fact.  The filtered projection may not turn it into apparent absence.
+        # A dependency the approver cannot see still counts; the filtered view
+        # must not make it look like nothing is there.
         if not can_view(record.get("marking"), context):
             hidden_basis.append({
                 "code": "HIDDEN_BASIS_STATE",

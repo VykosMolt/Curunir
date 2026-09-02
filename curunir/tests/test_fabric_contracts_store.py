@@ -1,4 +1,5 @@
-"""Fabric contracts and store: validation invariants and durable replay."""
+"""Fabric records: what the contracts refuse to build, and what a reopened store
+still knows."""
 from __future__ import annotations
 
 import pytest
@@ -81,7 +82,7 @@ def test_fabric_store_accepts_fabric_and_mission_events(tmp_path):
     store = FabricStore.create(tmp_path / "store", "fabric-test", NOW)
     store.append("FABRIC_EXECUTION_RECORDED", _execution(), recorded_time=NOW, actor="t")
     store.append("FABRIC_MANIFESTATION_RECORDED", _manifestation(), recorded_time=NOW, actor="t")
-    # mission event types still work on the same chain
+    # Mission events share the same chain.
     from curunir_operational.contracts import InformationRequirement
     requirement = InformationRequirement(
         requirement_id="req-1", mission_context="m", question="q?", affected_ids=(),
@@ -126,5 +127,4 @@ def test_latest_by_id_supersedes_on_replay(tmp_path):
                  recorded_time="2026-08-15T13:00:00+00:00", actor="t")
     latest = store.latest_by_id("fabric_watch", "watch_id")
     assert latest["w1"]["active"] is False
-    # both events remain in the log — nothing was rewritten
-    assert len(store.records_of("fabric_watch")) == 2
+    assert len(store.records_of("fabric_watch")) == 2  # nothing was rewritten

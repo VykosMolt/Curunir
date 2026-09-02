@@ -1,5 +1,5 @@
-"""Model plane and workflow: deterministic providers, inference records,
-proposal materialization, alert lifecycle, recommendations, human decisions."""
+"""Providers and workflow: rule output becomes proposals, proposals become alerts
+and recommendations, and only a human decides."""
 from __future__ import annotations
 
 import pytest
@@ -90,7 +90,7 @@ def test_rule_provider_detects_conditions(tmp_path):
     store, projection = build_scene(tmp_path)
     provider = DeterministicRuleProvider(store)
     proposals = provider.run(projection, SERVICE_CONTEXT, recorded_time=t(27.0))
-    assert proposals_of(proposals, "RELATIONSHIP_CANDIDATE")  # sensor vs reports conflict
+    assert proposals_of(proposals, "RELATIONSHIP_CANDIDATE")  # the sensor and the reports disagree
     assert proposals_of(proposals, "STATE_CANDIDATE")
     assert proposals_of(proposals, "ALERT_CANDIDATE", "rule-infrastructure-conflict")
     assert proposals_of(proposals, "ALERT_CANDIDATE", "rule-movement-route-risk")
@@ -113,7 +113,7 @@ def test_provider_input_is_access_filtered(tmp_path):
                                 (), ("CORRIDOR-OPS",), "CIVDEF-AUTH")
     provider = DeterministicRuleProvider(store)
     proposals = provider.run(projection, low_service, recorded_time=t(27.0))
-    # without the restricted sensor observation there is no conflicting pair
+    # Without the restricted observation there is nothing left to conflict with.
     assert not proposals_of(proposals, "ALERT_CANDIDATE", "rule-infrastructure-conflict")
     assert not proposals_of(proposals, "RELATIONSHIP_CANDIDATE")
     high = DeterministicRuleProvider(store).run(projection, SERVICE_CONTEXT, recorded_time=t(27.5))
@@ -129,14 +129,14 @@ def test_materialization_alerts_dedup_dispute(tmp_path):
     first = workflow.materialize(conflict_alert, actor_id="workflow", recorded_time=t(27.1))
     assert first["created"] is True
     again = workflow.materialize(conflict_alert, actor_id="workflow", recorded_time=t(27.2))
-    assert again["created"] is False  # dedup absorbed as a transition
+    assert again["created"] is False  # the repeat is recorded as a transition instead
     transitions = store.records_of("alert_transition")
     assert transitions and "retriggered" in transitions[-1]["note"]
     workflow.materialize(proposals_of(proposals, "RELATIONSHIP_CANDIDATE")[0], actor_id="workflow", recorded_time=t(27.3))
     workflow.materialize(proposals_of(proposals, "STATE_CANDIDATE")[0], actor_id="workflow", recorded_time=t(27.4))
     updated = Projection(store, snapshot_time=t(28.0))
     assert updated.objects["infra-BR-7"]["current"]["epistemic_state"] == "DISPUTED"
-    assert updated.objects["infra-BR-7"]["history_count"] == 2  # non-destructive
+    assert updated.objects["infra-BR-7"]["history_count"] == 2  # the old version is still there
     conflicts = [r for r in store.records_of("relationship_version") if r["relation_type"] == "CONFLICTS_WITH"]
     assert conflicts and conflicts[0]["status"] == "ACTIVE"
 
@@ -172,7 +172,7 @@ def test_mock_provider_is_deterministic_and_unaccredited(tmp_path):
     restricted_store, restricted_projection = build_scene(tmp_path.joinpath("r"), restrict_first_observation=True)
     hidden = MockAssessmentProvider(restricted_store).run(restricted_projection, LOW_CONTEXT, "obs-sensor-1",
                                                           recorded_time=t(27.0))
-    assert hidden is None  # provider cannot be pointed at records the context cannot view
+    assert hidden is None  # a provider cannot be aimed at a record the context cannot see
 
 
 def test_recommendation_decision_guards(tmp_path):
@@ -187,18 +187,18 @@ def test_recommendation_decision_guards(tmp_path):
     record = [r for r in store.records_of("recommendation") if r["recommendation_id"] == recommendation_id][0]
     assert record["provider_id"] == "curunir-deterministic-rules"
     assert record["evidence_refs"] and all("@v" in ref or ref.startswith("evgroup") for ref in record["evidence_refs"])
-    with pytest.raises(WorkflowError):  # services cannot decide
+    with pytest.raises(WorkflowError):  # a service actor cannot decide
         workflow.decide(recommendation_id, context=SERVICE_CONTEXT, state="ACCEPTED", rationale="x",
                         recorded_time=t(27.2), marking=BASE_MARKING)
-    with pytest.raises(WorkflowError):  # insufficient role (requires SUPERVISOR)
+    with pytest.raises(WorkflowError):  # deciding needs the SUPERVISOR role
         workflow.decide(recommendation_id, context=LOW_CONTEXT, state="ACCEPTED", rationale="x",
                         recorded_time=t(27.2), marking=BASE_MARKING)
     impostor = AccessContext("ctx-imp", "curunir-deterministic-rules", "HUMAN", ("SUPERVISOR",),
                              ("SENSITIVE-INFRA",), ("CORRIDOR-OPS",), "CIVDEF-AUTH")
-    with pytest.raises(WorkflowError):  # recommending provider cannot decide
+    with pytest.raises(WorkflowError):  # the provider that recommended it cannot decide it
         workflow.decide(recommendation_id, context=impostor, state="ACCEPTED", rationale="x",
                         recorded_time=t(27.2), marking=BASE_MARKING)
-    # snapshot stays stable even after the referenced object gains a new version
+    # A new version of the referenced object must not move the frozen snapshot.
     store.append("OBJECT_VERSION_APPENDED",
                  obj("route-R1", "ROUTE", version=2, hours=27.0,
                      geometry=Geometry("LINESTRING", ((-30.30, 45.10), (-30.10, 45.20), (-29.90, 45.30)))),
@@ -208,7 +208,7 @@ def test_recommendation_decision_guards(tmp_path):
                                modification="split into two serials", recorded_time=t(27.4), marking=BASE_MARKING)
     assert decision["state"] == "MODIFIED"
     assert decision["evidence_snapshot_hash"] == record["evidence_snapshot_hash"]
-    with pytest.raises(WorkflowError):  # analyst actions also require humans
+    with pytest.raises(WorkflowError):  # analyst actions need a human too
         workflow.analyst_action(context=SERVICE_CONTEXT, kind="ACKNOWLEDGE", subject_kind="alert",
                                 subject_id="alert-x", note="", recorded_time=t(27.5), marking=BASE_MARKING)
 

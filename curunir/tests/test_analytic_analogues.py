@@ -1,6 +1,5 @@
-"""Historical analogues: evidence-bound episodes, structural retrieval with
-exposed matches/mismatches/transfer risks, and no path from analogy to
-forecast."""
+"""Historical analogues: episodes must cite evidence, retrieval shows what
+matches and what does not, and an analogy never becomes a forecast."""
 from __future__ import annotations
 
 import pytest
@@ -74,15 +73,14 @@ def test_retrieval_exposes_structure_and_transfer_risks(tmp_path):
     analogue = analogues[0]
     matched_dims = {d["dimension"] for d in analogue["matched"]}
     mismatched_dims = {d["dimension"] for d in analogue["mismatched"]}
-    assert "EVENT_TYPE" in matched_dims          # both have lei_registered
+    assert "EVENT_TYPE" in matched_dims          # both are lei_registered
     assert "ACTOR_CONFIGURATION" in mismatched_dims  # different entities
     assert analogue["transfer_risks"]
     assert any("not outcome prediction" in r for r in analogue["transfer_risks"])
     assert analogue["authority"] == "SUPPORTED_INFERENCE"
-    # the record has no forecast-shaped field at all
     assert not any("forecast" in key or "probability" in key
                    for key in analogue.keys())
-    # retrieval is idempotent
+    # Retrieving twice must reuse the one record, not make a second.
     again = retrieve_analogues(ctx, query_kind="analytic_theme",
                                query_id=theme["theme_id"])
     assert len(ctx.store.records_of("historical_analogue")) == 1
@@ -117,7 +115,7 @@ def test_explanation_keeps_outcome_as_history_not_forecast(tmp_path):
 
 
 def test_retrieve_analogues_cites_episode_not_its_title(tmp_path):
-    """R25A-3: cite and floor on a restricted episode; never quote it."""
+    """A retrieved analogue cites a restricted episode by id and never quotes it."""
     secret = "OPERATION MOONLIGHT 2014 covert delisting"
     pipeline, ctx = make_analytic(tmp_path)
     claims = _seed(pipeline, ctx)

@@ -1,12 +1,7 @@
-"""Typed pivot graph: evidence-grounded reasons to look somewhere else.
+"""Pivots: evidence-backed reasons to look somewhere else.
 
-Rule-based proposers walk acquired native results and emit PivotEdge
-proposals (entity → identifier → source family → document history …), each
-citing the manifestation that produced it. Pivots are reversible proposals:
-resolution appends a new record with the same pivot_id (latest wins on
-replay); identity is never merged here. ``queries_from_pivots`` turns
-accepted or proposed pivots into next-generation query specs so discovery
-can continue from what it found.
+A pivot is a proposal that cites the manifestation it came from. Resolving one
+appends a new record with the same id; nothing is merged or deleted.
 """
 from __future__ import annotations
 
@@ -20,7 +15,7 @@ from .contracts import PivotEdge, QuerySpec
 from .executor import ExecutionResult
 from .store import FabricStore
 
-# identifier scheme → source family whose records it unlocks
+# identifier scheme -> the source that resolves it
 _SCHEME_TO_SOURCE = {
     "LEI": "gleif",
     "SEC_CIK": "sec-edgar",
@@ -33,7 +28,7 @@ MAX_PIVOTS_PER_RESPONSE = 500
 
 def propose_pivots(store: FabricStore, outcome: ExecutionResult, *, subject: str,
                    now: str, actor: str, marking) -> list[PivotEdge]:
-    """Derive rule-based pivots from one execution's native results."""
+    """Propose pivots from one execution's results."""
     if not outcome.manifestations:
         return []
     evidence = tuple(item.manifestation_id for item in outcome.manifestations)
@@ -93,7 +88,7 @@ def propose_pivots(store: FabricStore, outcome: ExecutionResult, *, subject: str
 
 def resolve_pivot(store: FabricStore, pivot_record: dict, status: str, *, rationale: str,
                   now: str, actor: str, marking) -> PivotEdge:
-    """Append a superseding record for the same pivot_id — reversible by design."""
+    """Record a new status for a pivot. Reversible: the old record stays in the log."""
     updated = PivotEdge(
         pivot_id=pivot_record["pivot_id"], from_kind=pivot_record["from_kind"],
         from_ref=pivot_record["from_ref"], to_kind=pivot_record["to_kind"],
@@ -112,7 +107,7 @@ def current_pivots(store: FabricStore, *, statuses: tuple[str, ...] = ("PROPOSED
 
 
 def queries_from_pivots(pivot_records: list[dict], *, need_id: str) -> tuple[QuerySpec, ...]:
-    """Next-generation queries from the pivot graph (typed, attributable)."""
+    """Queries to run next, derived from the pivot graph."""
     queries: list[QuerySpec] = []
     for record in pivot_records:
         to_kind, to_ref = record["to_kind"], record["to_ref"]
@@ -150,6 +145,6 @@ def queries_from_pivots(pivot_records: list[dict], *, need_id: str) -> tuple[Que
     deduped: dict[str, QuerySpec] = {}
     for query in queries:
         deduped.setdefault(query.query_id, query)
-    # bound lookups and archive enumeration before unbound alias fan-out
+    # Bounded lookups first, alias fan-out last.
     priority = {"RELATIONSHIP_PIVOT": 0, "DOMAIN": 1, "ALIAS": 2}
     return tuple(sorted(deduped.values(), key=lambda q: (priority.get(q.family, 3), q.query_id)))

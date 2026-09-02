@@ -1,11 +1,4 @@
-"""Typed record contracts for the OSINT fabric event log.
-
-Same write-path discipline as the operational contracts: frozen dataclasses
-that validate on construction, serialized once via ``to_record()``, appended
-to a hash-chained log, replayed as plain dicts. Absence, failure and
-non-attempt are distinct recorded states — an empty result is never evidence
-of nonexistence, and an unqueried source is never silently "covered".
-"""
+"""Record types for the fabric event log. Each validates itself on construction."""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -61,22 +54,27 @@ URGENCIES = ("ROUTINE", "PRIORITY", "IMMEDIATE")
 
 @dataclass(frozen=True)
 class CapabilityProfile(Record):
-    """What a registered source can actually provide, beyond its descriptor.
-
-    The bitemporal identity/policy metadata lives on the Source Intelligence
-    ``SourceDescriptor``; this profile carries the acquisition-shape facts the
-    planner and watch layer query: operations, temporal reach, cadence,
-    pagination, mutability, cost, fields, biases, gaps, connector binding.
-    """
+    """What a source can provide: operations, reach, cadence, cost, connector."""
     RECORD_TYPE = "fabric_source_profile"
-    profile_id: str; source_id: str; connector_id: str; connector_version: str
+    profile_id: str
+    source_id: str
+    connector_id: str
+    connector_version: str
     supported_operations: tuple[str, ...]
     time_coverage: tuple[str | None, str | None]
-    historical_depth: str; update_latency: str; pagination: str; edit_behaviour: str
-    cost_class: str; rate_note: str; authorization: str
-    native_id_scheme: str; available_fields: tuple[str, ...]
-    known_biases: tuple[str, ...]; known_gaps: tuple[str, ...]
-    archive_compatible: bool; created_time: str
+    historical_depth: str
+    update_latency: str
+    pagination: str
+    edit_behaviour: str
+    cost_class: str
+    rate_note: str
+    authorization: str
+    native_id_scheme: str
+    available_fields: tuple[str, ...]
+    known_biases: tuple[str, ...]
+    known_gaps: tuple[str, ...]
+    archive_compatible: bool
+    created_time: str
 
     def __post_init__(self):
         require_aware(self.created_time)
@@ -94,10 +92,15 @@ class CapabilityProfile(Record):
 
 @dataclass(frozen=True)
 class SourceStatusEvent(Record):
-    """Last-success / last-failure as recorded observations, not mutable fields."""
+    """One recorded success or failure against a source."""
     RECORD_TYPE = "fabric_source_status"
-    status_id: str; source_id: str; connector_id: str; kind: str
-    operation: str; detail: str; observed_time: str
+    status_id: str
+    source_id: str
+    connector_id: str
+    kind: str
+    operation: str
+    detail: str
+    observed_time: str
 
     def __post_init__(self):
         _member(self.kind, STATUS_KINDS, "status kind")
@@ -107,19 +110,23 @@ class SourceStatusEvent(Record):
 
 @dataclass(frozen=True)
 class InformationNeed(Record):
-    """Fabric-side statement of what a mission needs to know.
-
-    ``requirement_id`` links to the mission workflow's InformationRequirement
-    when one exists; the fabric never closes requirements itself.
-    """
+    """What a mission needs to know, from the collection side."""
     RECORD_TYPE = "fabric_information_need"
-    need_id: str; requirement_id: str; mission_context: str; question: str
+    need_id: str
+    requirement_id: str
+    mission_context: str
+    question: str
     entities: tuple[str, ...]
     identifiers: tuple[tuple[str, str], ...]  # (scheme, value)
     time_bounds: tuple[str | None, str | None]
-    geography: tuple[str, ...]; languages: tuple[str, ...]; scripts: tuple[str, ...]
-    hypotheses: tuple[str, ...]; urgency: str
-    created_by: str; created_time: str; marking: Marking
+    geography: tuple[str, ...]
+    languages: tuple[str, ...]
+    scripts: tuple[str, ...]
+    hypotheses: tuple[str, ...]
+    urgency: str
+    created_by: str
+    created_time: str
+    marking: Marking
 
     def __post_init__(self):
         require_aware(self.created_time)
@@ -130,12 +137,18 @@ class InformationNeed(Record):
 
 @dataclass(frozen=True)
 class QuerySpec(Record):
-    """One typed, attributable, executable discovery query."""
+    """One executable query with its origin."""
     RECORD_TYPE = "fabric_query"
-    query_id: str; family: str; value: str; language: str; script: str
+    query_id: str
+    family: str
+    value: str
+    language: str
+    script: str
     operation: str; source_id: str  # "" = any capable registered source
     time_bounds: tuple[str | None, str | None]
-    origin: str; origin_detail: str; rationale: str
+    origin: str
+    origin_detail: str
+    rationale: str
     derived_from: tuple[str, ...]  # pivot ids / manifestation ids that produced it
 
     def __post_init__(self):
@@ -153,8 +166,10 @@ class DiscoveryPlan(Record):
     queries: tuple[QuerySpec, ...]
     considered_source_ids: tuple[str, ...]
     unmatched_query_ids: tuple[str, ...]  # queries no registered source can execute
-    budget_max_requests: int; planner_version: str
-    created_time: str; marking: Marking
+    budget_max_requests: int
+    planner_version: str
+    created_time: str
+    marking: Marking
 
     def __post_init__(self):
         require_aware(self.created_time)
@@ -168,28 +183,37 @@ class DiscoveryPlan(Record):
 
 @dataclass(frozen=True)
 class ExecutionRecord(Record):
-    """One query executed (or explicitly not executed) against one source.
+    """One query attempt against one source and its outcome.
 
-    The outcome vocabulary is the load-bearing product feature: EXECUTED_EMPTY,
-    SOURCE_FAILED, ACCESS_RESTRICTED, POLICY_REFUSED and NOT_ATTEMPTED are all
-    distinct, so "we did not find it" can never silently become "it does not
-    exist" and "we never looked" can never masquerade as either.
+    Empty, failed, refused and not-attempted are distinct outcomes.
     """
     RECORD_TYPE = "fabric_execution"
-    execution_id: str; plan_id: str; query_id: str; source_id: str
-    connector_id: str; connector_version: str; operation: str
-    outcome: str; result_count: int
-    request_url: str; http_status: int | None
-    policy_decision: str; error_class: str | None; error_detail: str
+    execution_id: str
+    plan_id: str
+    query_id: str
+    source_id: str
+    connector_id: str
+    connector_version: str
+    operation: str
+    outcome: str
+    result_count: int
+    request_url: str
+    http_status: int | None
+    policy_decision: str
+    error_class: str | None
+    error_detail: str
     manifestation_ids: tuple[str, ...]
-    started_time: str; completed_time: str | None
-    absence_semantics: str; marking: Marking
+    started_time: str
+    completed_time: str | None
+    absence_semantics: str
+    marking: Marking
     truncated: bool = False
 
     def __post_init__(self):
         _member(self.outcome, EXECUTION_OUTCOMES, "execution outcome")
         _member(self.operation, OPERATIONS, "operation")
-        require_aware(self.started_time); require_aware_or_none(self.completed_time)
+        require_aware(self.started_time)
+        require_aware_or_none(self.completed_time)
         if self.absence_semantics != ABSENCE_SEMANTICS:
             raise ValueError("execution records must carry the fixed absence semantics")
         if self.outcome == "EXECUTED_WITH_RESULTS" and self.result_count < 1:
@@ -200,28 +224,39 @@ class ExecutionRecord(Record):
 
 @dataclass(frozen=True)
 class ManifestationRecord(Record):
-    """One preserved retrieval of one source artifact.
-
-    A live page and an archived capture of the same URL are distinct
-    manifestations; re-retrievals of changed content are new manifestations
-    linked through ``prior_manifestation_id``. The raw bytes live in the
-    immutable custody store; this record binds their identity, retrieval
-    context and lineage into the fabric log.
-    """
+    """One preserved retrieval. The bytes live in custody; this record names them."""
     RECORD_TYPE = "fabric_manifestation"
-    manifestation_id: str; source_id: str; connector_id: str; connector_version: str
-    native_id: str; request_url: str; final_url: str
-    content_sha256: str; content_store_path: str; media_type: str
-    temporal_status: str; source_time: str | None; archive_capture_time: str | None
-    retrieval_time: str; http_status: int | None
-    redirects: tuple[str, ...]; etag: str; last_modified: str; truncated: bool
-    retrieval_id: str; custody_ingestion_id: str; source_object_id: str
-    execution_id: str; prior_manifestation_id: str | None; marking: Marking
+    manifestation_id: str
+    source_id: str
+    connector_id: str
+    connector_version: str
+    native_id: str
+    request_url: str
+    final_url: str
+    content_sha256: str
+    content_store_path: str
+    media_type: str
+    temporal_status: str
+    source_time: str | None
+    archive_capture_time: str | None
+    retrieval_time: str
+    http_status: int | None
+    redirects: tuple[str, ...]
+    etag: str
+    last_modified: str
+    truncated: bool
+    retrieval_id: str
+    custody_ingestion_id: str
+    source_object_id: str
+    execution_id: str
+    prior_manifestation_id: str | None
+    marking: Marking
 
     def __post_init__(self):
         _member(self.temporal_status, TEMPORAL_STATUS, "temporal status")
         require_aware(self.retrieval_time)
-        require_aware_or_none(self.source_time); require_aware_or_none(self.archive_capture_time)
+        require_aware_or_none(self.source_time)
+        require_aware_or_none(self.archive_capture_time)
         if self.temporal_status == "HISTORICAL" and not self.archive_capture_time:
             raise ValueError("a historical manifestation requires its archive capture time")
         if len(self.content_sha256) != 64:
@@ -230,17 +265,20 @@ class ManifestationRecord(Record):
 
 @dataclass(frozen=True)
 class PivotEdge(Record):
-    """A typed reason to look somewhere else, grounded in evidence.
-
-    Pivots are proposals: appending a new record with the same ``pivot_id``
-    and a different status supersedes the old one on replay (latest wins);
-    nothing is merged and nothing is deleted.
-    """
+    """A proposed reason to look somewhere else, citing its evidence."""
     RECORD_TYPE = "fabric_pivot"
-    pivot_id: str; from_kind: str; from_ref: str; to_kind: str; to_ref: str
-    pivot_type: str; rationale: str
+    pivot_id: str
+    from_kind: str
+    from_ref: str
+    to_kind: str
+    to_ref: str
+    pivot_type: str
+    rationale: str
     evidence_manifestation_ids: tuple[str, ...]
-    origin: str; status: str; created_time: str; marking: Marking
+    origin: str
+    status: str
+    created_time: str
+    marking: Marking
 
     def __post_init__(self):
         _member(self.from_kind, PIVOT_KINDS, "pivot kind")
@@ -258,11 +296,19 @@ class PivotEdge(Record):
 @dataclass(frozen=True)
 class CoverageAssessment(Record):
     RECORD_TYPE = "fabric_coverage"
-    coverage_id: str; need_id: str; source_id: str; source_family: str
-    state: str; basis_execution_ids: tuple[str, ...]
+    coverage_id: str
+    need_id: str
+    source_id: str
+    source_family: str
+    state: str
+    basis_execution_ids: tuple[str, ...]
     temporal_coverage: tuple[str | None, str | None]
-    language_coverage: tuple[str, ...]; geographic_coverage: tuple[str, ...]
-    gaps: tuple[str, ...]; assessed_time: str; assessor: str; marking: Marking
+    language_coverage: tuple[str, ...]
+    geographic_coverage: tuple[str, ...]
+    gaps: tuple[str, ...]
+    assessed_time: str
+    assessor: str
+    marking: Marking
 
     def __post_init__(self):
         _member(self.state, COVERAGE_STATES, "coverage state")
@@ -274,18 +320,21 @@ class CoverageAssessment(Record):
 
 @dataclass(frozen=True)
 class WatchDefinition(Record):
-    """A persistent observation binding: keep looking at this, at this cadence.
-
-    Watch state is event-sourced: re-appending the same ``watch_id`` with
-    ``active=False`` retires it on replay; runs and change observations are
-    separate records, so the full observation history survives restart.
-    """
+    """Keep observing one target at a cadence."""
     RECORD_TYPE = "fabric_watch"
-    watch_id: str; need_id: str; target_kind: str; target_ref: str
-    source_id: str; operation: str; query_value: str
-    cadence_seconds: int; active: bool
+    watch_id: str
+    need_id: str
+    target_kind: str
+    target_ref: str
+    source_id: str
+    operation: str
+    query_value: str
+    cadence_seconds: int
+    active: bool
     blind_spots: tuple[str, ...]
-    created_by: str; created_time: str; marking: Marking
+    created_by: str
+    created_time: str
+    marking: Marking
 
     def __post_init__(self):
         _member(self.target_kind, WATCH_TARGET_KINDS, "watch target kind")
@@ -298,26 +347,41 @@ class WatchDefinition(Record):
 @dataclass(frozen=True)
 class WatchRun(Record):
     RECORD_TYPE = "fabric_watch_run"
-    run_id: str; watch_id: str; scheduled_time: str; started_time: str
-    completed_time: str | None; outcome: str
-    execution_id: str; observed_content_sha256: str
+    run_id: str
+    watch_id: str
+    scheduled_time: str
+    started_time: str
+    completed_time: str | None
+    outcome: str
+    execution_id: str
+    observed_content_sha256: str
     observed_records: tuple[tuple[str, str], ...]  # (native_id, source_time or "")
-    manifestation_id: str; change_observation_ids: tuple[str, ...]
-    next_due_time: str; marking: Marking
+    manifestation_id: str
+    change_observation_ids: tuple[str, ...]
+    next_due_time: str
+    marking: Marking
 
     def __post_init__(self):
         _member(self.outcome, EXECUTION_OUTCOMES, "watch run outcome")
-        require_aware(self.scheduled_time); require_aware(self.started_time)
-        require_aware_or_none(self.completed_time); require_aware(self.next_due_time)
+        require_aware(self.scheduled_time)
+        require_aware(self.started_time)
+        require_aware_or_none(self.completed_time)
+        require_aware(self.next_due_time)
 
 
 @dataclass(frozen=True)
 class ChangeObservation(Record):
     RECORD_TYPE = "fabric_change"
-    change_id: str; watch_id: str; run_id: str; change_type: str
-    detail: str; prior_ref: str; current_ref: str
+    change_id: str
+    watch_id: str
+    run_id: str
+    change_type: str
+    detail: str
+    prior_ref: str
+    current_ref: str
     evidence_manifestation_ids: tuple[str, ...]
-    observed_time: str; marking: Marking
+    observed_time: str
+    marking: Marking
 
     def __post_init__(self):
         _member(self.change_type, CHANGE_TYPES, "change type")

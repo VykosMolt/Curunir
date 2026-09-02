@@ -1,5 +1,5 @@
-"""Schema registry, mappings, connectors (JSON/CSV/GeoJSON), ARGUS evidence
-adapter and configuration-driven pipelines."""
+"""Schema registry and mappings, the JSON, CSV and GeoJSON connectors, the
+evidence adapter, and pipelines built from configuration."""
 from __future__ import annotations
 
 import json
@@ -53,7 +53,7 @@ def registry_with_stock(tmp_path):
 
 def test_schema_registration_and_version_conflict(tmp_path):
     store, registry = registry_with_stock(tmp_path)
-    registry.register_schema(STOCK_SCHEMA, recorded_time=t(1), actor="fixture")  # identical: idempotent
+    registry.register_schema(STOCK_SCHEMA, recorded_time=t(1), actor="fixture")  # re-registering the same schema is a no-op
     changed = {**STOCK_SCHEMA, "fields": {**STOCK_SCHEMA["fields"], "extra": {"type": "string"}}}
     with pytest.raises(SchemaError):
         registry.register_schema(changed, recorded_time=t(1), actor="fixture")
@@ -131,7 +131,7 @@ def test_malformed_payloads_quarantined_with_custody(tmp_path):
                                     recorded_time=t(1), actor="conn", marking=BASE_MARKING)
     assert outcome.status == "QUARANTINED"
     assert outcome.ingestion["quarantine_reasons"]
-    assert store.get_payload(outcome.ingestion["payload_ref"]) == b"{not json"  # custody before parsing
+    assert store.get_payload(outcome.ingestion["payload_ref"]) == b"{not json"  # the bytes are kept before anything parses them
     csv_connector = CsvFeedConnector("conn-csv", "stock-report")
     ragged = b"depot_id,commodity\nALD,fuel,EXTRA\n"
     outcome = csv_connector.ingest(store, registry, ragged, source_id="src-logsys", received_time=t(2),
@@ -203,7 +203,7 @@ def test_evidence_ref_preserves_argus_semantics():
     minimal.pop("admission"); minimal.pop("identity")
     bare = evidence_ref_from_bundle(minimal)
     assert bare.identity_status == "IDENTITY_UNKNOWN" and bare.independence_status == "UNRESOLVED"
-    assert bare.dependence_group_id is None  # missing evidence stays unknown, not fabricated
+    assert bare.dependence_group_id is None  # missing stays unknown rather than invented
 
 
 def test_dependence_group_is_order_independent():
@@ -251,7 +251,7 @@ def test_pipeline_validation_is_strict(tmp_path):
     store = make_store(tmp_path)
     registry = SchemaRegistry(store)
     executor = PipelineExecutor(store, registry, {"conn-argus": ArgusEvidenceConnector("conn-argus", "argus-evidence")})
-    with pytest.raises(SchemaError):  # schema not registered yet
+    with pytest.raises(SchemaError):  # the schema is not registered yet
         executor.register_pipeline(EVIDENCE_PIPELINE, recorded_time=T0, actor="fixture")
 
 

@@ -202,8 +202,8 @@ PIPELINES = [
      "relationships": [
          {"relation_type": "LOCATED_AT", "target_field": "depot_ref", "target_prefix": "infra-", "direction": "OUT"}],
      "marking": BASE_MARKING.to_record()},
-    # content-based idempotency: a plan update for the same movement_id is new
-    # state, not a duplicate; only byte-identical resends dedupe
+    # Dedupe on content: a new plan for the same movement is new state, so
+    # only a byte-identical resend counts as a duplicate.
     {"pipeline_id": "movement-plan", "version": "1.0", "connector_id": "conn-moveplan",
      "connector_kind": "json", "schema_id": "movement-plan",
      "schema_version": "1.0", "mode": "direct_state", "unit": "document",

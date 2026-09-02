@@ -1,9 +1,8 @@
-"""V6.7 migration compatibility and backup-backed rollback.
+"""Compatibility and rollback.
 
-There is no in-place schema migrator in V6.7.  Compatibility is deliberately
-small: missing additive fields receive least-privilege defaults, unknown store
-contract versions are refused, and rollback restores a validated prior export
-into a new root.
+There is no in-place migrator. A missing added field gets the least-privilege
+default, an unknown store contract version is refused, and rolling back restores
+a checked earlier export into a fresh root.
 """
 from __future__ import annotations
 

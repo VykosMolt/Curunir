@@ -1,5 +1,5 @@
-"""Mission data store: append-only history, corrections, as-of, idempotency,
-chain integrity, deterministic export/import/reconstruction."""
+"""Mission data store: append-only history, corrections, as-of reads, idempotency,
+chain integrity, and export and import that reproduce the same store."""
 from __future__ import annotations
 
 import pytest
@@ -64,7 +64,7 @@ def test_correction_preserves_history_and_asof(tmp_path):
                  recorded_time=t(5), actor="fixture")
     versions = store.records_of("object_version")
     assert [v["version"] for v in versions] == [1, 2]
-    assert versions[0]["attributes"]["status"] == "OPERATIONAL"  # history intact
+    assert versions[0]["attributes"]["status"] == "OPERATIONAL"
     as_of = store.records_of("object_version", until_seq=seq_before)
     assert [v["version"] for v in as_of] == [1]
 

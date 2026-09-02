@@ -1,18 +1,14 @@
-"""Retained browser E2E exploit corpus for the V6.7 identity last mile: the real
-Chromium workbench performs a load-bearing report approval whose attribution is
-a genuine Ed25519 signature by the analyst's NON-EXTRACTABLE in-browser device
-key, bound to the exact report+version — not a bearer assertion.
+"""The last mile of signed identity, in a real browser.
 
-Unit-level signature semantics (transplant/stale/replay/rotation/revocation/
-historical) are already locked in test_identity_crypto.py at the verify_action
-layer. This file proves the browser-to-signature-binding end to end: that the
-real WebCrypto path the operator uses is accepted, recorded for replay, and that
-the HTTP surface enforces the binding against real browser-signed attacks.
+Chromium approves a report, and the attribution is an Ed25519 signature made by
+a device key that cannot leave the browser, bound to that exact report and
+version. Signature semantics themselves are covered in test_identity_crypto.py;
+here the point is that the real browser path is accepted and that the server
+still refuses browser-signed attacks against the binding.
 """
 from __future__ import annotations
 
 import json
-import socket
 import threading
 import urllib.error
 import urllib.request
@@ -31,16 +27,10 @@ from curunir_workbench.server import create_app
 from curunir_workbench.store import WorkbenchStore
 
 from semantic_support import clock
-from workbench_support import make_workbench, seed_mission
+from workbench_support import free_port, make_workbench, seed_mission
 
 pytestmark = [pytest.mark.no_db,
               pytest.mark.skipif(not HAVE_PLAYWRIGHT, reason="playwright not installed")]
-
-
-def _free_port() -> int:
-    with socket.socket() as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
 
 
 def _api(base, tok, method, path, body=None):
@@ -70,7 +60,7 @@ def env(tmp_path_factory):
          "roles": ["ANALYST"], "releasability": ["PUBLIC"], "organisation": "wb"},
     ])
     app = create_app(tmp_path, actors, now_fn=clock(start_minute=600))
-    port = _free_port()
+    port = free_port()
     config = uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning")
     server = uvicorn.Server(config)
     thread = threading.Thread(target=server.run, daemon=True)
@@ -87,8 +77,7 @@ def env(tmp_path_factory):
 
 
 def _author_report_in_review(base, claim_id, title):
-    """Author a report as analyst-a, bind a SUPPORTED sentence to a real claim,
-    and submit it — returns (report_id, version) in IN_REVIEW."""
+    """Author and submit a report as analyst-a, returning its id and version."""
     st, rep = _api(base, "tok-author", "POST", "/api/commands/reports",
                    {"title": title, "question": "Is Acme viable?", "compartments": []})
     assert st == 200, rep
@@ -121,14 +110,14 @@ def _login(page, base, tok):
     page.wait_for_selector("#shell:not(.hidden)")
 
 
-# ---- 1. the real operator path: signed approval, recorded for replay --------
+# ---- the operator path: a signed approval, recorded for replay ----
 
 def test_browser_signed_approval_is_genuine_and_four_eyes(browser, env):
     base, root = env["base"], env["root"]
     rid, submitted_version = _author_report_in_review(base, env["claim_id"], "Signed dossier")
 
-    # analyst-b (the approver — NOT the author) approves through the real UI,
-    # which routes through WebCrypto Ed25519 signing.
+    # analyst-b, who did not write the report, approves it through the UI, which
+    # signs with WebCrypto.
     page = browser.new_page()
     _login(page, base, "tok-approver")
     page.goto(f"{base}/#/reports/{rid}")
@@ -136,7 +125,7 @@ def test_browser_signed_approval_is_genuine_and_four_eyes(browser, env):
     page.get_by_role("button", name="Approve (validated, human act)").click()
     expect(page.locator("main h1")).to_contain_text("APPROVED")
 
-    # the private key never leaves the browser: pkcs8 export must be refused
+    # The private key cannot be exported, so it never leaves the browser.
     exportable = page.evaluate(
         """async () => {
             const req = indexedDB.open('curunir-identity', 1);
@@ -148,18 +137,18 @@ def test_browser_signed_approval_is_genuine_and_four_eyes(browser, env):
     assert exportable is False
     page.close()
 
-    # the attribution survives to the immutable log and replays GENUINE
+    # The attribution reaches the log and still verifies on replay.
     store = WorkbenchStore(root / "store")
     signed = [r for r in store.records_of("signed_action")
               if r["target_id"] == rid and r["action_type"] == "approve_report"]
     assert len(signed) == 1, signed
     rec = signed[0]
-    assert rec["actor_id"] == "analyst-b"          # four-eyes: approver, not author
+    assert rec["actor_id"] == "analyst-b"  # the approver, not the author
     assert rec["actor_kind"] == "HUMAN"
     assert rec["target_version_token"] == f"workbench_report:{rid}@v{submitted_version}"
     report = report_of(store, rid)
     assert report["status"] in ("APPROVED", "APPROVED_WITH_DISSENT")
-    assert report["author"] == "analyst-a"          # author distinct from signer
+    assert report["author"] == "analyst-a"
 
     result = verify_all(store)
     assert result["all_genuine"], result
@@ -171,10 +160,10 @@ def report_of(store, rid):
     return store.current_reports()[rid]
 
 
-# ---- 2. the wire enforces the binding against real browser-signed attacks ----
+# ---- the server enforces the binding against browser-signed attacks ----
 
-# a page-side signer with controllable overrides, using the REAL WebCrypto key
-# and the shipped canonical serializer, exercised against the live server.
+# A signer that runs in the page with the real device key and the shipped
+# canonical serializer, with each field overridable.
 _SIGNER = r"""
 async ({reportId, version, actorId, actorKind, missionId, overrides, tamper, postTo}) => {
   const { canonicalBytes } = await import('/static/js/canonical.js');
@@ -232,19 +221,18 @@ def test_wire_rejects_browser_signed_attacks(browser, env, case, overrides, tamp
     assert out["status"] == 401, out
     assert expect_status in json.dumps(out["body"]), out
     page.close()
-    # the report was NOT approved by any refused attack
     store = WorkbenchStore(root / "store")
     assert report_of(store, rid)["status"] == "IN_REVIEW"
     assert not [r for r in store.records_of("signed_action") if r["target_id"] == rid]
 
 
-# ---- 3. enrollment binds to the bearer-authenticated actor ------------------
+# ---- enrolment binds to the authenticated actor ----
 
 def test_enrollment_binds_to_bearer_actor_not_client_claim(browser, env):
     base = env["base"]
     page = browser.new_page()
     _login(page, base, "tok-approver")
-    # the enroll body carries NO actor id; the server binds to the bearer actor.
+    # The body names an actor id; the server ignores it and uses the token.
     res = page.evaluate(
         """async () => {
             const kp = await crypto.subtle.generateKey({name:'Ed25519'}, false, ['sign','verify']);
@@ -255,11 +243,11 @@ def test_enrollment_binds_to_bearer_actor_not_client_claim(browser, env):
                 body: JSON.stringify({public_key_hex: hex, actor_id: 'analyst-a'})});
             return r.json();
         }""")
-    assert res["actor_id"] == "analyst-b"   # bound to bearer, not the injected claim
+    assert res["actor_id"] == "analyst-b"
     page.close()
 
 
-# ---- 4. a revoked key kills the signed-action wire path ----------------------
+# ---- a revoked key stops the signed-action path ----
 
 def test_revoked_key_blocks_signed_action(browser, env):
     base, root = env["base"], env["root"]
@@ -268,8 +256,8 @@ def test_revoked_key_blocks_signed_action(browser, env):
     _login(page, base, "tok-approver")
     session = page.evaluate("async () => (await (await fetch('/api/session', {headers:{Authorization:'Bearer '+sessionStorage.getItem('curunir-token')}})).json())")
 
-    # step 1: enroll + authenticate, PERSIST the device key in IndexedDB so a
-    # later evaluate can sign with the SAME key against the SAME session.
+    # Enrol and authenticate, keeping the device key so a later step can sign
+    # with the same key against the same session.
     step1 = page.evaluate(r"""
     async () => {
       const { canonicalBytes } = await import('/static/js/canonical.js');
@@ -292,8 +280,8 @@ def test_revoked_key_blocks_signed_action(browser, env):
       return {key_id: enroll.key_id, session_id: auth.session_id};
     }""")
 
-    # step 2: revoke the just-enrolled key out-of-band (admin action), stamped
-    # at server time so the append respects the store's monotonic-time rule.
+    # Revoke that key as an admin would, stamped at server time so the store
+    # still sees time moving forward.
     _, t = _api(base, "tok-approver", "GET", "/api/auth/time")
     store = WorkbenchStore(root / "store")
     from curunir_identity import KeyRegistry
@@ -303,8 +291,7 @@ def test_revoked_key_blocks_signed_action(browser, env):
     reg.revoke(step1["key_id"], reason="compromised device", compromised=True, now=t["now"])
     assert reg.current(step1["key_id"])["status"] == "REVOKED"
 
-    # step 3: sign a well-formed approval with the SAME (now revoked) key and the
-    # captured session — the wire must refuse it; the report stays IN_REVIEW.
+    # Sign a well-formed approval with the revoked key and the captured session.
     out = page.evaluate(r"""
     async ({reportId, version, missionId, sessionId}) => {
       const { canonicalBytes } = await import('/static/js/canonical.js');
@@ -327,7 +314,7 @@ def test_revoked_key_blocks_signed_action(browser, env):
     page.close()
 
     assert out["status"] == 401, out
-    # session dies the moment its key is revoked (resolve re-checks live status)
+    # The session died with its key.
     assert "EXPIRED_SESSION" in json.dumps(out["body"]), out
     store2 = WorkbenchStore(root / "store")
     assert report_of(store2, rid)["status"] == "IN_REVIEW"

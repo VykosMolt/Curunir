@@ -1,17 +1,17 @@
 """Schema registry and explicit mapping contracts.
 
-Schemas and mappings are inspectable configuration records stored in the event
-log. Validation is a bounded declarative engine (required fields, types,
-formats, enums) — no code execution from configuration. Mappings declare every
-field route, transform, default, ignored field and lossy operation; entries
-with unknown keys or unlisted transforms are rejected, so nothing hidden can
-ride along.
+Schemas and mappings are inspectable records in the event log. Validation is a
+bounded engine over required fields, types, formats and enums, and runs no
+code from configuration. A mapping declares every field route, transform,
+default, ignored field and lossy operation, and unlisted keys are rejected.
 """
 from __future__ import annotations
 
 from typing import Any, Mapping
 
 from .canonical import require_aware, sha256
+from .contracts import OBJECT_TYPES, QUALITY_DIMENSIONS
+from .geometry import geometry_from_geojson
 from .store import MissionDataStore
 
 FIELD_TYPES = ("string", "number", "integer", "boolean", "object", "array")
@@ -60,11 +60,19 @@ def validate_schema_definition(definition: Mapping[str, Any]) -> dict[str, Any]:
     return result
 
 
+_TYPE_CHECKS = {
+    "string": lambda v: isinstance(v, str),
+    "number": lambda v: isinstance(v, (int, float)) and not isinstance(v, bool),
+    "integer": lambda v: isinstance(v, int) and not isinstance(v, bool),
+    "boolean": lambda v: isinstance(v, bool),
+    "object": lambda v: isinstance(v, dict),
+    "array": lambda v: isinstance(v, list),
+}
+
+
 def _check_value(name: str, spec: Mapping[str, Any], value: Any, errors: list[str]) -> None:
     kind = spec["type"]
-    ok = {"string": lambda v: isinstance(v, str), "number": lambda v: isinstance(v, (int, float)) and not isinstance(v, bool),
-          "integer": lambda v: isinstance(v, int) and not isinstance(v, bool), "boolean": lambda v: isinstance(v, bool),
-          "object": lambda v: isinstance(v, dict), "array": lambda v: isinstance(v, list)}[kind](value)
+    ok = _TYPE_CHECKS[kind](value)
     if not ok:
         errors.append(f"{name}: expected {kind}")
         return
@@ -76,7 +84,6 @@ def _check_value(name: str, spec: Mapping[str, Any], value: Any, errors: list[st
     if spec.get("format") == "sha256" and not (isinstance(value, str) and len(value) == 64):
         errors.append(f"{name}: not a sha256")
     if spec.get("format") == "geojson-geometry":
-        from .geometry import geometry_from_geojson
         try:
             geometry_from_geojson(value)
         except Exception as exc:
@@ -86,7 +93,10 @@ def _check_value(name: str, spec: Mapping[str, Any], value: Any, errors: list[st
 
 
 def validate_document(fields: Mapping[str, Any], payload: Mapping[str, Any]) -> tuple[list[str], list[str]]:
-    errors: list[str] = []; warnings: list[str] = []
+    errors: list[str] = []
+    warnings: list[str] = []
+    if not isinstance(payload, Mapping):
+        return ["payload is not an object"], warnings
     for name, spec in fields.items():
         if name not in payload or payload[name] is None:
             if spec.get("required"):
@@ -140,7 +150,8 @@ class SchemaRegistry:
         if kind == "rows":
             if not isinstance(payload, Mapping) or not isinstance(payload.get("rows"), list):
                 return {"status": "INVALID", "schema_version": effective, "errors": ["payload must contain rows"], "warnings": []}
-            errors: list[str] = []; warnings: list[str] = []
+            errors: list[str] = []
+            warnings: list[str] = []
             for index, row in enumerate(payload["rows"]):
                 row_errors, row_warnings = validate_document(definition["fields"], row)
                 errors.extend(f"row {index}: {e}" for e in row_errors)
@@ -148,9 +159,12 @@ class SchemaRegistry:
         elif kind == "geojson":
             if not isinstance(payload, Mapping) or payload.get("type") != "FeatureCollection":
                 return {"status": "INVALID", "schema_version": effective, "errors": ["payload must be a GeoJSON FeatureCollection"], "warnings": []}
-            errors = []; warnings = []
+            errors = []
+            warnings = []
             for index, feature in enumerate(payload.get("features", [])):
-                from .geometry import geometry_from_geojson
+                if not isinstance(feature, Mapping):
+                    errors.append(f"feature {index}: feature is not an object")
+                    continue
                 try:
                     geometry_from_geojson(feature.get("geometry") or {})
                 except Exception as exc:
@@ -196,7 +210,6 @@ def validate_mapping_definition(mapping: Mapping[str, Any]) -> dict[str, Any]:
     for key in ("mapping_id", "version", "input_schema_id", "input_schema_version", "output_object_type", "entries"):
         if key not in mapping:
             raise SchemaError(f"mapping missing {key}")
-    from .contracts import OBJECT_TYPES, QUALITY_DIMENSIONS
     if mapping["output_object_type"] not in OBJECT_TYPES:
         raise SchemaError(f"unknown output object type: {mapping['output_object_type']}")
     for entry in mapping["entries"]:
@@ -233,12 +246,13 @@ def _transform(name: str, value: Any) -> Any:
     if name == "to_string":
         return str(value)
     if name == "iso_time":
-        require_aware(value); return value
+        require_aware(value)
+        return value
     if name == "boolean":
         return bool(value)
     if name == "naive_utc":
-        # coerce a timezone-naive ISO timestamp (common in public feeds) to
-        # explicit UTC; a value that already carries an offset is left as-is.
+        # Public feeds often send a naive timestamp; read it as UTC. A value
+        # that already carries an offset is left alone.
         from datetime import datetime
         text = str(value)
         parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
@@ -252,11 +266,13 @@ def _transform(name: str, value: Any) -> Any:
 
 
 def apply_mapping(mapping: Mapping[str, Any], payload: Mapping[str, Any]) -> dict[str, Any]:
-    """Apply one registered mapping to one document/row. Returns targets + audit."""
+    """Apply one registered mapping to one document or row, with an audit of
+    warnings and lossy operations."""
     out: dict[str, Any] = {"attributes": {}, "quality": dict(mapping.get("quality_effects", {})), "labels": []}
     warnings: list[str] = []
     for entry in mapping["entries"]:
-        source_field = entry["source_field"]; target = entry["target"]
+        source_field = entry["source_field"]
+        target = entry["target"]
         if source_field in payload and payload[source_field] is not None:
             try:
                 value = _transform(entry.get("transform", "identity"), payload[source_field])
@@ -281,7 +297,8 @@ def apply_mapping(mapping: Mapping[str, Any], payload: Mapping[str, Any]) -> dic
             out["labels"].append(str(value))
         else:
             out[target] = value
-    ignored = [f for f in payload if f not in {e["source_field"] for e in mapping["entries"]}
+    mapped_fields = {e["source_field"] for e in mapping["entries"]}
+    ignored = [f for f in payload if f not in mapped_fields
                and f not in mapping.get("ignored_fields", []) and f != "schema_version"]
     if ignored:
         warnings.append(f"unmapped fields dropped: {sorted(ignored)}")
