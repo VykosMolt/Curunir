@@ -31,7 +31,7 @@ The kernel is resolved from `../kernel/argus` (override with
 `CURUNIR_ARGUS_KERNEL`) and verified against the frozen whole-tree hash before
 any campaign or reconstruction step runs. A fresh clone has no kernel: unpack
 `kernel/argus_kernel_pinned_4c173df7.tar.gz` there, or obtain the snapshot from
-Saulot, then verify (`kernel/README.md`).
+the Argus repository (`~/Argus/kernel/argus`), then verify (`kernel/README.md`).
 
 ## History of the layout
 
