@@ -6,8 +6,10 @@ increased skip count, collection loss, focused failure, or reconstruction
 failure makes this command non-zero.
 
 The collection floors were re-based on 2026-09-02 to the standalone Curunír
-suite (tests/ledger.json is the per-module record); the accepted nonpassing
-set is unchanged and every node in it now lies outside this repository.
+suite (tests/ledger.json is the per-module record); the earlier floors stay
+accepted for reports already attached to campaign roots. The accepted
+nonpassing set is unchanged and every node in it now lies outside this
+repository.
 """
 from __future__ import annotations
 
@@ -29,12 +31,28 @@ except ModuleNotFoundError:  # import as tools.validate_v67 in tests/diagnostics
 
 BASELINE_PATH = PACKAGE_ROOT / "CURUNIR_V6_7_BASELINE_NONPASSING.json"
 RECONSTRUCTION_PATH = PACKAGE_ROOT / "CURUNIR_V6_7_RECONSTRUCTION.json"
-MINIMUM_FULL_TESTS = 793
-MAXIMUM_FULL_SKIPS_WITHOUT_POSTGRES = 0
-MINIMUM_FOCUSED_TESTS = 131
-MAXIMUM_FOCUSED_SKIPS = 0
-MINIMUM_PRODUCT_TESTS = 555
-MAXIMUM_PRODUCT_SKIPS = 0
+# Collection floors, newest first. This validator runs against the first set;
+# a V6.7 report attached to a campaign root is accepted when it meets any set,
+# so reports produced under the earlier floors keep verifying.
+FLOOR_SETS = (
+    {"since": "2026-09-02", "full_tests": 793, "full_skips": 0, "focused_tests": 131, "focused_skips": 0,
+     "product_tests": 555, "product_skips": 0},
+    {"since": "2026-08-25", "full_tests": 5676, "full_skips": 262, "focused_tests": 130, "focused_skips": 0,
+     "product_tests": 630, "product_skips": 6},
+)
+MINIMUM_FULL_TESTS = FLOOR_SETS[0]["full_tests"]
+MAXIMUM_FULL_SKIPS_WITHOUT_POSTGRES = FLOOR_SETS[0]["full_skips"]
+MINIMUM_FOCUSED_TESTS = FLOOR_SETS[0]["focused_tests"]
+MAXIMUM_FOCUSED_SKIPS = FLOOR_SETS[0]["focused_skips"]
+MINIMUM_PRODUCT_TESTS = FLOOR_SETS[0]["product_tests"]
+MAXIMUM_PRODUCT_SKIPS = FLOOR_SETS[0]["product_skips"]
+
+
+def meets_floor(kind: str, tests: int, skipped: int) -> bool:
+    """Whether a run's counts satisfy any accepted floor set for `kind`
+    (full, focused or product)."""
+    return any(tests >= floors[f"{kind}_tests"] and skipped <= floors[f"{kind}_skips"]
+               for floors in FLOOR_SETS)
 
 PRODUCT_PATTERNS = (
     "tests/test_analytic*.py",

@@ -169,7 +169,7 @@
   },
   "revised_2026_09_02_standalone_floors": {
     "date": "2026-09-02",
-    "note": "tools/validate_v67.py collection floors re-based to the standalone Curunír suite after the partition-custody excision; the accepted nonpassing node set below is unchanged and all of its nodes belong to research lines that no longer live in this repository.",
+    "note": "tools/validate_v67.py collection floors re-based to the standalone Curunír suite after the partition-custody excision; the accepted nonpassing node set below is unchanged and all of its nodes belong to research lines that no longer live in this repository. The earlier floors (5676/262 full, 130/0 focused, 630/6 product) stay accepted for V6.7 reports already attached to campaign roots (tools/validate_v67.py FLOOR_SETS).",
     "floors": {
       "full_tests": 793,
       "full_skips": 0,

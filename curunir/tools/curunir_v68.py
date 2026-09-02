@@ -2497,11 +2497,7 @@ def _focused_v68_validation() -> dict[str, Any]:
 
 def _v67_report_findings(v67: Mapping[str, Any], executable_sha: str) \
         -> list[dict[str, Any]]:
-    from tools.validate_v67 import (
-        MAXIMUM_FOCUSED_SKIPS, MAXIMUM_FULL_SKIPS_WITHOUT_POSTGRES,
-        MAXIMUM_PRODUCT_SKIPS, MINIMUM_FOCUSED_TESTS, MINIMUM_FULL_TESTS,
-        MINIMUM_PRODUCT_TESTS, PRODUCT_BASELINE_DESELECT,
-    )
+    from tools.validate_v67 import PRODUCT_BASELINE_DESELECT, meets_floor
     findings: list[dict[str, Any]] = []
 
     def add(code: str, detail: Any = "") -> None:
@@ -2529,15 +2525,13 @@ def _v67_report_findings(v67: Mapping[str, Any], executable_sha: str) \
 
     focused = v67.get("focused_v67", {})
     if focused.get("status") != "PASSED" \
-            or focused.get("tests", 0) < MINIMUM_FOCUSED_TESTS \
-            or focused.get("failed") != 0 or focused.get("errors") != 0 \
-            or focused.get("skipped", 10**9) > MAXIMUM_FOCUSED_SKIPS:
+            or not meets_floor("focused", focused.get("tests", 0), focused.get("skipped", 10**9)) \
+            or focused.get("failed") != 0 or focused.get("errors") != 0:
         add("V67_FOCUSED_RESULT_INVALID", focused)
     product = v67.get("curunir_product_planes", {})
     if product.get("status") != "PASSED" \
-            or product.get("tests", 0) < MINIMUM_PRODUCT_TESTS \
-            or product.get("failed") != 0 or product.get("errors") != 0 \
-            or product.get("skipped", 10**9) > MAXIMUM_PRODUCT_SKIPS:
+            or not meets_floor("product", product.get("tests", 0), product.get("skipped", 10**9)) \
+            or product.get("failed") != 0 or product.get("errors") != 0:
         add("V67_PRODUCT_RESULT_INVALID", product)
 
     baseline = _read_json(PACKAGE_ROOT / "CURUNIR_V6_7_BASELINE_NONPASSING.json")
@@ -2591,8 +2585,7 @@ def _v67_report_findings(v67: Mapping[str, Any], executable_sha: str) \
         add("V67_REPORTED_REGRESSION_FIELDS_NONEMPTY")
     if full.get("accepted_baseline_nonpassing_fixed") != len(allowed - current_set):
         add("V67_ACCEPTED_BASELINE_FIXED_COUNT_INVALID")
-    if full.get("tests", 0) < MINIMUM_FULL_TESTS \
-            or full.get("skipped", 10**9) > MAXIMUM_FULL_SKIPS_WITHOUT_POSTGRES:
+    if not meets_floor("full", full.get("tests", 0), full.get("skipped", 10**9)):
         add("V67_FULL_COLLECTION_BOUNDS_FAILED", {
             "tests": full.get("tests"), "skipped": full.get("skipped")})
     expected_full_status = "PASSED" if not current_set \

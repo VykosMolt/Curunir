@@ -503,6 +503,22 @@ def test_v67_report_gate_rechecks_kernel_residuals_and_clean_pass():
     clean["status"] = "PASS"
     assert _v67_report_findings(clean, executable_sha) == []
 
+    # A report produced under the re-based standalone floors is valid too; one
+    # below every accepted floor set is not.
+    from tools.validate_v67 import FLOOR_SETS
+    current = FLOOR_SETS[0]
+    rebased = _valid_v67_report(executable_sha)
+    rebased["focused_v67"].update({"tests": current["focused_tests"], "passed": current["focused_tests"]})
+    rebased["curunir_product_planes"].update({"tests": current["product_tests"],
+                                              "passed": current["product_tests"], "skipped": 0})
+    rebased["full_repository"].update({"tests": current["full_tests"], "skipped": 0,
+                                       "passed": current["full_tests"] - rebased["full_repository"]["failed"]
+                                       - rebased["full_repository"]["errors"]})
+    assert _v67_report_findings(rebased, executable_sha) == []
+    short = json.loads(json.dumps(rebased))
+    short["focused_v67"].update({"tests": 100, "passed": 100})
+    assert {"V67_FOCUSED_RESULT_INVALID"} <= {item["code"] for item in _v67_report_findings(short, executable_sha)}
+
 
 def test_terminal_rederives_and_rejects_forged_prehuman_pass(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
