@@ -1,77 +1,76 @@
 # Navigation map
 
-Every directory that contains anything non-obvious carries its own `README.md`
-explaining what is in it and why. This file is the map of those maps: start
-here, then descend.
+Every directory that contains anything non-obvious carries its own `README.md`.
+This file is the map of those maps: start here, then descend.
 
 ```
 Saulot/
-├── README.md ........................ what Curunír is, how to run it, design commitments
+├── README.md ........................ the three planes and how to run Curunír
 ├── NAVIGATION.md ................... you are here
-└── argus_demo/ ..................... THE PRODUCT ROOT (the name is historical)
-    ├── CURUNIR_V6_9_HANDOFF.md ..... START HERE if you are resuming work
-    ├── OVERVIEW.md ................. the node map for everything below
-    ├── CURUNIR_DOCUMENTS.md ........ index of all 16 contracts and ledgers
-    │
-    ├── curunir_fabric/ ............. COLLECTION
-    │   ├── README.md
-    │   └── connectors/README.md .... GLEIF, EDGAR, Wikidata, Wayback, RSS, web
-    │
-    ├── curunir_semantic/ ........... NORMALIZE → WORLD MODEL
-    │   └── README.md ............... documents, observations, claims, change
-    │
-    ├── curunir_analytic/ ........... ANALYSIS
-    │   └── README.md ............... themes, forecasts, warnings, model providers
-    │
-    ├── curunir_operational/ ........ THE TRUSTED CORE
-    │   ├── README.md ............... store, access lattice, ontology, canonical bytes
-    │   └── scenario/README.md ...... synthetic Vessia Corridor fixtures
-    │
-    ├── curunir_identity/ ........... WHO ACTED
-    │   └── README.md ............... Ed25519, sessions, signed actions, replay
-    │
-    ├── curunir_workbench/ .......... THE OPERATOR SURFACE
-    │   ├── README.md ............... HTTP commands and projections
-    │   └── static/README.md ........ the analyst SPA (and its known defects)
-    │
-    ├── tests/ ...................... 138 modules
-    │   ├── README.md ............... layout, what to expect, house rules
-    │   └── v67/README.md ........... the security tranche + historical exploit corpus
-    │
-    ├── tools/README.md ............. pilot harness, reconstruction, validators
-    ├── v68/README.md ............... frozen notional mission fixtures
-    ├── artifacts/README.md ......... campaign outputs: what survives, what was pruned
-    │
-    ├── argus/ ...................... EXTERNAL hash-pinned kernel — do not edit
-    ├── argus_neural/ ............... earlier ARGUS research line
-    └── argus_capsules/ ............. earlier ARGUS research line
-
-curunir_v68_runs/ ................... human pilot evidence (untracked, see its README)
+│
+├── curunir/ ........................ THE PRODUCT (was argus_demo/ until 2026-09-02)
+│   ├── README.md ................... what Curunír is, design commitments, expected test result
+│   ├── CURUNIR_V6_9_HANDOFF.md ..... START HERE if you are resuming work
+│   ├── OVERVIEW.md ................. the node map for everything below
+│   ├── CURUNIR_DOCUMENTS.md ........ index of all contracts and ledgers, and the frozen-path note
+│   ├── curunir_fabric/ ............. COLLECTION (README, connectors/README)
+│   ├── curunir_semantic/ ........... NORMALIZE → WORLD MODEL
+│   ├── curunir_analytic/ ........... ANALYSIS, model providers
+│   ├── curunir_operational/ ........ THE TRUSTED CORE (README, scenario/README)
+│   ├── curunir_identity/ ........... WHO ACTED
+│   ├── curunir_workbench/ .......... THE OPERATOR SURFACE (README, static/README)
+│   ├── tests/ ...................... the product suite (README, v67/README)
+│   ├── tools/ ...................... pilot harness, reconstruction, validators
+│   ├── v68/ ........................ frozen notional mission fixtures
+│   ├── docs/, research/ ............ Curunír design docs and campaign reports (untracked, historical)
+│   ├── missions/ ................... the workbench demo mission
+│   └── .venv/ ...................... the one virtualenv, shared by all three planes
+│
+├── kernel/ ......................... KERNEL GOLD
+│   ├── README.md ................... the pin, how to verify and restore, the ARGUS demo kit
+│   ├── argus/ ...................... the hash-pinned ARGUS kernel — DO NOT EDIT
+│   ├── argus_kernel_pinned_4c173df7.tar.gz  the only backup of that tree
+│   ├── schema.sql, docker-compose.yml, .env.example  the Postgres spine the kernel writes to
+│   ├── review_app/, demo_corpus/, exports/  the ARGUS demo kit
+│   ├── content_store/, offline_source_inbox/, review_inbox/  ingestion and review intake
+│   ├── docs/ ....................... ARGUS-era design and findings (untracked)
+│   └── tests/ ...................... the ARGUS research-line suite (README)
+│
+├── capsules/ ....................... NEURAL EXTRACTOR + CODEC CAPSULES
+│   ├── README.md
+│   ├── argus_neural/ ............... the universal neural extractor line
+│   ├── argus_capsules/ ............. the codec / story-capsule line
+│   ├── artifacts/ .................. trained checkpoints and campaign outputs (README)
+│   ├── argus_tiny256_story_capsule_v0_20260628_1525.tar.gz, TINY256_STORY_CAPSULE_V0_FROZEN.txt
+│   └── tests/ ...................... the capsule and neural suite (README)
+│
+├── curunir_v68_runs/ ............... human pilot evidence (untracked, single copy, see its README)
+├── 02_CONTRACT/ .................... schema contracts (netwatch)
+└── .worktrees/ ..................... netwatch federation worktrees — untouched
 ```
 
 ## Reading orders
 
 **"What is this and does it work?"**
-`README.md` → `argus_demo/CURUNIR_V6_8_QUALIFICATION.json` → `curunir_v68_runs/`
+`README.md` → `curunir/CURUNIR_V6_8_QUALIFICATION.json` → `curunir_v68_runs/`
 
 **"I am going to change the code."**
-`argus_demo/OVERVIEW.md` → `CURUNIR_V6_7_ARCHITECTURE.md` →
-`CURUNIR_V6_7_INVARIANTS.json` → the README of the plane you are touching →
-`argus_demo/tests/README.md`
+`curunir/OVERVIEW.md` → `curunir/CURUNIR_V6_7_ARCHITECTURE.md` →
+`curunir/CURUNIR_V6_7_INVARIANTS.json` → the README of the plane you are touching →
+`curunir/tests/README.md`
 
 **"I need to rebuild it somewhere else."**
-`argus_demo/CURUNIR_RECONSTRUCTION.md` → `argus_demo/tools/README.md`
+`curunir/CURUNIR_RECONSTRUCTION.md` → `kernel/README.md` → `curunir/tools/README.md`
 
 **"What happened historically?"**
-`argus_demo/CURUNIR_DOCUMENTS.md` → `argus_demo/artifacts/README.md` →
-git tags `archive/*`
+`curunir/CURUNIR_DOCUMENTS.md` → `capsules/artifacts/README.md` → git tags `archive/*`
 
 ## Conventions
 
 - A directory's `README.md` is authoritative for that directory. If code and
   README disagree, that is a bug in the README — fix it in the same commit.
-- A document marked **frozen** was sealed before the work it governs, so the
-  work could not redefine its own success condition. Several are hash-pinned by
-  another document. Editing one is a change-control event.
+- A document marked **frozen** was sealed before the work it governs. Several are
+  hash-pinned by another document. Editing one is a change-control event, which
+  is why the 2026-09-02 split left them saying `argus_demo`.
 - Anything removed is recoverable from a git tag named in the ledger that
   removed it. Nothing is deleted without a ledger entry.

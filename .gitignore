@@ -1,8 +1,8 @@
 *.tar.gz
 __pycache__/
 .venv/
-argus_demo/exports/
+kernel/exports/
 # extractor model weights are frozen as local tarball snapshots; artifact
 # dirs are committed selectively (reports/cards, not weight payloads)
-argus_demo/artifacts/universal_neural_extractor_*/model*/
-argus_demo/artifacts/universal_neural_extractor_*/dataset/
+capsules/artifacts/universal_neural_extractor_*/model*/
+capsules/artifacts/universal_neural_extractor_*/dataset/

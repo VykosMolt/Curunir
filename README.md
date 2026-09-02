@@ -1,114 +1,43 @@
-# Curunír
+# Saulot
 
-An intelligence workbench that will not let a conclusion outrun its evidence.
+Home of **Curunír** — an intelligence workbench that will not let a conclusion
+outrun its evidence — and of the two ARGUS research lines it grew out of.
 
-Curunír collects public evidence, preserves it byte-for-byte under custody,
-turns it into a temporal world model of entities, claims and change, and lets
-analysts reason over that model — hypotheses, forecasts, warnings — and publish
-a dossier in which **every settled sentence is content-bound to a cited record**.
-Two different people must sign a release. The whole mission replays offline from
-its own export, with no network and no model provider.
+Since 2026-09-02 the repository is split into three planes. Each has its own
+README, its own tests and its own `conftest.py`; they share one virtualenv.
 
-It is not accredited, not a system of record, and not validated intelligence.
-`argus_demo/CURUNIR_V6_8_QUALIFICATION.json` states exactly what has and has not
-been established.
+| Plane | What it is | Start at |
+|---|---|---|
+| **`curunir/`** | The product: six `curunir_*` packages, the workbench, the V6.7/V6.8/V6.9 contracts and ledgers, the pilot harness. This is where work happens. | `curunir/README.md` → `curunir/CURUNIR_V6_9_HANDOFF.md` |
+| **`kernel/`** | **Kernel Gold.** The inherited ARGUS claim kernel (`kernel/argus/`), hash-pinned and never edited, plus its tarball backup, its Postgres schema and demo kit, and the ARGUS-era research tests. Curunír imports eight modules from it. | `kernel/README.md` |
+| **`capsules/`** | The ARGUS neural extractor and codec-capsule research lines: `argus_neural/`, `argus_capsules/`, their trained artifacts (`artifacts/private_capsules/`, the `universal_neural_extractor_*` campaigns) and tests. | `capsules/README.md` |
 
----
+Also here:
 
-## Where things are
+- `curunir_v68_runs/` — **untracked, single-copy human pilot evidence.** Read its README before touching anything in it.
+- `.worktrees/` — git worktrees for the netwatch federation line. Left exactly as they are.
+- `02_CONTRACT/` — schema contracts (netwatch).
 
-> **Naming.** The product lives under `argus_demo/`. The directory name is
-> historical and misleading — it is the product root, not a demo. Renaming it
-> would break the frozen V6.8 campaign identity, the kernel mount path, and the
-> pilot protocol, so it stays until there is a reason to pay that cost.
-
-| Path | What it is |
-|---|---|
-| `argus_demo/curunir_fabric/` | Collection: source registry, guarded egress, connectors (GLEIF, SEC EDGAR, Wikidata, Wayback, RSS, web pages), watches |
-| `argus_demo/curunir_semantic/` | Normalization and extraction → documents, observations, claims, world model, change detection |
-| `argus_demo/curunir_analytic/` | Themes, narratives, stakeholders, impact, forecasts, indicators, warnings, analogues |
-| `argus_demo/curunir_operational/` | **Trusted core**: hash-chained store, access lattice, record ontology, canonical byte contract |
-| `argus_demo/curunir_identity/` | Ed25519 actor identity, sessions, signed actions, replay verification |
-| `argus_demo/curunir_workbench/` | HTTP command surface + the analyst SPA |
-| `argus_demo/tests/` | 138 modules, ~36k lines |
-| `argus_demo/tools/` | Campaign harnesses and validators (`curunir_v68.py`, `validate_v67.py`) |
-
-Roughly 33k lines of product against 36k lines of tests.
-
-### Not the product
-
-`argus_demo/argus_capsules/`, `argus_demo/argus_neural/` and
-`argus_demo/artifacts/` are separate ARGUS research lines. They share the repo
-and nothing else. Their tests are the residual failures described below.
-
----
-
-## External prerequisites
-
-Curunír is reproducible from tracked state **plus** two things that deliberately
-live outside it. `argus_demo/CURUNIR_RECONSTRUCTION.md` is the authority.
-
-1. **The ARGUS kernel** — a versioned snapshot mounted at `argus_demo/argus/`,
-   pinned by a whole-tree hash. Eight modules are imported directly. Do not
-   vendor it; mount the identified snapshot.
-2. **Pinned Python deps** — Python ≥ 3.12 with `cryptography==44.0.0`, `fastapi`,
-   `uvicorn`, `pydantic`, `httpx`. `playwright` is test-only. `pdftotext`
-   (poppler-utils) is optional; a missing binary is recorded as a bounded
-   processing failure, never as absence of evidence.
-
-An **analytical model provider** (`anthropic` or `openai`) is optional and
-deliberately outside the pinned set — `requirements.txt` is hash-pinned by the
-V6.7 reconstruction manifest, so adding one is a change-control decision. With
-neither installed the product behaves exactly as one with no provider
-configured. See `argus_demo/curunir_analytic/README.md`.
-
-## Running it
+## Running Curunír
 
 ```bash
-cd argus_demo
-export PYTHONPATH="$PWD"
+cd curunir
+export PYTHONPATH="$PWD:$PWD/../kernel"
 
-.venv/bin/python -m pytest tests/ -q              # the suite
-.venv/bin/python -m curunir_operational.cli --help # store, export, replay, verify
+.venv/bin/python -m pytest tests/ -q -p no:cacheprovider          # the product suite
+.venv/bin/python -m curunir_operational.cli --help                 # store, export, replay, verify
 
 CURUNIR_MISSION_ROOT=/path/to/mission CURUNIR_ACTORS=/path/to/actors.json \
-  .venv/bin/uvicorn curunir_workbench.server:app   # the workbench
+  .venv/bin/uvicorn curunir_workbench.server:app                    # the workbench
 ```
 
-Restore and replay of a mission need **no network and no providers** — replay is
-pure log replay over the exported package.
+The kernel is resolved from `../kernel/argus` (override with
+`CURUNIR_ARGUS_KERNEL`) and verified against the frozen whole-tree hash before
+any campaign or reconstruction step runs.
 
-### Expected test result
+## History of the layout
 
-The `curunir_*` product plane passes. The suite also collects the ARGUS research
-lines, which need corpora that are not tracked here; those account for every
-residual failure. `argus_demo/CURUNIR_V6_9_EXCISION.json` records the exact
-non-passing node set, and the V6.8 harness tests refuse a dirty checkout by
-design — commit before running them.
-
----
-
-## Reading the documents
-
-`argus_demo/CURUNIR_DOCUMENTS.md` is the index: what each contract, ledger and
-protocol is, whether it is frozen or live, and which to read first. Start there
-rather than opening the `CURUNIR_*` files in alphabetical order.
-
-## Design commitments
-
-These are enforced in code, not aspirational:
-
-- **No write-down.** A derived record is floored on its inputs' markings at one
-  chokepoint. A refresh never re-classifies downward.
-- **Content-binding.** A `SUPPORTED` sentence must *be* the cited statement or
-  value. A citation-shaped reference is not enough.
-- **Fail closed.** Unknown, malformed, stale, replayed or tampered input is a
-  typed refusal with no partial authoritative state.
-- **Human authority.** A model may propose; only a human accepts. A proposal is
-  constrained to a schema generated from the same table the review path
-  enforces, may cite only identifiers it was shown, and is retained in full —
-  failures included — as an inference record. Approval is an Ed25519 signed act
-  bound to actor, mission, report and version, and the author may not be the
-  approver.
-- **Exportable.** Documented open formats, full lineage, no vendor-specific
-  transformation required to leave.
+Until 2026-09-02 everything lived under one directory, `argus_demo/`, with the
+kernel mounted inside it. Frozen manifests and evidence written before that
+date still use those paths; `argus_demo` means `curunir` and `argus_demo/argus`
+means `kernel/argus`. Nothing frozen was rewritten. `NAVIGATION.md` is the map.

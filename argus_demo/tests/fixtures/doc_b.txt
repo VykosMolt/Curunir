@@ -1,8 +1,0 @@
-Example Data Protection Authority
-Amended Decision No. 2024-17-A
-
-On 2024-09-02, the Example Data Protection Authority amended its earlier
-enforcement decision against Northwind Analytics. Following the company's
-appeal, the administrative fine was reduced from €4,500,000 to €1,200,000.
-
-The amended decision supersedes Decision No. 2024-17 with respect to the fine amount. All other findings, including the finding of unlawful processing under Article 6 GDPR, remain in force.
