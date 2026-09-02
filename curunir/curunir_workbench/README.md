@@ -63,6 +63,32 @@ explanation) · Operations (EIV-ranked collection routes with launch/assign,
 coverage matrix where NOT_SEARCHED ≠ absence, watches, tasks, unified review
 queue) · Output (annotations/dissent, report/dossier engine).
 
+## V6.8 pilot surface
+
+`tools/curunir_v68.py` wraps this server with `/v68/pilot/*` control routes and
+an audit middleware. The sign-in form probes those routes (a pilot server
+answers 401, the plain workbench 404) and, when they are there, offers a
+participant role: with one chosen, the session starts before the first
+authenticated read, so every recorded action falls inside a session. The SPA
+then shows a `PILOT` nav group and lands on it: session end, the
+operator-correction event and the frozen mission brief are controls on
+`/pilot` rather than `curl` invocations, and ending a session makes no further
+read. Forecast authorship, dossier creation at a compartment and role floor,
+claim citation, review dispositions, task closure and approval notes are
+likewise ordinary form controls, so the whole protocol is drivable — and
+testable — in a browser (`tests/test_v68_pilot_journeys.py`).
+
+`/api/session` reports the actor's `compartments` and `releasability` so those
+forms can offer only markings the actor holds. It is display, not authority:
+every marking decision still happens server-side at the command boundary.
+
+Requests carry `X-Curunir-Client: workbench-ui`; the harness records the
+value each request claimed on its `HTTP_ACTION` and counts mutating requests
+by it. The header is unauthenticated: a script that sets it is counted as the
+UI, so the count is descriptive evidence of how the operator worked, not proof.
+The task-closing, route-assignment and saved-view notes are required by the UI
+only; the operator-correction note is required by the harness as well.
+
 ## Provenance descent
 
 First-class both ways, access-filtered at every hop:
@@ -197,3 +223,9 @@ python -m pytest tests/test_workbench_projections.py tests/test_workbench_report
 server over a real seeded store — sign-in, COP, warning→evidence descent,
 hypothesis assessment, annotation, the full dossier flow, restricted-analyst
 filtering, timeline axes.
+
+`tests/test_v68_pilot_journeys.py` drives the V6.8 pilot protocol itself
+through the UI alone: M2 (correction → review disposition → dossier → signed
+approval), M3 (operational picture → task → compartmented dossier → approval
+with dissent → public access check), and an M1 analogue on the seeded demo
+mission that also proves the pilot nav stays hidden without the `/v68` routes.

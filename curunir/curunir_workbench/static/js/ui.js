@@ -48,6 +48,59 @@ export function table({ columns, rows, onRow, empty = "nothing visible in this c
   return h("table", {}, h("thead", {}, head), h("tbody", {}, body));
 }
 
+// ---- form primitives --------------------------------------------------------
+
+// A labelled control. The label is the field name, never the value, and it
+// is wired to the control so assistive technology reads it.
+let fieldCount = 0;
+export function field(label, control, hint) {
+  if (!control.id) control.id = `field-${++fieldCount}`;
+  return h("div", { class: "field" }, h("label", { for: control.id }, label), control,
+    hint ? h("div", { class: "faint" }, hint) : null);
+}
+
+// A click handler that cannot run twice at once: the button is disabled
+// until the work finishes, so a double-click never writes twice into an
+// append-only store.
+export function busy(fn) {
+  return async (event) => {
+    const el = event && event.currentTarget;
+    if (el && el.disabled) return undefined;
+    if (el) el.disabled = true;
+    try { return await fn(event); } finally { if (el) el.disabled = false; }
+  };
+}
+
+// A multi-select over fixed values; values() reads what the operator chose.
+// Each option is a string or {value, label}.
+export function multiSelect(options, { selected = [], label = "" } = {}) {
+  const el = h("select", { multiple: true, "aria-label": label,
+    size: String(Math.min(6, Math.max(2, options.length || 2))) },
+    options.map((o) => {
+      const value = o.value ?? o;
+      return h("option", { value, selected: selected.includes(value) || undefined },
+        o.label ?? o);
+    }));
+  el.values = () => [...el.selectedOptions].map((o) => o.value);
+  return el;
+}
+
+// "Cite this record": pick a visible record, press the button, the caller
+// receives its id. The raw field it writes into stays editable.
+export function idPicker(options, buttonLabel, onPick, { label = "" } = {}) {
+  if (!options.length) return h("span", { class: "faint" }, "nothing visible to cite");
+  const select = h("select", { "aria-label": label },
+    options.map((o) => h("option", { value: o.value }, o.label)));
+  return h("span", { class: "picker" }, select,
+    h("button", { type: "button", onclick: () => onPick(select.value) }, buttonLabel));
+}
+
+// The label a picker shows for a record: the statement, with the id kept
+// visible for the auditor.
+export function pickerLabel(statement, id) {
+  return `${clip(statement, 70)} — ${String(id).slice(0, 12)}`;
+}
+
 export const loading = () => h("p", { class: "loading" }, "loading…");
 export const errorBox = (err) =>
   h("div", { class: "notice bad", role: "alert" },

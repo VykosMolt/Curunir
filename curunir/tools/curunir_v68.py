@@ -961,6 +961,8 @@ def prepare_mission(mission_id: str, root: Path) -> dict[str, Any]:
 # ---- privacy-bounded pilot instrumentation ---------------------------------
 
 PILOT_LOG = "pilot_events.jsonl"
+# The header value the shipped workbench UI sends on every request.
+UI_CLIENT = "workbench-ui"
 ROLE_ACTORS = {
     "PRIMARY_OPERATOR": PRIMARY_ACTOR,
     "APPROVER": APPROVER_ACTOR,
@@ -1132,6 +1134,8 @@ def create_instrumented_app(root: Path):
         note = body.get("note", "") if isinstance(body, dict) else ""
         if not isinstance(note, str) or len(note) > 500:
             raise HTTPException(status_code=400, detail="note must be at most 500 characters")
+        if event_kind == "OPERATOR_CORRECTION_RECORDED" and not note.strip():
+            raise HTTPException(status_code=400, detail="an operator correction requires a note")
         entry = _append_pilot_event(log_path, {
             "event_kind": event_kind,
             "event_time": _now(),
@@ -1158,8 +1162,16 @@ def create_instrumented_app(root: Path):
 
     @app.get("/v68/pilot/status")
     def pilot_status(request: StarletteRequest):
-        principal(request)
-        return verify_pilot_log(log_path)
+        actor = principal(request)
+        analysis = _session_analysis(_pilot_events(log_path))
+        return {
+            **verify_pilot_log(log_path),
+            "actor_id": actor.actor_id,
+            # Only the caller's own sessions: the panel needs nothing else.
+            "open_sessions": [{"actor_id": item[0], "participant_role": item[1]}
+                              for item in sorted(analysis["open_sessions"])
+                              if item[0] == actor.actor_id],
+        }
 
     @app.get("/v68/pilot/brief")
     def pilot_brief(request: StarletteRequest):
@@ -1229,6 +1241,9 @@ def create_instrumented_app(root: Path):
     async def pilot_measurement(request: StarletteRequest, call_next):
         path = request.url.path
         measured = path.startswith("/api/") or path.startswith("/v68/")
+        # Only the shipped UI sends this exact marker; anything else is "other".
+        client = UI_CLIENT if request.headers.get("x-curunir-client") == UI_CLIENT \
+            else "other"
         actor_id = "UNAUTHENTICATED"
         actor_kind = "UNKNOWN"
         if measured:
@@ -1264,6 +1279,7 @@ def create_instrumented_app(root: Path):
                     "path": retained_path,
                     "resource_id_sha256": resource_id_sha256,
                     "category": _request_category(request.method, path),
+                    "client": client,
                     "http_status": status,
                     "duration_ms": round((time.perf_counter() - started) * 1000, 3),
                     "store_seq_before": before["event_count"],
@@ -1645,6 +1661,26 @@ def _measurement(root: Path, faithfulness: Mapping[str, Any], replay: Mapping[st
         for key, values in sorted(forecasts.items())
     ]
     reports = _approved_reports(store)
+    # Which client made each successful mutation: a package should show how much
+    # of the operator's work went through the shipped UI rather than a script.
+    mutations_by_client: dict[str, int] = {}
+    for item in http:
+        if item.get("method", "GET") == "GET" or item.get("http_status", 500) >= 400:
+            continue
+        key = item.get("client", "other")
+        mutations_by_client[key] = mutations_by_client.get(key, 0) + 1
+    # Logs written before the client header existed re-derive to their
+    # packaged bytes: the key appears only when the log carries the field.
+    if any("client" in item for item in http):
+        client_measure = {"mutating_requests_by_client": dict(sorted(mutations_by_client.items()))}
+        client_note = {"mutating_requests_by_client": (
+            "successful non-GET requests inside a session, counted by the "
+            "client header each request claimed; the header is unauthenticated, "
+            f"so {UI_CLIENT!r} means the request said it came from the shipped "
+            "workbench UI and cannot exclude a script that says the same. "
+            "Descriptive, not a gate")}
+    else:
+        client_measure, client_note = {}, {}
     measured = {
         "mission_status": "COMPLETED" if reports else "NOT_COMPLETED",
         "operator_elapsed_seconds": round(elapsed, 3),
@@ -1662,6 +1698,7 @@ def _measurement(root: Path, faithfulness: Mapping[str, Any], replay: Mapping[st
         "forecast_revisions": forecast_revisions,
         "operator_corrections": sum(1 for item in events
                                     if item.get("event_kind") == "OPERATOR_CORRECTION_RECORDED"),
+        **client_measure,
         "system_refusals_or_errors": sum(1 for item in http
                                          if item.get("http_status", 0) >= 400),
         "evidence_lineage_completeness": {
@@ -1681,6 +1718,7 @@ def _measurement(root: Path, faithfulness: Mapping[str, Any], replay: Mapping[st
             "evidence_items_inspected": (
                 "successful evidence-detail retrievals inside a valid session; "
                 "an interaction proxy, not proof of human cognition"),
+            **client_note,
             "integrity": "lineage, replay, final artifact, and required human transitions are binary gates",
         },
         "criterion": {

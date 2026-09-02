@@ -162,8 +162,12 @@ def create_app(mission_root: str | Path, actors_path: str | Path,
     @app.get("/api/session")
     def session(request: Request):
         ctx = context(request)
+        # compartments and releasability let the browser offer only the
+        # markings this actor actually holds; they are display, not authority.
         return {"actor_id": ctx.actor_id, "actor_kind": ctx.actor_kind,
                 "roles": list(ctx.roles), "organisation": ctx.organisation,
+                "compartments": list(ctx.compartments),
+                "releasability": list(ctx.releasability),
                 "mission_id": store.meta.get("store_id", "curunir-workbench")}
 
     # ---- mission projections ----
@@ -566,6 +570,7 @@ def create_app(mission_root: str | Path, actors_path: str | Path,
         question: str
         sections: list[dict[str, Any]] = Field(default_factory=list)
         compartments: list[str] = Field(default_factory=list)
+        min_role: str = ""
 
     @app.post("/api/commands/reports")
     def cmd_report_create(request: Request, body: ReportCreateBody):

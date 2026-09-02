@@ -219,6 +219,12 @@ input, select, textarea { font: inherit; font-size: 14px; color: var(--ink);
 textarea { width: 100%; min-height: 74px; line-height: 1.55; resize: vertical; }
 label { display: block; font: 500 11px/1 var(--sans); letter-spacing: .09em;
   text-transform: uppercase; color: var(--muted); margin-bottom: 6px; }
+.field { margin-bottom: calc(var(--step)*3); }
+.field input, .field textarea, .field select { width: 100%; max-width: 640px; }
+.field .faint { font-size: 12.5px; margin-top: 5px; }
+.picker { display: inline-flex; gap: calc(var(--step)*2); align-items: center;
+  flex-wrap: wrap; }
+.picker select { max-width: 420px; }
 
 /* ---- svg panels ---------------------------------------------------------- */
 .svg-panel { background: var(--surface); border: 1px solid var(--rule);

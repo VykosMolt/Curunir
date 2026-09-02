@@ -73,7 +73,11 @@ def _basis_closure(
             continue
         seen_refs.add(reference)
         resolved = resolve_reference_records(store, (reference,))
-        if not resolved and reference.record_id in direct:
+        # Only a direct basis ref that resolves under no kind is unresolved. A
+        # transitive reference to the same id under a kind it is not (a
+        # manifestation id written into an ingestion field) is a typing gap in
+        # the citing record, not a hole in what the report rests on.
+        if not resolved and reference.kind == "*" and reference.record_id in direct:
             unresolved.add(reference.record_id)
         for record in resolved:
             identity = _record_identity(record)

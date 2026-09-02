@@ -262,3 +262,23 @@ def test_export_package_and_html(mission):
     html = export_html(projection, report)
     assert "[SUPPORTED]" in html and "[UNRESOLVED]" in html
     assert "doctype html" in html
+
+
+def test_basis_closure_flags_only_direct_refs_that_resolve_under_no_kind(tmp_path):
+    """A manifestation cited directly is a resolved basis even though a world
+    model object refers to it through an ingestion-typed field; only an id that
+    exists under no kind at all is unresolved."""
+    from curunir_workbench.authority import _basis_closure
+    from workbench_support import make_workbench, seed_mission
+    pipeline, ctx = make_workbench(tmp_path)
+    seed_mission(pipeline, ctx)
+    store = ctx.store
+    manifestation = store.records_of("fabric_manifestation")[0]["manifestation_id"]
+    mistyped = [r for r in store.records_of("object_version")
+                if manifestation in r.get("provenance", {}).get("ingestion_ids", ())]
+    assert mistyped, "the scene should hold a manifestation id in an ingestion-typed field"
+    records, unresolved = _basis_closure(store, [manifestation])
+    assert unresolved == ()
+    assert any(r.get("manifestation_id") == manifestation for r in records)
+    _, unresolved = _basis_closure(store, [manifestation, "claim-does-not-exist"])
+    assert unresolved == ("claim-does-not-exist",)

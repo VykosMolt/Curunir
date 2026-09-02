@@ -1,7 +1,7 @@
 // Views, part 1: overview, search, world model, evidence, sources, claims.
 // Every view renders what the server returns; the browser derives nothing.
 import { get, post } from "./api.js";
-import {
+import { busy,
   annotationList, badge, claimDescentView, clip, emptyBox, errorBox,
   fmtTime, graphSvg, h, kv, loading, mapSvg, pivot, refLink, table, ident,
 } from "./ui.js";
@@ -11,10 +11,11 @@ export function nav(route) { location.hash = `#${route}`; }
 // Save the current filters and focus as a named view.
 export function saveViewButton(viewKind, definitionFn) {
   const status = h("span", {});
-  return h("span", {},
+  const titleEl = h("input", { placeholder: "save this view as…", size: 24, "aria-label": "saved view title" });
+  return h("span", {}, titleEl, " ",
     h("button", { onclick: async () => {
-      const title = prompt("save this view as:");
-      if (!title) return;
+      const title = titleEl.value.trim();
+      if (!title) { status.replaceChildren(errorBox(new Error("a view needs a title"))); return; }
       try {
         await post("/api/commands/saved-views", {
           title, view_kind: viewKind, definition: definitionFn() });
@@ -43,7 +44,7 @@ export function annotateBox(targetKind, targetId, refresh, { anchorRef = "" } = 
     h("h3", {}, "Annotate"),
     textarea,
     h("div", { class: "toolbar" }, kind,
-      h("button", { class: "primary", onclick: async () => {
+      h("button", { class: "primary", onclick: busy(async () => {
         try {
           await post("/api/commands/annotate", {
             target_kind: targetKind, target_id: targetId, kind: kind.value,
@@ -51,19 +52,24 @@ export function annotateBox(targetKind, targetId, refresh, { anchorRef = "" } = 
           textarea.value = "";
           refresh();
         } catch (err) { status.replaceChildren(errorBox(err)); }
-      } }, "Add"), status));
+      }) }, "Add"), status));
 }
 
 export function annotationsSection(annotations, targetKind, targetId, refresh) {
+  const noteEl = h("input", { placeholder: "resolution note (required to resolve or withdraw)", size: 48,
+    "aria-label": "resolution note" });
+  const status = h("div", {});
+  const open = annotations.some((a) => a.status === "OPEN");
   return [h("h2", {}, `Annotations (${annotations.length})`),
+    open ? h("div", { class: "toolbar" }, noteEl) : null, status,
     annotationList(annotations, { onResolve: async (a, s) => {
-      const note = prompt(`${s} note:`) || "";
-      if (!note) return;
+      const note = noteEl.value.trim();
+      if (!note) { status.replaceChildren(errorBox(new Error("a resolution note is required"))); return; }
       try {
         await post(`/api/commands/annotations/${a.annotation_id}/resolve`,
           { expected_version: a.version, status: s, note });
         refresh();
-      } catch (err) { alert(err.message); }
+      } catch (err) { status.replaceChildren(errorBox(err)); }
     } }),
     annotateBox(targetKind, targetId, refresh)];
 }

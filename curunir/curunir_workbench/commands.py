@@ -26,7 +26,7 @@ from curunir_analytic.warning import project_warning
 from curunir_fabric.contracts import WatchDefinition
 from curunir_fabric.registry import load_registry
 from curunir_fabric.watch import register_watch
-from curunir_operational.access import (AccessContext, Marking, can_view,
+from curunir_operational.access import (AccessContext, Marking, ROLE_RANK, can_view,
                                         marking_from_record, most_restrictive)
 from curunir_operational.canonical import validate_interchange
 from curunir_operational.missions import MissionWorkflow
@@ -112,20 +112,27 @@ def _soft_reject(projection: MissionProjection, values: tuple) -> None:
             f"payload carries identifiers you cannot resolve: {sorted(set(bad))[:4]}")
 
 
-def marked(ctx: "CommandContext", compartments: tuple[str, ...] = ()) -> Marking:
+def marked(ctx: "CommandContext", compartments: tuple[str, ...] = (), min_role: str = "") -> Marking:
     """The marking for a new record: the default, raised into compartments the
-    actor actually holds. Raises otherwise, so nobody writes into access they
-    do not have."""
-    if not compartments:
+    actor actually holds and to a role floor the actor meets. Raises otherwise,
+    so nobody writes into access they do not have."""
+    if min_role and min_role not in ROLE_RANK:
+        raise CommandError(f"unknown role floor: {min_role}")
+    if not compartments and not min_role:
         return ctx.marking
     missing = set(compartments) - set(ctx.context.compartments)
     if missing:
         raise PermissionError("cannot write into compartments you do not hold")
     base = ctx.marking.to_record()
+    floor = base["min_role"]
+    if min_role and ROLE_RANK[min_role] > ROLE_RANK[floor]:
+        if not any(ROLE_RANK.get(role, -1) >= ROLE_RANK[min_role] for role in ctx.context.roles):
+            raise PermissionError("cannot write at a role floor you do not meet")
+        floor = min_role
     return Marking(owning_authority=base["owning_authority"],
-                   compartments=tuple(compartments),
+                   compartments=tuple(compartments) or tuple(base["compartments"]),
                    releasability=tuple(base["releasability"]),
-                   min_role=base["min_role"], caveats=tuple(base["caveats"]))
+                   min_role=floor, caveats=tuple(base["caveats"]))
 
 
 def _utc_now() -> str:
@@ -140,14 +147,14 @@ def _record_marking(record: Mapping[str, Any]) -> Marking:
 
 
 def _reference_marking(ctx: "CommandContext", projection: MissionProjection, *,
-                       refs: tuple, compartments: tuple[str, ...] = ()) -> Marking:
+                       refs: tuple, compartments: tuple[str, ...] = (), min_role: str = "") -> Marking:
     """The marking for a new record that cites existing state: the most
     restrictive of the actor's own and everything the record names.
 
     A record is never less restricted than what it is about. The actor must also
     be cleared for the result, so citing several records cannot land the writer
     above their own access."""
-    markings = [marked(ctx, compartments)] + _ref_markings(projection, tuple(refs))
+    markings = [marked(ctx, compartments, min_role)] + _ref_markings(projection, tuple(refs))
     result = most_restrictive(markings)
     if not can_view(result, ctx.context):
         raise PermissionError(
@@ -834,15 +841,16 @@ def _validate_section_shapes(sections: Any) -> None:
 
 def create_report(ctx: CommandContext, *, title: str, question: str,
                   sections: list[Mapping[str, Any]],
-                  compartments: tuple[str, ...] = ()) -> dict:
+                  compartments: tuple[str, ...] = (), min_role: str = "") -> dict:
     _validate_section_shapes(sections)
     projection = ctx.projection()
     _validate_inbound(projection, texts=(title, question))
     _validate_sections(projection, sections)
-    # A report is at least as restricted as everything it cites.
+    # A report is at least as restricted as everything it cites, and is
+    # created at the floor it will need: an edit never raises it.
     write_marking = _reference_marking(ctx, projection,
                                        refs=_section_refs(sections),
-                                       compartments=compartments)
+                                       compartments=compartments, min_role=min_role)
     return reports_module.create_report(
         ctx.store, actor=ctx.actor, marking=write_marking,
         now=ctx.now_fn(), title=title, question=question, sections=sections,

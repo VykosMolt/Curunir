@@ -12,8 +12,12 @@ export function token() { return sessionStorage.getItem("curunir-token") || ""; 
 export function setToken(value) { sessionStorage.setItem("curunir-token", value); }
 export function clearToken() { sessionStorage.removeItem("curunir-token"); }
 
+// Every request says which client made it, so the pilot harness can tell a UI
+// action from a scripted one.
+export const CLIENT = "workbench-ui";
+
 async function request(method, path, body) {
-  const headers = { "Authorization": `Bearer ${token()}` };
+  const headers = { "Authorization": `Bearer ${token()}`, "X-Curunir-Client": CLIENT };
   if (body !== undefined) headers["Content-Type"] = "application/json";
   let response;
   try {

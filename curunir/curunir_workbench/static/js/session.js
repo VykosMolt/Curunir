@@ -4,6 +4,8 @@ export const session = {
   actor_kind: null,
   roles: [],
   organisation: "",
+  compartments: [],
+  releasability: [],
   mission_id: null,
 };
 

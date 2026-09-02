@@ -14,6 +14,7 @@ framework, no bundler: plain ES modules the server ships as-is.
 | `js/canonical.js` | canonical JSON, byte-exact with the Python serializer |
 | `js/ui.js` | shared primitives; epistemic labels stay text-first, colour never replaces meaning |
 | `js/views*.js` | the family views |
+| `js/pilot.js` | V6.8 pilot session control + mission brief (only when the server has `/v68/pilot/*`) |
 
 `canonical.js` is load-bearing and non-obvious: the browser must produce **the
 same bytes** the server hashes, or a signature over a report version will not
@@ -44,15 +45,45 @@ no webfonts: this tool makes no outbound request for typography.
 now renders a short handle (`claim ·1ec902`) plus an auditor-only full id,
 instead of a 28-character hash.
 
+## Operating the V6.8 pilot from here
+
+Every step of `../../CURUNIR_V6_8_PILOT_PROTOCOL.md` that used to need `curl`
+is now a control on a page:
+
+* **sign-in** — on a pilot server (the unauthenticated probe of
+  `/v68/pilot/status` answers 401; the plain workbench 404) the form offers a
+  participant role and note; with a role chosen the session starts before the
+  first authenticated read, so nothing falls outside the session the harness
+  bounds actions to.
+* **`/pilot`** — end session, operator correction, and the frozen
+  `/v68/pilot/brief` (question, gate notes, claims, objectives, evidence).
+  Ending a session renders a static notice and makes no further read. The nav
+  group appears only when the pilot routes exist.
+* **`/forecasts`** — "Author forecast (human judgment)": the initial authorship
+  the protocol's M1 step 4 did over HTTP, with propositions chosen from visible
+  claims.
+* **`/reports`** — a compartment multi-select and a role floor on dossier
+  creation (M3 step 2), offered from what `/api/session` reports for the
+  signed-in actor; a dossier is created at the floor its basis needs, since an
+  edit never raises it.
+* the sentence editor — "cite claim" / "cite assumption" pickers over visible
+  records; the raw comma-separated fields stay editable.
+* review dispositions, report reject/return notes, task closing notes, route
+  assignment, saved-view titles and annotation resolutions are inline fields,
+  and dissent is acknowledged with a checkbox: no `prompt()`, `confirm()` or
+  `alert()`, so a headless browser can drive the whole protocol.
+
+`api.js` sends `X-Curunir-Client: workbench-ui` on every request. The pilot
+harness records the value each request claimed on its `HTTP_ACTION` and counts
+mutations by it. The header is unauthenticated, so a script that sets it is
+counted as the UI: the count describes how the operator worked and proves
+nothing on its own.
+
 ## Known state — read before working here
 
 The nav is still a family browser over stored record types rather than a
-mission workflow, and the V6.8 pilots completed their real work through `curl`.
-The diagnosis, the pilot evidence, and three competing redesign options are in
+mission workflow. The diagnosis, the pilot evidence, and three competing
+redesign options are in
 `../../../curunir_v68_runs/CURUNIR_WORKBENCH_UI_FABLE_BRIEF.md`. `/claims` is
 the first surface built to that brief; the rest of the information
 architecture is not done.
-
-One defect named there is still in this directory: `views3.js` falls back to an
-**unsigned** `POST /approve` when `ed25519Available()` is false, silently. V6.8
-does not accept an unsigned approval.

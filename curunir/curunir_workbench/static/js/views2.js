@@ -1,10 +1,11 @@
 // Views, part 2: analysis, forecasting, operations.
 import { get, post } from "./api.js";
-import {
-  badge, chainNode, claimDescentView, clip, emptyBox, errorBox, fmtTime, h, kv,
-  pivot, probabilityChart, refLink, table,
+import { busy,
+  badge, chainNode, claimDescentView, clip, emptyBox, errorBox, field, fmtTime,
+  h, kv, multiSelect, pickerLabel, pivot, probabilityChart, refLink, table,
 } from "./ui.js";
 import { annotationsSection, nav, render } from "./views.js";
+import { session } from "./session.js";
 
 // ---- generic analytical family browser --------------------------------------
 
@@ -372,7 +373,10 @@ export async function hypothesisView(main, params, id) {
 
 export async function forecastsView(main) {
   await render(main, async () => {
-    const res = await get("/api/family/analytic_forecast");
+    const [res, claims] = await Promise.all([
+      get("/api/family/analytic_forecast"),
+      get("/api/family/semantic_claim"),
+    ]);
     return [h("h1", {}, "Forecasts"),
       h("p", { class: "muted" }, "probabilities are authored judgments — there is no recalculate button"),
       table({ columns: [
@@ -382,16 +386,116 @@ export async function forecastsView(main) {
         { label: "author", key: "author" },
         { label: "horizon", render: (f) => fmtTime(f.horizon_time) },
         { label: "v", key: "version" }],
-        rows: res.records })];
+        rows: res.records }),
+      forecastAuthoringCard(claims.records || [])];
   });
+}
+
+// The kinds the analytic contract allows. Only HUMAN_JUDGMENT resolves without
+// a typed, machine-checkable rule, so the others ask for that rule.
+const RESOLUTION_KINDS = ["HUMAN_JUDGMENT", "CLAIM_PREDICATE", "EVENT_OCCURRED"];
+
+function forecastAuthoringCard(claims) {
+  const question = h("input", { placeholder: "falsifiable question…", size: 70 });
+  const semantics = h("input", { size: 70,
+    placeholder: "exactly what occurrence counts as TRUE…" });
+  const horizon = h("input", { size: 34, placeholder: "2026-09-20T23:59:59+00:00" });
+  const probability = h("input", { type: "number", min: "0.01", max: "0.99",
+    step: "0.01", value: "0.10" });
+  const basis = h("input", { size: 70,
+    placeholder: "why this authored probability is justified…" });
+  const propositions = multiSelect(
+    claims.map((c) => ({ value: c.claim_id, label: pickerLabel(c.statement, c.claim_id) })),
+    { label: "proposition refs" });
+  const kind = h("select", { "aria-label": "resolution kind" },
+    RESOLUTION_KINDS.map((k) => h("option", {}, k)));
+  const criteria = h("input", { size: 70, placeholder: "exact resolution criterion…" });
+  const domain = h("input", { size: 30, placeholder: "domain…" });
+  const compartments = multiSelect(session.compartments || [], { label: "compartments" });
+
+  // Machine-resolvable rules need their subject; a human-judgment rule does not.
+  const claimSubject = h("input", { size: 34, placeholder: "claim subject ref…" });
+  const claimAttribute = h("input", { size: 24, placeholder: "claim attribute…" });
+  const expectedValue = h("input", { size: 24, placeholder: "value that settles TRUE…" });
+  const eventType = h("input", { size: 24, placeholder: "activity type…" });
+  const eventSubject = h("input", { size: 34, placeholder: "event subject ref…" });
+  const absenceSources = h("input", { size: 40,
+    placeholder: "source ids that must be searched (comma-separated)" });
+  const absenceMin = h("input", { type: "number", min: "1", step: "1", value: "1" });
+  const claimRule = h("div", { class: "hidden" },
+    field("claim subject", claimSubject), field("claim attribute", claimAttribute),
+    field("expected value", expectedValue));
+  const eventRule = h("div", { class: "hidden" },
+    field("activity type", eventType), field("event subject", eventSubject));
+  const absence = h("div", { class: "hidden" },
+    field("absence coverage: required source ids", absenceSources),
+    field("absence coverage: minimum successful sources", absenceMin));
+  kind.addEventListener("change", () => {
+    claimRule.classList.toggle("hidden", kind.value !== "CLAIM_PREDICATE");
+    eventRule.classList.toggle("hidden", kind.value !== "EVENT_OCCURRED");
+    absence.classList.toggle("hidden", kind.value === "HUMAN_JUDGMENT");
+  });
+
+  const status = h("div", {});
+  const author = async () => {
+    status.replaceChildren();
+    const resolution = { kind: kind.value, criteria: criteria.value };
+    if (kind.value !== "HUMAN_JUDGMENT") {
+      resolution.absence_min_successful_sources = Number(absenceMin.value) || 1;
+      resolution.absence_required_source_ids = absenceSources.value
+        .split(",").map((v) => v.trim()).filter(Boolean);
+    }
+    if (kind.value === "CLAIM_PREDICATE") {
+      resolution.claim_subject_ref = claimSubject.value;
+      resolution.claim_attribute = claimAttribute.value;
+      resolution.expected_value = expectedValue.value;
+    }
+    if (kind.value === "EVENT_OCCURRED") {
+      resolution.event_activity_type = eventType.value;
+      resolution.event_subject_ref = eventSubject.value;
+    }
+    try {
+      const made = await post("/api/commands/forecasts", {
+        question: question.value, outcome_semantics: semantics.value,
+        horizon_time: horizon.value, probability: Number(probability.value),
+        probability_basis: basis.value,
+        proposition_refs: propositions.values().map((id) => ["claim", id]),
+        resolution, domain: domain.value,
+        compartments: compartments.values(),
+      });
+      nav(`/forecasts/${made.forecast_id}`);
+    } catch (err) { status.replaceChildren(errorBox(err)); }
+  };
+
+  return h("div", { class: "card" },
+    h("h3", {}, "Author forecast (human judgment)"),
+    h("p", { class: "muted" },
+      "the probability is yours; nothing here derives or recalculates it"),
+    field("question", question),
+    field("outcome semantics", semantics),
+    field("horizon time", horizon, "ISO-8601 with an offset, e.g. 2026-09-20T23:59:59+00:00"),
+    field("probability", probability, "between 0.01 and 0.99"),
+    field("probability basis", basis),
+    field("propositions this forecast is about", propositions,
+      "claims visible in this context; the forecast is at least as restricted as what it cites"),
+    field("resolution kind", kind),
+    field("resolution criteria", criteria),
+    claimRule, eventRule, absence,
+    field("domain", domain),
+    (session.compartments || []).length
+      ? field("compartments", compartments, "none selected = as open as its basis allows")
+      : null,
+    h("div", { class: "toolbar" },
+      h("button", { class: "primary", onclick: busy(author) }, "Author forecast"), status));
 }
 
 export async function forecastView(main, params, id) {
   const refresh = () => forecastView(main, params, id);
   await render(main, async () => {
-    const [rec, chain] = await Promise.all([
+    const [rec, chain, objectives] = await Promise.all([
       get(`/api/record/analytic_forecast/${encodeURIComponent(id)}`),
       get(`/api/provenance/descend/analytic_forecast/${encodeURIComponent(id)}`).catch(() => null),
+      get("/api/family/mission_objective").catch(() => ({ records: [] })),
     ]);
     const f = rec.current;
     const open = f.status === "OPEN";
@@ -446,13 +550,21 @@ export async function forecastView(main, params, id) {
       open ? h("div", { class: "card" },
         h("h3", {}, "Project warning onto an objective (tier comes from the named rule)"),
         (() => {
-          const objectiveInput = h("input", { placeholder: "objective id…", size: 34 });
+          const visible = objectives.records || [];
+          // Choose a visible objective; the free-text field stays for an id
+          // this context can act on but does not list.
+          const objectiveSelect = h("select", { "aria-label": "objective" },
+            visible.map((o) => h("option", { value: o.objective_id },
+              pickerLabel(o.statement, o.objective_id))));
+          const objectiveInput = h("input", { placeholder: "or an objective id…", size: 34 });
           const projStatus = h("span", {});
-          return h("div", { class: "toolbar" }, objectiveInput,
+          return h("div", { class: "toolbar" },
+            visible.length ? objectiveSelect : null, objectiveInput,
             h("button", { onclick: async () => {
               try {
                 const w = await post(`/api/commands/forecasts/${id}/project-warning`,
-                  { objective_id: objectiveInput.value });
+                  { objective_id: objectiveInput.value.trim()
+                      || (visible.length ? objectiveSelect.value : "") });
                 nav(`/warnings/${w.warning_id}`);
               } catch (err) { projStatus.replaceChildren(errorBox(err)); }
             } }, "Project"), projStatus);
@@ -562,11 +674,14 @@ export async function collectionView(main) {
         refresh();
       } catch (err) { launchStatus.replaceChildren(errorBox(err)); }
     };
-    const assign = async (route) => {
-      const actor = prompt("assign to analyst id:");
-      if (!actor) return;
-      try { await post(`/api/commands/routes/${route.route_id}/assign`, { assigned_actor: actor }); refresh(); }
+    const assign = async (route, actor) => {
+      if (!actor.trim()) { launchStatus.replaceChildren(errorBox(new Error("an analyst id is required"))); return; }
+      try { await post(`/api/commands/routes/${route.route_id}/assign`, { assigned_actor: actor.trim() }); refresh(); }
       catch (err) { launchStatus.replaceChildren(errorBox(err)); }
+    };
+    const assignControl = (route) => {
+      const who = h("input", { placeholder: "analyst id", size: 18, "aria-label": "assign to" });
+      return h("span", {}, who, " ", h("button", { onclick: () => assign(route, who.value) }, "Assign to analyst"));
     };
     return [
       h("h1", {}, "Collection"),
@@ -587,7 +702,7 @@ export async function collectionView(main) {
             r.status === "PROPOSED" && r.automatable
               ? h("button", { class: "primary", onclick: () => launch(r) }, "Launch route") : null,
             r.status === "PROPOSED" && !r.automatable
-              ? h("button", { onclick: () => assign(r) }, "Assign to analyst") : null,
+              ? assignControl(r) : null,
             r.execution_id ? refLink("fabric_execution", r.execution_id, "execution") : null,
             r.task_id ? pivot("/tasks", "task") : null)))
         : emptyBox("no proposed routes — open information requirements generate them"),
@@ -657,11 +772,13 @@ export async function tasksView(main) {
   const refresh = () => tasksView(main);
   await render(main, async () => {
     const ov = await get("/api/overview");
-    const session = await get("/api/session");
     const tasks = ov.open_tasks;
     const status = h("div", {});
-    const move = async (t, to) => {
-      const note = ["DONE", "FAILED", "ABANDONED"].includes(to) ? (prompt(`${to} note:`) || "") : "";
+    const move = async (t, to, note = "") => {
+      if (["DONE", "FAILED", "ABANDONED"].includes(to) && !note.trim()) {
+        status.replaceChildren(errorBox(new Error(`a note is required to mark a task ${to}`)));
+        return;
+      }
       try {
         await post("/api/commands/workflow/transition", {
           subject_kind: "analyst_task", subject_id: t.task_id, to_status: to, note });
@@ -677,13 +794,18 @@ export async function tasksView(main) {
           (t.due_time ? ` · due ${fmtTime(t.due_time)}` : "")),
         (t.affected_ids || []).length ? h("div", { class: "faint" }, "affects: ",
           t.affected_ids.map((aid) => h("span", {}, clip(aid, 30), " "))) : null,
-        h("div", { class: "toolbar" },
-          t.status === "ASSIGNED" ? h("button", { onclick: () => move(t, "IN_PROGRESS") }, "Start") : null,
-          ["ASSIGNED", "IN_PROGRESS"].includes(t.status) && t.assigned_actor === session.actor_id
-            ? h("button", { class: "primary", onclick: () => move(t, "DONE") }, "Complete") : null,
-          t.status === "IN_PROGRESS" ? h("button", { onclick: () => move(t, "BLOCKED") }, "Blocked") : null,
-          h("span", { class: "faint" },
-            t.assigned_actor !== session.actor_id ? "completion is reserved for the assigned analyst" : ""))))
+        (() => {
+          const noteEl = h("input", { placeholder: "closing note (required to complete)", size: 40,
+            "aria-label": "task note" });
+          const mine = t.assigned_actor === session.actor_id;
+          return h("div", { class: "toolbar" },
+            t.status === "ASSIGNED" ? h("button", { onclick: () => move(t, "IN_PROGRESS") }, "Start") : null,
+            ["ASSIGNED", "IN_PROGRESS"].includes(t.status) && mine ? noteEl : null,
+            ["ASSIGNED", "IN_PROGRESS"].includes(t.status) && mine
+              ? h("button", { class: "primary", onclick: () => move(t, "DONE", noteEl.value) }, "Complete") : null,
+            t.status === "IN_PROGRESS" ? h("button", { onclick: () => move(t, "BLOCKED") }, "Blocked") : null,
+            h("span", { class: "faint" }, mine ? "" : "completion is reserved for the assigned analyst"));
+        })()))
         : emptyBox("no open tasks"),
       h("h2", {}, "Transitions are attributable"),
       h("p", { class: "faint" }, "every state change above is a recorded workflow transition with your actor identity — see ",
@@ -697,25 +819,34 @@ export async function reviewView(main) {
   const refresh = () => reviewView(main);
   await render(main, async () => {
     const queue = await get("/api/review");
-    const status = h("div", {});
-    const dispose = async (item, s) => {
-      const note = prompt(`${s} note (kept in history):`) || "";
-      if (!note) return;
-      try {
-        await post(`/api/commands/review/${item.id}/resolve`, {
-          expected_version: item.version, status: s, note });
-        refresh();
-      } catch (err) { status.replaceChildren(errorBox(err)); }
-    };
-    const proposal = async (item, accept) => {
-      const note = prompt(`${accept ? "accept" : "reject"} note:`) || "";
-      try {
-        await post(`/api/commands/proposals/${item.id}/resolve`, { accept, note });
-        refresh();
-      } catch (err) { status.replaceChildren(errorBox(err)); }
-    };
-    return [h("h1", {}, `Review queue (${queue.open_count} open)`), status,
-      queue.items.length ? queue.items.map((item) => h("div", { class: "card" },
+    // The note is entered inline, next to the item it disposes of, and is
+    // still required: a disposition without a reason is not a disposition.
+    const itemCard = (item) => {
+      const note = h("input", { size: 46, placeholder: "note (kept in history)…",
+        "aria-label": "disposition note" });
+      const itemStatus = h("div", {});
+      const dispose = async (s) => {
+        itemStatus.replaceChildren();
+        if (!note.value.trim()) {
+          itemStatus.replaceChildren(errorBox(new Error("a note is required")));
+          return;
+        }
+        try {
+          await post(`/api/commands/review/${item.id}/resolve`, {
+            expected_version: item.version, status: s, note: note.value });
+          refresh();
+        } catch (err) { itemStatus.replaceChildren(errorBox(err)); }
+      };
+      const proposal = async (accept) => {
+        itemStatus.replaceChildren();
+        try {
+          await post(`/api/commands/proposals/${item.id}/resolve`,
+            { accept, note: note.value });
+          refresh();
+        } catch (err) { itemStatus.replaceChildren(errorBox(err)); }
+      };
+      const open = item.status === "OPEN";
+      return h("div", { class: "card" },
         h("div", {}, badge(item.queue), badge(item.kind), badge(item.status)),
         h("div", {}, clip(item.detail, 200)),
         h("div", { class: "faint" },
@@ -726,14 +857,18 @@ export async function reviewView(main) {
         (item.evidence_refs || []).length ? h("div", { class: "faint" }, "evidence: ",
           item.evidence_refs.map((e) => h("span", {}, clip(e, 28), " "))) : null,
         item.resolution_note ? h("div", { class: "faint" }, `resolution: ${item.resolution_note}`) : null,
-        item.status === "OPEN" && item.queue === "SEMANTIC" ? h("div", { class: "toolbar" },
-          h("button", { class: "primary", onclick: () => dispose(item, "RESOLVED") }, "Resolve"),
-          h("button", { onclick: () => dispose(item, "DISMISSED") }, "Dismiss (kept in history)")) : null,
-        item.status === "OPEN" && item.queue === "MODEL_PROPOSAL" ? h("div", { class: "toolbar" },
-          h("button", { class: "primary", onclick: () => proposal(item, true) }, "Accept (human act)"),
-          h("button", { onclick: () => proposal(item, false) }, "Reject")) : null,
+        open && item.queue === "SEMANTIC" ? h("div", { class: "toolbar" }, note,
+          h("button", { class: "primary", onclick: () => dispose("RESOLVED") }, "Resolve"),
+          h("button", { onclick: () => dispose("DISMISSED") }, "Dismiss (kept in history)")) : null,
+        open && item.queue === "MODEL_PROPOSAL" ? h("div", { class: "toolbar" }, note,
+          h("button", { class: "primary", onclick: () => proposal(true) }, "Accept (human act)"),
+          h("button", { onclick: () => proposal(false) }, "Reject")) : null,
         item.queue === "REPORT" ? h("div", { class: "toolbar" },
-          pivot(`/reports/${item.id}`, "open report for review")) : null))
+          pivot(`/reports/${item.id}`, "open report for review")) : null,
+        itemStatus);
+    };
+    return [h("h1", {}, `Review queue (${queue.open_count} open)`),
+      queue.items.length ? queue.items.map(itemCard)
         : emptyBox("review queue clear")];
   });
 }

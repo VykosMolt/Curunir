@@ -13,6 +13,17 @@
     <p class="muted">Every conclusion here descends to captured evidence. Enter your actor token.</p>
     <label for="token">Actor token</label>
     <input id="token" type="password" autocomplete="off" autofocus>
+    <div id="pilot-login" class="hidden">
+      <label for="pilot-role">Pilot participant role</label>
+      <select id="pilot-role">
+        <option value="PRIMARY_OPERATOR">PRIMARY_OPERATOR</option>
+        <option value="APPROVER">APPROVER</option>
+        <option value="PUBLIC_ACCESS_CHECK">PUBLIC_ACCESS_CHECK</option>
+      </select>
+      <label for="pilot-note">Session note</label>
+      <input id="pilot-note" type="text" placeholder="session note">
+      <p class="muted">The session starts as you sign in, before anything else is read; a session already open for this role is resumed.</p>
+    </div>
     <button type="submit">Sign in</button>
     <p id="login-error" class="error" role="alert"></p>
   </form>

@@ -1,10 +1,15 @@
 // Shell: sign-in, navigation, hash router, display modes.
-import { get, setToken, clearToken, token } from "./api.js";
+import { get, post, setToken, clearToken, token } from "./api.js";
 import { setSession } from "./session.js";
 import { h } from "./ui.js";
 import * as v1 from "./views.js";
 import * as v2 from "./views2.js";
 import * as v3 from "./views3.js";
+import * as pilot from "./pilot.js";
+
+// Shown only when the server carries the V6.8 pilot routes.
+const PILOT_NAV = ["PILOT", [["/pilot", "Pilot session"]]];
+let pilotAvailable = false;
 
 const NAV = [
   ["MISSION", [
@@ -31,6 +36,7 @@ const NAV = [
 
 // Route table: pattern -> handler(main, params, ...captures).
 const ROUTES = [
+  ["/pilot", pilot.pilotView],
   ["/overview", v1.overviewView],
   ["/investigation", v2.investigationView],
   ["/search", v1.searchView],
@@ -102,7 +108,7 @@ async function route() {
 function buildNav() {
   const host = document.getElementById("nav-links");
   host.replaceChildren();
-  for (const [group, links] of NAV) {
+  for (const [group, links] of pilotAvailable ? [PILOT_NAV, ...NAV] : NAV) {
     host.append(h("div", { class: "nav-group" }, group));
     for (const [routePath, label] of links) {
       host.append(h("a", { href: `#${routePath}`, dataset: { route: routePath } }, label));
@@ -167,11 +173,20 @@ async function boot() {
     try {
       const session = await get("/api/session");
       setSession(session);
+      // Feature-detect the pilot routes once, here: the plain workbench 404s.
+      // Only a 404 means the routes are absent; any other failure is a pilot
+      // server having a bad day, and the panel will show the error.
+      pilotAvailable = await get("/v68/pilot/status").then(() => true, (err) => err.status !== 404);
       document.getElementById("actor-badge").textContent =
         `${session.actor_id} · ${session.roles.join("/")}`;
       login.classList.add("hidden");
       shell.classList.remove("hidden");
       buildNav();
+      // On a pilot server the session panel is where work starts, so land
+      // there rather than reading the mission before the session is open.
+      if (pilotAvailable && !location.hash) {
+        history.replaceState(null, "", "#/pilot");
+      }
       await route();
       return true;
     } catch {
@@ -180,10 +195,28 @@ async function boot() {
     }
   }
 
+  const pilotLogin = document.getElementById("pilot-login");
+
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
     setToken(document.getElementById("token").value.trim());
     errorEl.textContent = "";
+    if (!pilotLogin.classList.contains("hidden")) {
+      // On a pilot server the session opens before the first authenticated
+      // read, so every recorded action, sign-in included, falls inside it. A
+      // session already open for this role is resumed, not restarted.
+      const role = document.getElementById("pilot-role").value;
+      try {
+        await post("/v68/pilot/start", { participant_role: role,
+          note: document.getElementById("pilot-note").value });
+      } catch (err) {
+        if (err.status !== 409) {
+          clearToken();
+          errorEl.textContent = `session not started: ${err.message}`;
+          return;
+        }
+      }
+    }
     if (!(await tryStart())) errorEl.textContent = "unknown or disabled actor token";
   });
 
@@ -199,6 +232,11 @@ async function boot() {
 
   if (!(await tryStart())) {
     login.classList.remove("hidden");
+    // A pilot server answers the unauthenticated probe with 401, the plain
+    // workbench with 404; only then is the session block offered.
+    fetch("/v68/pilot/status").then((r) => {
+      if (r.status === 401) pilotLogin.classList.remove("hidden");
+    }, () => {});
   }
 }
 
