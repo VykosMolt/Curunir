@@ -3,6 +3,7 @@ canonical-write path from the operational package, frozen packages untouched."""
 from __future__ import annotations
 
 import hashlib
+import os
 import re
 from pathlib import Path
 
@@ -11,7 +12,10 @@ import pytest
 pytestmark = pytest.mark.no_db
 
 ROOT = Path(__file__).resolve().parent.parent  # curunir/ (the product root)
-KERNEL = ROOT.parent / "kernel"  # schema.sql and the pinned argus package live here
+#: The kernel plane: schema.sql and the pinned argus package live here.  Honour
+#: CURUNIR_ARGUS_KERNEL (which names the argus package itself) like the rest of
+#: the suite, so a clean checkout can be verified against an external kernel.
+KERNEL = Path(os.environ.get("CURUNIR_ARGUS_KERNEL", ROOT.parent / "kernel" / "argus")).resolve().parent
 
 PROTECTED = {
     "schema.sql": "7af415d510de07ebf681f996320c938706049fe3aa3a57dbf5a3a62237a9da32",
