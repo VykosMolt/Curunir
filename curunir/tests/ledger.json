@@ -97,6 +97,7 @@
     "tests/test_workbench_review_repairs_4.py": 8,
     "tests/test_workbench_review_repairs_5.py": 9,
     "tests/test_workbench_review_repairs_6.py": 7,
+    "tests/test_workbench_scale.py": 4,
     "tests/test_workbench_server.py": 9,
     "tests/test_workbench_worldmodel_marking.py": 5,
     "tests/v67/test_authoritative_report_controls.py": 9,
