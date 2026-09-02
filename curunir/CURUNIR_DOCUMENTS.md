@@ -74,6 +74,13 @@ old paths because their bytes are pinned; read `argus_demo` as `curunir` and
 `CURUNIR_ARGUS_KERNEL` or `../kernel/argus` and verifies it against the frozen
 hash, so the recorded absolute path is evidence, not configuration.
 
+## Commit ids after the 2026-09-02 repository split
+
+This repository was carved out of `Saulot` with `git filter-repo`, keeping only
+the product's paths. Every commit id changed. `CURUNIR_COMMIT_MAP_SAULOT.txt`
+is the map (old id, new id, one per line); frozen documents and pilot evidence
+cite the old ids, and the Saulot repository still holds them unchanged.
+
 ## Conventions
 
 - A document saying `FROZEN_BEFORE_...` was sealed before the work it governs, so

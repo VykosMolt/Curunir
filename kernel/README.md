@@ -51,18 +51,12 @@ record that path as *evidence of what was used*, not as configuration.
 
 ## What else is here
 
-| Path | What it is |
-|---|---|
-| `schema.sql`, `docker-compose.yml`, `.env.example` | the Postgres spine the kernel writes to; one service, port 5544 |
-| `review_app/` | the minimal read-only FastAPI review UI |
-| `demo_corpus/`, `exports/` | the corpus intake and the demo's provenance bundles |
-| `content_store/`, `offline_source_inbox/`, `review_inbox/` | content-addressed source bytes, the offline official-source intake, and the frozen review packets |
-| `docs/` | ARGUS-era design notes and findings (untracked, historical) |
-| `tests/` | the ARGUS research-line suite — see `tests/README.md` |
+Only `README.md` and `MANIFEST.md` are tracked. `argus/`, the tarball and
+`schema.sql` (hash-checked by `curunir/tests/test_operational_protection.py`)
+sit beside them untracked. The kernel's Postgres spine, demo kit, docs and the
+ARGUS research-line tests stayed in the Saulot repository (`kernel/` there).
 
----
-
-## The ARGUS demo kit (the original kernel README)
+## The ARGUS demo kit (the original kernel README, kept for reference; the kit itself lives in Saulot)
 
 A **Postgres-first, bitemporal, mention-grounded, evidence-span-backed claim
 kernel** for **public-source** AI / regulatory intelligence.

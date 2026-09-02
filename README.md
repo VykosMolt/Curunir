@@ -1,22 +1,18 @@
-# Saulot
+# Curunír
 
-Home of **Curunír** — an intelligence workbench that will not let a conclusion
-outrun its evidence — and of the two ARGUS research lines it grew out of.
+An intelligence workbench that will not let a conclusion outrun its evidence.
 
-Since 2026-09-02 the repository is split into three planes. Each has its own
-README, its own tests and its own `conftest.py`; they share one virtualenv.
+This repository holds the product (`curunir/`) and the documentation of its one
+external dependency, the hash-pinned ARGUS kernel (`kernel/`). It was carved
+out of the `Saulot` research repository on 2026-09-02 with the product's full
+history; `curunir/CURUNIR_COMMIT_MAP_SAULOT.txt` maps every Saulot commit id to
+its id here, so the commit hashes cited in frozen evidence can be followed.
 
-| Plane | What it is | Start at |
+| Path | What it is | Start at |
 |---|---|---|
-| **`curunir/`** | The product: six `curunir_*` packages, the workbench, the V6.7/V6.8/V6.9 contracts and ledgers, the pilot harness. This is where work happens. | `curunir/README.md` → `curunir/CURUNIR_V6_9_HANDOFF.md` |
-| **`kernel/`** | **Kernel Gold.** The inherited ARGUS claim kernel (`kernel/argus/`), hash-pinned and never edited, plus its tarball backup, its Postgres schema and demo kit, and the ARGUS-era research tests. Curunír imports eight modules from it. | `kernel/README.md` |
-| **`capsules/`** | The ARGUS neural extractor and codec-capsule research lines: `argus_neural/`, `argus_capsules/`, their trained artifacts (`artifacts/private_capsules/`, the `universal_neural_extractor_*` campaigns) and tests. | `capsules/README.md` |
-
-Also here:
-
-- `curunir_v68_runs/` — **untracked, single-copy human pilot evidence.** Read its README before touching anything in it.
-- `.worktrees/` — git worktrees for the netwatch federation line. Left exactly as they are.
-- `02_CONTRACT/` — schema contracts (netwatch).
+| **`curunir/`** | The product: six `curunir_*` packages, the workbench, the V6.7/V6.8/V6.9 contracts and ledgers, the pilot harness, the suite, the one virtualenv. | `curunir/README.md` → `curunir/CURUNIR_V6_9_HANDOFF.md` |
+| **`kernel/`** | **Kernel Gold.** `kernel/argus/` is the inherited ARGUS kernel, untracked here by design and verified against one whole-tree hash; beside it the tarball backup and `schema.sql`. Only `README.md` and `MANIFEST.md` are tracked. | `kernel/README.md` |
+| `curunir_v68_runs/` | **Untracked, single-copy human pilot evidence.** Read its README before touching anything in it. | |
 
 ## Running Curunír
 
@@ -33,11 +29,14 @@ CURUNIR_MISSION_ROOT=/path/to/mission CURUNIR_ACTORS=/path/to/actors.json \
 
 The kernel is resolved from `../kernel/argus` (override with
 `CURUNIR_ARGUS_KERNEL`) and verified against the frozen whole-tree hash before
-any campaign or reconstruction step runs.
+any campaign or reconstruction step runs. A fresh clone has no kernel: unpack
+`kernel/argus_kernel_pinned_4c173df7.tar.gz` there, or obtain the snapshot from
+Saulot, then verify (`kernel/README.md`).
 
 ## History of the layout
 
-Until 2026-09-02 everything lived under one directory, `argus_demo/`, with the
-kernel mounted inside it. Frozen manifests and evidence written before that
-date still use those paths; `argus_demo` means `curunir` and `argus_demo/argus`
-means `kernel/argus`. Nothing frozen was rewritten. `NAVIGATION.md` is the map.
+Until 2026-09-02 the product lived in the Saulot repository as `argus_demo/`,
+with the kernel mounted inside it. Frozen manifests and evidence written before
+that date still use those paths; `argus_demo` means `curunir` and
+`argus_demo/argus` means `kernel/argus`. Nothing frozen was rewritten.
+`NAVIGATION.md` is the map; `HOUSEKEEPING.md` is the rule set that keeps it so.

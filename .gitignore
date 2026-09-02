@@ -1,8 +1,4 @@
 *.tar.gz
 __pycache__/
 .venv/
-kernel/exports/
-# extractor model weights are frozen as local tarball snapshots; artifact
-# dirs are committed selectively (reports/cards, not weight payloads)
-capsules/artifacts/universal_neural_extractor_*/model*/
-capsules/artifacts/universal_neural_extractor_*/dataset/
+.pytest_cache/

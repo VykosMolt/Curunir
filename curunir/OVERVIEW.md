@@ -24,12 +24,12 @@ cd curunir && export PYTHONPATH="$PWD:$PWD/../kernel"
 | `v68/` | frozen notional mission fixtures | `v68/README.md` |
 | `CURUNIR_*.{md,json}` | contracts, ledgers, protocols | **`CURUNIR_DOCUMENTS.md`** |
 
-## Not here any more (sibling planes)
+## Not here
 
 | Node | What it is |
 |---|---|
 | `../kernel/argus/` | the **external ARGUS kernel** — a hash-pinned snapshot, not owned by this directory. Curunír imports 8 modules from it. Do not vendor it, do not edit it. `../kernel/README.md` has the pin. |
-| `../capsules/` | the earlier ARGUS research lines (neural extractor, codec capsules) with their artifacts and tests. They share the repository and nothing else. |
+| Saulot repository | the earlier ARGUS research lines (neural extractor, codec capsules) with their artifacts and tests, and the kernel's Postgres kit. Not in this repository. |
 
 ## The data flow, once
 

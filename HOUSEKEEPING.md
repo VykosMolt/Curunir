@@ -5,34 +5,31 @@ how anything superseded leaves. Each plane has a `MANIFEST.md` that applies
 these rules to its own directory. If a file does not fit any row of its plane's
 manifest, it does not belong in that plane.
 
-## 1. The three planes, and nothing between them
+## 1. One product, one external dependency, nothing between them
 
-| Plane | Owns | Never contains |
+| Directory | Owns | Never contains |
 |---|---|---|
-| `curunir/` | the product (`curunir_*`), its tests, tools, contracts and ledgers, the one virtualenv | kernel source, neural/capsule code, research artifacts, campaign outputs |
-| `kernel/` | the pinned ARGUS tree, its backup tarball, the Postgres spine and demo kit, the ARGUS research tests | anything Curunír-specific, anything trained |
-| `capsules/` | `argus_neural`, `argus_capsules`, their artifacts and tests, the frozen capsule tarballs | product code, kernel source |
+| `curunir/` | the product (`curunir_*`), its tests, tools, contracts and ledgers, the virtualenv | kernel source, research code, trained artifacts, campaign outputs |
+| `kernel/` | the documentation of the pinned ARGUS kernel; the untracked tree, tarball and `schema.sql` beside it | anything Curunír-specific, anything edited |
 
-Cross-plane imports go one way only: `curunir` → `kernel`, `capsules` →
-`kernel`. Nothing imports from `curunir` except `curunir`. Nothing imports from
-`capsules` except `capsules`. A test lives in the plane whose code it imports;
-if it imports from two planes, it lives with the higher one (`curunir` >
-`capsules` > `kernel`) and reaches down through `../kernel/...` explicitly.
+Imports go one way: `curunir` → `kernel`. The ARGUS research lines (neural
+extractor, codec capsules) and netwatch live in the Saulot repository, not
+here. If code needs them, that is a design question, not an import.
 
-Outside the planes only these are allowed at the repository root:
+Outside those two only these are allowed at the repository root:
 `README.md`, `NAVIGATION.md`, `HOUSEKEEPING.md`, `.gitignore`,
-`curunir_v68_runs/` (pilot evidence), `02_CONTRACT/` and `.worktrees/`
-(netwatch, out of scope for these rules), and `.claude/`. **No loose files at
-the root.** A stray patch, log, audit or snapshot at the root is a bug.
+`curunir_v68_runs/` (pilot evidence) and `.claude/`. **No loose files at the
+root.** A stray patch, log, audit or snapshot at the root is a bug.
 
 ## 2. Tracked vs. untracked is a decision, not an accident
 
-- Tracked: source, tests, contracts, ledgers, READMEs, reports and cards,
-  small fixtures, the tiny256 capsule tarball (already in history).
+- Tracked: source, tests, contracts, ledgers, READMEs, small fixtures, the
+  Saulot commit map. Nothing over a few megabytes; this repository is meant to
+  push to GitHub without LFS.
 - Untracked by policy (listed in `.gitignore` / `.git/info/exclude`): the
-  kernel tree (mounted, hash-verified), virtualenvs, model weights and datasets,
-  corpora, content stores, inboxes, mission roots, pilot evidence, `docs/` and
-  `research/` history, and `.env`.
+  kernel tree, tarball and `schema.sql` (external, hash-verified), the
+  virtualenv, `curunir/conftest.py` and `pytest.ini`, mission roots, pilot
+  evidence, `docs/` and `research/` history.
 - Nothing is "untracked because nobody added it". If a file has been untracked
   for more than one campaign, either add it or move it to where untracked
   things live (its plane's `artifacts/`, `docs/`, or out of the repo).
@@ -47,16 +44,16 @@ points at the old one. Then it is deleted, not kept "just in case":
 | Kind | Rule |
 |---|---|
 | Git worktrees | one per live line of work. When its branch is merged or abandoned, `git worktree remove` it the same day. Branches stay; checkouts do not. |
-| Snapshot tarballs | keep the newest per subject and any tarball a frozen document names. Delete strict subsets (the 22:46 report-surface snapshot was a subset of 23:08 and went). |
-| Campaign artifact roots | keep what a ledger, qualification or handoff cites. Untracked campaign output whose campaign is closed is deleted after its verdict is recorded in the plane's `artifacts/README.md`. |
+| Snapshot tarballs | the kernel tarball is the only one that belongs here, and it is untracked. Anything else is deleted. |
+| Campaign artifact roots | keep what a ledger, qualification or handoff cites. Untracked campaign output whose campaign is closed is deleted after its verdict is recorded in the nearest ledger. |
 | Rehearsal mission roots | `curunir_v68_runs/` is the exception: never edit or delete a prepared root, even a superseded rehearsal, because each is bound to one commit and one kernel identity and is evidence only in its original bytes. |
 | Byte-code and caches | `__pycache__`, `.pytest_cache`, `.mypy_cache`: delete freely, never commit. |
 | Handoff and audit prose at the root | belongs in the plane it is about, or in a ledger. Delete the copy at the root. |
 | Duplicate copies of a tracked file | the working tree has one copy. If a byte-identical copy exists elsewhere in the repo, delete it. |
 
 Every deletion of something that was ever load-bearing gets a line in the
-nearest ledger (`curunir/CURUNIR_V6_9_EXCISION.json` style, or the plane's
-`artifacts/README.md`), naming the git tag or commit it can be recovered from.
+nearest ledger (`curunir/CURUNIR_V6_9_EXCISION.json` style), naming the git
+tag or commit it can be recovered from.
 The tests that asserted over it are deleted in the same change, with the same
 ledger line, so the suite never carries dead assertions silently.
 
@@ -92,16 +89,16 @@ entry — never an in-place edit.
 1. `git status --porcelain | grep '^??'` — every untracked path is either in
    an ignore list on purpose or about to be added. No third state.
 2. No files at the repository root beyond §1.
-3. Each plane's `MANIFEST.md` still describes what is actually there. If you
-   added a directory, add its row.
+3. `curunir/MANIFEST.md` and `kernel/MANIFEST.md` still describe what is
+   actually there. If you added a directory, add its row.
 4. `git worktree list` shows only live work.
-5. The product suite passes from `curunir/`; the sibling planes at least
-   collect (`pytest --co -q`).
+5. The product suite passes from `curunir/`. The V6.8 harness tests need a
+   clean tree: verify them from a throwaway `git worktree add` of HEAD.
 
 ## 8. Quarterly (or whenever the disk complains)
 
-- Run §3 over each plane's `artifacts/` and over `kernel/docs/`,
-  `curunir/docs/`, `curunir/research/`. Delete superseded, record what left.
+- Run §3 over `curunir/docs/` and `curunir/research/`. Delete superseded,
+  record what left.
 - Verify the kernel hash and that `kernel/argus_kernel_pinned_4c173df7.tar.gz`
   still unpacks to it.
 - Rebuild the virtualenv from `curunir/requirements.txt` rather than

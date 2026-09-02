@@ -4,15 +4,18 @@ Every directory that contains anything non-obvious carries its own `README.md`.
 This file is the map of those maps: start here, then descend.
 
 ```
-Saulot/
-├── README.md ........................ the three planes and how to run Curunír
+Curunir/
+├── README.md ........................ what this repository is and how to run the product
 ├── NAVIGATION.md ................... you are here
+├── HOUSEKEEPING.md ................. what lives where, what may be deleted, how
 │
-├── curunir/ ........................ THE PRODUCT (was argus_demo/ until 2026-09-02)
+├── curunir/ ........................ THE PRODUCT (was Saulot/argus_demo/ until 2026-09-02)
 │   ├── README.md ................... what Curunír is, design commitments, expected test result
+│   ├── MANIFEST.md ................. what belongs in this directory and what does not
 │   ├── CURUNIR_V6_9_HANDOFF.md ..... START HERE if you are resuming work
 │   ├── OVERVIEW.md ................. the node map for everything below
 │   ├── CURUNIR_DOCUMENTS.md ........ index of all contracts and ledgers, and the frozen-path note
+│   ├── CURUNIR_COMMIT_MAP_SAULOT.txt  Saulot commit id → commit id here
 │   ├── curunir_fabric/ ............. COLLECTION (README, connectors/README)
 │   ├── curunir_semantic/ ........... NORMALIZE → WORLD MODEL
 │   ├── curunir_analytic/ ........... ANALYSIS, model providers
@@ -22,31 +25,18 @@ Saulot/
 │   ├── tests/ ...................... the product suite (README, v67/README)
 │   ├── tools/ ...................... pilot harness, reconstruction, validators
 │   ├── v68/ ........................ frozen notional mission fixtures
-│   ├── docs/, research/ ............ Curunír design docs and campaign reports (untracked, historical)
-│   ├── missions/ ................... the workbench demo mission
-│   └── .venv/ ...................... the one virtualenv, shared by all three planes
+│   ├── docs/, research/ ............ design docs and campaign reports (untracked, historical)
+│   ├── missions/ ................... the workbench demo mission (untracked)
+│   └── .venv/ ...................... the virtualenv (untracked)
 │
-├── kernel/ ......................... KERNEL GOLD
-│   ├── README.md ................... the pin, how to verify and restore, the ARGUS demo kit
-│   ├── argus/ ...................... the hash-pinned ARGUS kernel — DO NOT EDIT
-│   ├── argus_kernel_pinned_4c173df7.tar.gz  the only backup of that tree
-│   ├── schema.sql, docker-compose.yml, .env.example  the Postgres spine the kernel writes to
-│   ├── review_app/, demo_corpus/, exports/  the ARGUS demo kit
-│   ├── content_store/, offline_source_inbox/, review_inbox/  ingestion and review intake
-│   ├── docs/ ....................... ARGUS-era design and findings (untracked)
-│   └── tests/ ...................... the ARGUS research-line suite (README)
+├── kernel/ ......................... KERNEL GOLD — the external dependency
+│   ├── README.md ................... the pin, how to verify and restore
+│   ├── MANIFEST.md
+│   ├── argus/ ...................... the hash-pinned ARGUS kernel — untracked, DO NOT EDIT
+│   ├── argus_kernel_pinned_4c173df7.tar.gz  the backup of that tree (untracked)
+│   └── schema.sql .................. hash-checked by tests/test_operational_protection.py (untracked)
 │
-├── capsules/ ....................... NEURAL EXTRACTOR + CODEC CAPSULES
-│   ├── README.md
-│   ├── argus_neural/ ............... the universal neural extractor line
-│   ├── argus_capsules/ ............. the codec / story-capsule line
-│   ├── artifacts/ .................. trained checkpoints and campaign outputs (README)
-│   ├── argus_tiny256_story_capsule_v0_20260628_1525.tar.gz, TINY256_STORY_CAPSULE_V0_FROZEN.txt
-│   └── tests/ ...................... the capsule and neural suite (README)
-│
-├── curunir_v68_runs/ ............... human pilot evidence (untracked, single copy, see its README)
-├── 02_CONTRACT/ .................... schema contracts (netwatch)
-└── .worktrees/ ..................... netwatch federation worktrees — untouched
+└── curunir_v68_runs/ ............... human pilot evidence (untracked, single copy, see its README)
 ```
 
 ## Reading orders
@@ -63,7 +53,8 @@ Saulot/
 `curunir/CURUNIR_RECONSTRUCTION.md` → `kernel/README.md` → `curunir/tools/README.md`
 
 **"What happened historically?"**
-`curunir/CURUNIR_DOCUMENTS.md` → `capsules/artifacts/README.md` → git tags `archive/*`
+`curunir/CURUNIR_DOCUMENTS.md` → `curunir/CURUNIR_COMMIT_MAP_SAULOT.txt` →
+git tag `archive/curunir-campaign-tree-v5x` → the Saulot repository
 
 ## Conventions
 
