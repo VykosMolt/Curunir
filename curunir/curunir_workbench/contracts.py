@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from curunir_operational.access import Marking
 from curunir_operational.canonical import require_aware
 from curunir_operational.contracts import Record, _member
+from curunir_operational.references import DynamicRef, Label, Ref, Refs
 
 ANNOTATION_KINDS = ("NOTE", "QUESTION", "DISSENT", "CORRECTION_SUGGESTION")
 ANNOTATION_STATUSES = ("OPEN", "RESOLVED", "WITHDRAWN")
@@ -59,16 +60,17 @@ class AnnotationRecord(Record):
     the whole discussion stays attached to the target.
     """
     RECORD_TYPE = "workbench_annotation"
+    ID_FIELD = "annotation_id"
     annotation_id: str
     target_kind: str
-    target_id: str
+    target_id: DynamicRef("target_kind")
     author: str
     kind: str
     text: str
     status: str
     resolution_note: str
-    reply_to: str          # parent annotation_id, or ""
-    anchor_ref: str        # a finer anchor such as a sentence id, or ""
+    reply_to: Ref("workbench_annotation")          # parent annotation_id, or ""
+    anchor_ref: Ref("*")        # a finer anchor such as a sentence id, or ""
     recorded_time: str
     marking: Marking
     version: int = 1  # a stale writer raises rather than overwriting
@@ -98,11 +100,11 @@ class ReportSentence(Record):
     checks that claim against the sources behind its basis.
     """
     RECORD_TYPE = "report_sentence"
-    sentence_id: str
+    sentence_id: Ref("workbench_report")
     text: str
     status: str
-    basis_refs: tuple[str, ...] = ()        # claim, observation, forecast or anchor ids
-    assumption_ids: tuple[str, ...] = ()
+    basis_refs: Refs("*") = ()        # claim, observation, forecast or anchor ids
+    assumption_ids: Refs("analytic_assumption") = ()
     inference_note: str = ""
     unresolved_reason: str = ""
     temporal_scope: str = ""                # "", CURRENT or HISTORICAL
@@ -122,11 +124,11 @@ class ReportSentence(Record):
 @dataclass(frozen=True)
 class ReportSection(Record):
     RECORD_TYPE = "report_section"
-    section_id: str
+    section_id: Ref("workbench_report")
     kind: str
     title: str
     sentences: tuple[ReportSentence, ...] = ()
-    option_ids: tuple[str, ...] = ()   # response_option ids, for a decision section
+    option_ids: Refs("response_option") = ()   # response_option ids, for a decision section
 
     def __post_init__(self):
         if not self.kind or not self.kind.replace("_", "").isalnum() or self.kind != self.kind.lower():
@@ -144,6 +146,7 @@ class ReportRecord(Record):
     against, so a reviewer can see that it has moved on.
     """
     RECORD_TYPE = "workbench_report"
+    ID_FIELD = "report_id"
     report_id: str
     version: int
     title: str
@@ -181,16 +184,17 @@ class ReportDisposition(Record):
     mission state at the time, so what was approved can be checked again later.
     """
     RECORD_TYPE = "workbench_report_disposition"
+    ID_FIELD = "disposition_id"
     disposition_id: str
-    report_id: str
+    report_id: Ref("workbench_report")
     report_version: int
     disposition: str
-    actor_id: str
+    actor_id: Label(str)
     actor_kind: str
     note: str
     validation_sha256: str
     state_token: str
-    dissent_annotation_ids: tuple[str, ...]
+    dissent_annotation_ids: Refs("workbench_annotation")
     recorded_time: str
     marking: Marking
 
@@ -214,6 +218,7 @@ class SavedViewRecord(Record):
     a mission's working views survive a restart and stay attributable.
     """
     RECORD_TYPE = "workbench_saved_view"
+    ID_FIELD = "view_id"
     view_id: str
     title: str
     author: str

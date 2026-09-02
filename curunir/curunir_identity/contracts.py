@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from curunir_operational.access import ACTOR_KINDS, Marking
 from curunir_operational.canonical import require_aware
 from curunir_operational.contracts import Record, _member
+from curunir_operational.references import DynamicRef, Label, Ref
 
 
 KEY_STATUSES = ("ACTIVE", "REVOKED", "RETIRED")
@@ -21,15 +22,16 @@ class ActorKeyRecord(Record):
     """One version of an actor's public key."""
 
     RECORD_TYPE = "actor_key"
+    ID_FIELD = "key_id"
     key_id: str
     version: int
-    actor_id: str
+    actor_id: Label(str)
     actor_kind: str
     public_key: str
     status: str
     enrolled_time: str
     status_time: str
-    supersedes_key_id: str
+    supersedes_key_id: Ref("actor_key")
     reason: str
     recorded_time: str
     marking: Marking
@@ -57,15 +59,16 @@ class SignedActionRecord(Record):
     """A signature bound to one actor, action, target and mission."""
 
     RECORD_TYPE = "signed_action"
+    ID_FIELD = "action_id"
     action_id: str
-    actor_id: str
+    actor_id: Label(str)
     actor_kind: str
-    key_id: str
+    key_id: Ref("actor_key")
     action_type: str
     target_kind: str
-    target_id: str
+    target_id: DynamicRef("target_kind")
     target_version_token: str
-    mission_id: str
+    mission_id: Label(str)
     nonce: str
     timestamp: str
     payload_digest: str

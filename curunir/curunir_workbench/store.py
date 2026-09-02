@@ -9,6 +9,8 @@ from __future__ import annotations
 from curunir_analytic.store import AnalyticStore
 from curunir_identity.contracts import IDENTITY_EVENT_TYPES
 
+from . import contracts  # noqa: F401  registers this package's record types
+
 WORKBENCH_EVENT_TYPES = {
     "WORKBENCH_ANNOTATION_RECORDED": "workbench_annotation",
     "WORKBENCH_REPORT_RECORDED": "workbench_report",

@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from curunir_operational.access import Marking
 from curunir_operational.canonical import require_aware, require_aware_or_none, require_sha256
 from curunir_operational.contracts import Record, TIME_PRECISIONS, _member
+from curunir_operational.references import DynamicRef, Label, Ref, RefPairs, Refs
 
 ANCHOR_KINDS = ("TEXT_SPAN", "FIELD", "RECORD", "DOCUMENT")
 REPRESENTATIONS = ("ORIGINAL", "TRANSLATED")
@@ -55,8 +56,8 @@ class EvidenceAnchor(Record):
     anchors. ``mapping_status`` says how that maps back to the original bytes.
     """
     RECORD_TYPE = "evidence_anchor"
-    manifestation_id: str
-    source_id: str
+    manifestation_id: Ref("fabric_manifestation")
+    source_id: Ref("source")
     content_sha256: str
     kind: str
     normalized_sha256: str = ""
@@ -66,7 +67,7 @@ class EvidenceAnchor(Record):
     exact_value: str = ""
     mapping_status: str = "UNSPECIFIED"
     representation: str = "ORIGINAL"
-    translation_id: str = ""
+    translation_id: Label(str) = ""
 
     def __post_init__(self):
         _member(self.kind, ANCHOR_KINDS, "anchor kind")
@@ -93,11 +94,12 @@ class NormalizedDocumentRecord(Record):
     hashes to the manifestation and parser so replay can recover them.
     """
     RECORD_TYPE = "semantic_document"
+    ID_FIELD = "document_id"
     document_id: str
-    manifestation_id: str
-    source_id: str
-    retrieval_id: str
-    native_id: str
+    manifestation_id: Ref("fabric_manifestation")
+    source_id: Ref("source")
+    retrieval_id: Label(str)
+    native_id: Label(str)
     content_sha256: str
     normalized_sha256: str
     fields_sha256: str
@@ -112,7 +114,7 @@ class NormalizedDocumentRecord(Record):
     region_count: int
     field_count: int
     regions: tuple[tuple[str, int, int], ...]  # capped number of structural regions
-    structural: tuple[tuple[str, str], ...]
+    structural: Label(tuple[tuple[str, str], ...])  # (path, value)
     parser: str
     parser_version: str
     warnings: tuple[str, ...]
@@ -139,15 +141,16 @@ class SemanticObservation(Record):
     observations also carry the inference record that produced them.
     """
     RECORD_TYPE = "semantic_observation"
+    ID_FIELD = "observation_id"
     observation_id: str
-    document_id: str
-    manifestation_id: str
-    source_id: str
+    document_id: Ref("semantic_document")
+    manifestation_id: Ref("fabric_manifestation")
+    source_id: Ref("source")
     observation_type: str
-    subject_ref: str      # as the source names it: "LEI:...", "QID:...", a url, a name
+    subject_ref: Ref("*")      # as the source names it: "LEI:...", "QID:...", a url, a name
     attribute: str        # attribute name, or the predicate of a relation
     value: str
-    object_ref: str       # the other participant, for a relation or event
+    object_ref: Ref("*")       # the other participant, for a relation or event
     valid_from: str | None
     valid_to: str | None
     source_time: str | None
@@ -156,9 +159,9 @@ class SemanticObservation(Record):
     representation: str
     anchors: tuple[EvidenceAnchor, ...]
     producer_kind: str
-    producer_id: str
+    producer_id: Label(str)
     producer_version: str
-    inference_id: str
+    inference_id: Ref("inference")
     recorded_time: str
     marking: Marking
 
@@ -189,23 +192,24 @@ class SemanticClaim(Record):
     every prior version stays in the log.
     """
     RECORD_TYPE = "semantic_claim"
+    ID_FIELD = "claim_id"
     claim_id: str
     version: int
     statement: str
-    subject_ref: str
-    subject_object_id: str
+    subject_ref: Ref("*")
+    subject_object_id: Ref("object_version")
     predicate: str
     object_or_value: str
-    object_object_id: str
+    object_object_id: Ref("object_version")
     valid_from: str | None
     valid_to: str | None
     time_precision: str
     polarity: str  # AFFIRMED or NEGATED
-    observation_ids: tuple[str, ...]
-    dependence_group_ids: tuple[str, ...]
+    observation_ids: Refs("semantic_observation")
+    dependence_group_ids: Label(tuple[str, ...])
     independent_basis_count: int
     basis_note: str
-    world_refs: tuple[str, ...]  # the world-model versions this claim produced
+    world_refs: Refs("*")  # the world-model versions this claim produced
     epistemic_state: str
     review_state: str
     recorded_time: str
@@ -232,13 +236,14 @@ class SemanticClaim(Record):
 class ClaimStateRecord(Record):
     """A claim's standing; the latest wins on replay and the history stays."""
     RECORD_TYPE = "semantic_claim_state"
+    ID_FIELD = "state_id"
     state_id: str
-    claim_id: str
+    claim_id: Ref("semantic_claim")
     state: str
     reason: str
-    caused_by: str  # the change, notice or review item behind this state
-    superseded_by: str
-    actor_id: str
+    caused_by: Ref("*")  # the change, notice or review item behind this state
+    superseded_by: Ref("*")
+    actor_id: Label(str)
     actor_kind: str
     recorded_time: str
     marking: Marking
@@ -254,22 +259,23 @@ class ClaimStateRecord(Record):
 class SemanticChangeRecord(Record):
     """What changed in meaning between two manifestations of one target."""
     RECORD_TYPE = "semantic_change"
+    ID_FIELD = "change_id"
     change_id: str
-    source_id: str
-    prior_manifestation_id: str
-    current_manifestation_id: str
-    watch_id: str
-    fabric_change_id: str
+    source_id: Ref("source")
+    prior_manifestation_id: Ref("fabric_manifestation")
+    current_manifestation_id: Ref("fabric_manifestation")
+    watch_id: Ref("fabric_watch")
+    fabric_change_id: Ref("fabric_change")
     change_class: str
     detail: str
-    subject_ref: str
+    subject_ref: Ref("*")
     attribute: str
     prior_value: str
     current_value: str
-    prior_observation_id: str
-    current_observation_id: str
-    affected_object_ids: tuple[str, ...]
-    affected_claim_ids: tuple[str, ...]
+    prior_observation_id: Ref("semantic_observation")
+    current_observation_id: Ref("semantic_observation")
+    affected_object_ids: Refs("object_version")
+    affected_claim_ids: Refs("semantic_claim")
     recorded_time: str
     marking: Marking
 
@@ -293,18 +299,19 @@ class HypothesisRecord(Record):
     UNRESOLVED.
     """
     RECORD_TYPE = "hypothesis"
+    ID_FIELD = "hypothesis_id"
     hypothesis_id: str
-    case_id: str
+    case_id: Label(str)
     statement: str
     status: str
     assumptions: tuple[str, ...]
     unknowns: tuple[str, ...]
-    supporting_claim_ids: tuple[str, ...]
-    contradicting_claim_ids: tuple[str, ...]
-    unresolved_claim_ids: tuple[str, ...]
+    supporting_claim_ids: Refs("semantic_claim")
+    contradicting_claim_ids: Refs("semantic_claim")
+    unresolved_claim_ids: Refs("semantic_claim")
     independent_evidence_count: int
     source_dependence_summary: str
-    discriminator_ids: tuple[str, ...]
+    discriminator_ids: Refs("discriminator")
     analyst_or_provider: str
     review_state: str
     history: tuple[str, ...]
@@ -327,12 +334,13 @@ class HypothesisRecord(Record):
 class DiscriminatingObservation(Record):
     """The observation that would best tell the competing hypotheses apart."""
     RECORD_TYPE = "discriminator"
+    ID_FIELD = "discriminator_id"
     discriminator_id: str
     question: str
-    hypothesis_ids: tuple[str, ...]
-    claim_ids: tuple[str, ...]
+    hypothesis_ids: Refs("hypothesis")
+    claim_ids: Refs("semantic_claim")
     desired_observation_type: str
-    desired_subject_ref: str
+    desired_subject_ref: Ref("*")
     desired_attribute: str
     source_family_hints: tuple[str, ...]
     independence_required: bool
@@ -340,13 +348,13 @@ class DiscriminatingObservation(Record):
     # collected to answer it is checked against this snapshot, so it cannot
     # disqualify itself by joining the basis first.
     basis_groups_at_pose: tuple[str, ...]
-    requirement_id: str
+    requirement_id: Ref("information_requirement")
     status: str
     recorded_time: str
     marking: Marking
     # What was uncertain enough to raise this question. Referring to it by id
     # lets this record inherit its marking without quoting restricted text.
-    source_refs: tuple[tuple[str, str], ...] = ()
+    source_refs: RefPairs() = ()
     version: int = 1  # a stale writer raises rather than shadowing an update
 
     def __post_init__(self):
@@ -365,10 +373,11 @@ class DiscriminatingObservation(Record):
 class CollectionRoute(Record):
     """One candidate collection action, ranked and explained."""
     RECORD_TYPE = "collection_route"
+    ID_FIELD = "route_id"
     route_id: str
-    requirement_id: str
-    discriminator_id: str
-    source_id: str
+    requirement_id: Ref("information_requirement")
+    discriminator_id: Ref("discriminator")
+    source_id: Ref("source")
     operation: str
     query_value: str
     automatable: bool
@@ -378,8 +387,8 @@ class CollectionRoute(Record):
     rank: int
     explanation: str
     status: str
-    execution_id: str
-    task_id: str
+    execution_id: Ref("fabric_execution")
+    task_id: Ref("analyst_task")
     recorded_time: str
     marking: Marking
     version: int = 1  # a stale writer raises rather than shadowing an update
@@ -400,12 +409,13 @@ class CollectionRoute(Record):
 class ReviewItem(Record):
     """An entry in the human review queue; the latest state wins."""
     RECORD_TYPE = "review_item"
+    ID_FIELD = "item_id"
     item_id: str
     kind: str
     subject_kind: str
-    subject_id: str
+    subject_id: DynamicRef("subject_kind")
     detail: str
-    evidence_refs: tuple[str, ...]
+    evidence_refs: Refs("*")
     status: str
     resolution_note: str
     recorded_time: str

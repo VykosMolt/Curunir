@@ -7,6 +7,8 @@ from __future__ import annotations
 
 from curunir_fabric.store import FabricStore
 
+from . import contracts  # noqa: F401  registers this package's record types
+
 SEMANTIC_EVENT_TYPES = {
     "SEMANTIC_DOCUMENT_RECORDED": "semantic_document",
     "SEMANTIC_OBSERVATION_RECORDED": "semantic_observation",

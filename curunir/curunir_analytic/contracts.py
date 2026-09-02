@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from curunir_operational.access import Marking
 from curunir_operational.canonical import require_aware, require_aware_or_none
 from curunir_operational.contracts import Record, _member
+from curunir_operational.references import DynamicRef, Label, Ref, RefInPairs, RefPairs, Refs
 
 # ---- shared vocabularies --------------------------------------------------
 
@@ -171,8 +172,8 @@ class BasisSummary(Record):
     are one family. ``basis.compute_basis`` is the one implementation.
     """
     RECORD_TYPE = "analytic_basis"
-    supporting_claim_ids: tuple[str, ...]
-    contradicting_claim_ids: tuple[str, ...]
+    supporting_claim_ids: Refs("semantic_claim")
+    contradicting_claim_ids: Refs("semantic_claim")
     observation_count: int
     manifestation_count: int
     source_count: int
@@ -185,7 +186,7 @@ class BasisSummary(Record):
     # what the sources themselves stated as the valid interval
     stated_valid_from: str = ""
     stated_valid_to: str = ""
-    unresolved_claim_ids: tuple[str, ...] = ()  # ids resolving to no known claim
+    unresolved_claim_ids: Refs("semantic_claim") = ()  # ids resolving to no known claim
     coverage_notes: tuple[str, ...] = ()
     note: str = ""
 
@@ -217,13 +218,14 @@ class AnalyticalTransition(Record):
     """One typed state change of one analytical object; the sequence is its
     history."""
     RECORD_TYPE = "analytic_transition"
+    ID_FIELD = "transition_id"
     transition_id: str
     subject_kind: str
-    subject_id: str
+    subject_id: DynamicRef("subject_kind")
     transition_type: str
     detail: str
-    caused_by: str  # the change, claim, observation, act or proposal behind it
-    evidence_refs: tuple[str, ...]
+    caused_by: Ref("*")  # the change, claim, observation, act or proposal behind it
+    evidence_refs: Refs("*")
     from_status: str
     to_status: str
     recorded_time: str
@@ -249,23 +251,24 @@ class ThemeRecord(Record):
     and a theme without a supporting claim cannot be constructed.
     """
     RECORD_TYPE = "analytic_theme"
+    ID_FIELD = "theme_id"
     theme_id: str
     version: int
     title: str
     description: str
     status: str
     authority: str
-    parent_theme_id: str
-    lineage: tuple[tuple[str, str], ...]  # (lineage kind, theme id)
+    parent_theme_id: Ref("analytic_theme")
+    lineage: RefInPairs("analytic_theme", 1)  # (lineage kind, theme id)
     basis: BasisSummary
-    entity_ids: tuple[str, ...]
-    event_ids: tuple[str, ...]
-    relation_ids: tuple[str, ...]
+    entity_ids: Refs("object_version")
+    event_ids: Refs("object_version")
+    relation_ids: Refs("relationship_version")
     valid_from: str | None
     valid_to: str | None
     provenance_kind: str
-    inference_id: str
-    proposal_id: str
+    inference_id: Ref("inference")
+    proposal_id: Ref("*")
     change_reason: str
     history: tuple[str, ...]
     recorded_time: str
@@ -306,6 +309,7 @@ class NarrativeRecord(Record):
     Origin is never proven; the strongest status is EARLIEST_OBSERVED_KNOWN.
     """
     RECORD_TYPE = "analytic_narrative"
+    ID_FIELD = "narrative_id"
     narrative_id: str
     version: int
     statement: str             # the proposition as the evidence carries it
@@ -313,15 +317,15 @@ class NarrativeRecord(Record):
     status: str
     authority: str
     origin_status: str
-    earliest_manifestation_id: str
+    earliest_manifestation_id: Ref("fabric_manifestation")
     earliest_time: str
-    variant_ids: tuple[str, ...]
-    counter_narrative_ids: tuple[str, ...]
+    variant_ids: Refs("narrative_variant")
+    counter_narrative_ids: Refs("analytic_narrative")
     basis: BasisSummary
-    entity_ids: tuple[str, ...]
+    entity_ids: Refs("object_version")
     provenance_kind: str
-    inference_id: str
-    proposal_id: str
+    inference_id: Ref("inference")
+    proposal_id: Ref("*")
     change_reason: str
     history: tuple[str, ...]
     recorded_time: str
@@ -365,22 +369,23 @@ class NarrativeVariant(Record):
     judgment and must say whose.
     """
     RECORD_TYPE = "narrative_variant"
+    ID_FIELD = "variant_id"
     variant_id: str
-    narrative_id: str
+    narrative_id: Ref("analytic_narrative")
     relation: str
     statement: str
-    claim_ids: tuple[str, ...]
-    observation_ids: tuple[str, ...]
-    manifestation_ids: tuple[str, ...]
+    claim_ids: Refs("semantic_claim")
+    observation_ids: Refs("semantic_observation")
+    manifestation_ids: Refs("fabric_manifestation")
     language: str
     authority: str
     mechanism: str
     provenance_kind: str
-    inference_id: str
+    inference_id: Ref("inference")
     recorded_time: str
     marking: Marking
     version: int = 1
-    proposal_id: str = ""  # the accepted candidate this consumed
+    proposal_id: Ref("*") = ""  # the accepted candidate this consumed
 
     def __post_init__(self):
         _member(self.relation, VARIANT_RELATIONS, "variant relation")
@@ -416,22 +421,23 @@ class PropagationEdge(Record):
     mechanism; SAME_ORIGIN_FAMILY must actually be one family.
     """
     RECORD_TYPE = "propagation_edge"
+    ID_FIELD = "edge_id"
     edge_id: str
-    narrative_id: str
-    from_manifestation_id: str
-    to_manifestation_id: str
+    narrative_id: Ref("analytic_narrative")
+    from_manifestation_id: Ref("fabric_manifestation")
+    to_manifestation_id: Ref("fabric_manifestation")
     relation: str
     mechanism: str
     from_family: str
     to_family: str
     authority: str
-    basis_observation_ids: tuple[str, ...]
+    basis_observation_ids: Refs("semantic_observation")
     provenance_kind: str
-    inference_id: str
+    inference_id: Ref("inference")
     recorded_time: str
     marking: Marking
     version: int = 1
-    proposal_id: str = ""  # the accepted candidate this consumed
+    proposal_id: Ref("*") = ""  # the accepted candidate this consumed
 
     def __post_init__(self):
         _member(self.relation, PROPAGATION_RELATIONS, "propagation relation")
@@ -469,13 +475,13 @@ class StakeholderPosition(Record):
     public position can carry only the stance the source itself stated.
     """
     RECORD_TYPE = "stakeholder_position"
-    position_id: str
+    position_id: Label(str)
     kind: str
     statement: str
     stance: str
     authority: str
-    claim_ids: tuple[str, ...]
-    relationship_ids: tuple[str, ...]
+    claim_ids: Refs("semantic_claim")
+    relationship_ids: Refs("relationship_version")
     valid_from: str | None
     valid_to: str | None
     superseded: bool
@@ -512,22 +518,23 @@ class StakeholderAssessment(Record):
     possibly-distinct entities.
     """
     RECORD_TYPE = "stakeholder_assessment"
+    ID_FIELD = "assessment_id"
     assessment_id: str
     version: int
-    entity_object_id: str
+    entity_object_id: Ref("object_version")
     entity_label: str
     context_kind: str
-    context_id: str
+    context_id: DynamicRef("context_kind")
     role_in_context: str
     positions: tuple[StakeholderPosition, ...]
-    influence_ids: tuple[str, ...]
+    influence_ids: Refs("influence_assertion")
     identity_caveats: tuple[str, ...]  # open identity-ambiguity review items
     basis: BasisSummary
     status: str
     authority: str
     provenance_kind: str
-    inference_id: str
-    proposal_id: str
+    inference_id: Ref("inference")
+    proposal_id: Ref("*")
     change_reason: str
     history: tuple[str, ...]
     recorded_time: str
@@ -562,21 +569,22 @@ class InfluenceAssertion(Record):
     mechanism, and association alone is INFLUENCE_UNRESOLVED.
     """
     RECORD_TYPE = "influence_assertion"
+    ID_FIELD = "influence_id"
     influence_id: str
     version: int
-    source_object_id: str
-    target_object_id: str
+    source_object_id: Ref("object_version")
+    target_object_id: Ref("object_version")
     kind: str
     mechanism: str
     authority: str
-    claim_ids: tuple[str, ...]
-    relationship_ids: tuple[str, ...]
+    claim_ids: Refs("semantic_claim")
+    relationship_ids: Refs("relationship_version")
     valid_from: str | None
     valid_to: str | None
     status: str
     provenance_kind: str
-    inference_id: str
-    proposal_id: str
+    inference_id: Ref("inference")
+    proposal_id: Ref("*")
     change_reason: str
     history: tuple[str, ...]
     recorded_time: str
@@ -618,6 +626,7 @@ class MissionObjective(Record):
     """What a mission is trying to maintain, track or understand, with its
     dependencies and assumptions explicit so impact propagation can land."""
     RECORD_TYPE = "mission_objective"
+    ID_FIELD = "objective_id"
     objective_id: str
     version: int
     mission_context: str
@@ -625,8 +634,8 @@ class MissionObjective(Record):
     status: str
     priority: str
     time_horizon: str
-    depends_on: tuple[tuple[str, str], ...]  # (kind, id)
-    assumption_ids: tuple[str, ...]
+    depends_on: RefPairs()  # (kind, id)
+    assumption_ids: Refs("analytic_assumption")
     change_reason: str
     history: tuple[str, ...]
     recorded_time: str
@@ -659,14 +668,15 @@ class AssumptionRecord(Record):
     depended on it can then be found and marked.
     """
     RECORD_TYPE = "analytic_assumption"
+    ID_FIELD = "assumption_id"
     assumption_id: str
     version: int
     statement: str
     status: str
-    supporting_claim_ids: tuple[str, ...]
-    contradicting_claim_ids: tuple[str, ...]
-    objective_ids: tuple[str, ...]
-    caused_by: str
+    supporting_claim_ids: Refs("semantic_claim")
+    contradicting_claim_ids: Refs("semantic_claim")
+    objective_ids: Refs("mission_objective")
+    caused_by: Ref("*")
     change_reason: str
     history: tuple[str, ...]
     recorded_time: str
@@ -693,17 +703,18 @@ class ImpactEdge(Record):
     an inference edge exposes its reasoning and cannot claim observation.
     """
     RECORD_TYPE = "impact_edge"
+    ID_FIELD = "edge_id"
     edge_id: str
     from_kind: str
-    from_id: str
+    from_id: DynamicRef("from_kind")
     to_kind: str
-    to_id: str
+    to_id: DynamicRef("to_kind")
     edge_kind: str
     effect_order: str
     authority: str
     note: str
-    basis_ids: tuple[str, ...]      # claim, relationship or activity ids
-    assumption_ids: tuple[str, ...]
+    basis_ids: Refs("*")      # claim, relationship or activity ids
+    assumption_ids: Refs("analytic_assumption")
 
     def __post_init__(self):
         _member(self.edge_kind, IMPACT_EDGE_KINDS, "impact edge kind")
@@ -738,18 +749,19 @@ class ImpactPath(Record):
     and second-order effects stay distinguishable; assumptions are explicit.
     """
     RECORD_TYPE = "impact_path"
+    ID_FIELD = "path_id"
     path_id: str
     version: int
-    objective_id: str
+    objective_id: Ref("mission_objective")
     summary: str
     edges: tuple[ImpactEdge, ...]
     status: str
     path_authority: str        # must equal the weakest edge authority
     uncertainty_note: str
-    assumption_ids: tuple[str, ...]
+    assumption_ids: Refs("analytic_assumption")
     provenance_kind: str
-    inference_id: str
-    proposal_id: str
+    inference_id: Ref("inference")
+    proposal_id: Ref("*")
     change_reason: str
     history: tuple[str, ...]
     recorded_time: str
@@ -793,24 +805,25 @@ class ResponseOption(Record):
     """A candidate response to an impact path; only a recorded human act can
     move it to ACCEPTED."""
     RECORD_TYPE = "response_option"
+    ID_FIELD = "option_id"
     option_id: str
     version: int
-    objective_id: str
-    path_id: str
+    objective_id: Ref("mission_objective")
+    path_id: Ref("impact_path")
     description: str
     prerequisites: tuple[str, ...]
     tradeoffs: tuple[str, ...]
-    claim_ids: tuple[str, ...]
+    claim_ids: Refs("semantic_claim")
     uncertainty_note: str
     status: str
     human_actor: str
     provenance_kind: str
-    inference_id: str
+    inference_id: Ref("inference")
     change_reason: str
     history: tuple[str, ...]
     recorded_time: str
     marking: Marking
-    proposal_id: str = ""  # the accepted candidate this consumed
+    proposal_id: Ref("*") = ""  # the accepted candidate this consumed
 
     def __post_init__(self):
         _member(self.status, RESPONSE_STATUSES, "response status")
@@ -833,18 +846,19 @@ class HistoricalEpisode(Record):
     """A historical episode as structure: actors, sequence, setting, mechanism,
     constraints and outcome, each carried by claims."""
     RECORD_TYPE = "historical_episode"
+    ID_FIELD = "episode_id"
     episode_id: str
     version: int
     title: str
     summary: str
-    actor_object_ids: tuple[str, ...]
-    event_ids: tuple[str, ...]          # ordered activity ids
+    actor_object_ids: Refs("object_version")
+    event_ids: Refs("*")  # the events of the episode, whichever family recorded them
     institutional_setting: str
     mechanism: str
     constraints: tuple[str, ...]
     outcome: str
-    outcome_claim_ids: tuple[str, ...]
-    claim_ids: tuple[str, ...]          # the evidence behind the episode
+    outcome_claim_ids: Refs("semantic_claim")
+    claim_ids: Refs("semantic_claim")          # the evidence behind the episode
     valid_from: str | None
     valid_to: str | None
     change_reason: str
@@ -876,7 +890,7 @@ class AnalogueDimension(Record):
     RECORD_TYPE = "analogue_dimension"
     dimension: str
     detail: str
-    basis_ids: tuple[str, ...]
+    basis_ids: Refs("*")
 
     def __post_init__(self):
         _member(self.dimension, ANALOGUE_DIMENSIONS, "analogue dimension")
@@ -892,11 +906,12 @@ class HistoricalAnalogue(Record):
     no forecast field: similar structure never becomes expected outcome.
     """
     RECORD_TYPE = "historical_analogue"
+    ID_FIELD = "analogue_id"
     analogue_id: str
     version: int
     query_kind: str  # the situation under analysis: theme, path or hypothesis
-    query_id: str
-    episode_id: str
+    query_id: DynamicRef("query_kind")
+    episode_id: Ref("historical_episode")
     matched: tuple[AnalogueDimension, ...]
     mismatched: tuple[AnalogueDimension, ...]
     transfer_risks: tuple[str, ...]
@@ -904,12 +919,12 @@ class HistoricalAnalogue(Record):
     authority: str
     status: str
     provenance_kind: str
-    inference_id: str
+    inference_id: Ref("inference")
     change_reason: str
     history: tuple[str, ...]
     recorded_time: str
     marking: Marking
-    proposal_id: str = ""  # the accepted candidate this consumed
+    proposal_id: Ref("*") = ""  # the accepted candidate this consumed
 
     def __post_init__(self):
         _member(self.status, ANALOGUE_STATUSES, "analogue status")
@@ -1002,15 +1017,15 @@ class ResolutionRule(Record):
     kind: str
     criteria: str  # the resolution criterion, stated for a human
     # CLAIM_PREDICATE: the claim whose value settles the question
-    claim_subject_ref: str = ""
+    claim_subject_ref: Ref("*") = ""
     claim_attribute: str = ""
     expected_value: str = ""
     # EVENT_OCCURRED: an activity of this type on this subject settles TRUE
     event_activity_type: str = ""
-    event_subject_ref: str = ""
+    event_subject_ref: Ref("*") = ""
     # coverage demanded before an absence may resolve FALSE
     absence_min_successful_sources: int = 1
-    absence_required_source_ids: tuple[str, ...] = ()
+    absence_required_source_ids: Refs("source") = ()
     resolver_role: str = "ANALYST"
 
     def __post_init__(self):
@@ -1051,29 +1066,30 @@ class ForecastRecord(Record):
     forecast carries its resolution evidence and its resolver.
     """
     RECORD_TYPE = "analytic_forecast"
+    ID_FIELD = "forecast_id"
     forecast_id: str
     version: int
     question: str            # the exact proposition being forecast
     outcome_semantics: str   # what counts as TRUE
-    proposition_refs: tuple[tuple[str, str], ...]  # (kind, id)
+    proposition_refs: RefPairs()  # (kind, id)
     horizon_time: str
     resolution: ResolutionRule
     probability: float
     probability_basis: str   # the rationale for this number
     basis: BasisSummary      # the claims bearing on the question
-    assumption_ids: tuple[str, ...]
-    indicator_ids: tuple[str, ...]
+    assumption_ids: Refs("analytic_assumption")
+    indicator_ids: Label(tuple[str, ...])
     author: str              # analyst or model id; calibration groups on it
     domain: str              # calibration grouping, e.g. "corporate-registry"
     status: str
     authority: str
     provenance_kind: str
-    inference_id: str
-    proposal_id: str
+    inference_id: Ref("inference")
+    proposal_id: Ref("*")
     outcome: str             # "" until resolved, then TRUE/FALSE/VOID
     resolved_time: str       # "" until resolved
-    resolution_evidence_refs: tuple[str, ...]
-    resolver_id: str
+    resolution_evidence_refs: Refs("*")
+    resolver_id: Label(str)
     resolver_kind: str
     change_reason: str
     history: tuple[str, ...]
@@ -1162,28 +1178,29 @@ class IndicatorRecord(Record):
     the sources that would show it were never searched.
     """
     RECORD_TYPE = "forecast_indicator"
+    ID_FIELD = "indicator_id"
     indicator_id: str
     version: int
-    forecast_ids: tuple[str, ...]
+    forecast_ids: Refs("analytic_forecast")
     description: str
     kind: str
     direction: str
     desired_observation_type: str
-    desired_subject_ref: str
+    desired_subject_ref: Ref("*")
     desired_attribute: str
     expected_value: str      # "" matches any new or changed observation
     effect: IndicatorEffect
     # ABSENCE only; empty for PRESENCE
     deadline: str
     coverage_min_successful_sources: int
-    coverage_required_source_ids: tuple[str, ...]
+    coverage_required_source_ids: Refs("source")
     status: str
     armed_time: str
     fired_time: str
-    fired_evidence_refs: tuple[str, ...]
+    fired_evidence_refs: Refs("*")
     provenance_kind: str
-    inference_id: str
-    proposal_id: str
+    inference_id: Ref("inference")
+    proposal_id: Ref("*")
     change_reason: str
     history: tuple[str, ...]
     recorded_time: str
@@ -1256,19 +1273,20 @@ class WarningRecord(Record):
     every component carries its basis.
     """
     RECORD_TYPE = "strategic_warning"
+    ID_FIELD = "warning_id"
     warning_id: str
     version: int
     mission_context: str
-    objective_id: str
-    forecast_id: str
-    impact_path_ids: tuple[str, ...]
+    objective_id: Ref("mission_objective")
+    forecast_id: Ref("analytic_forecast")
+    impact_path_ids: Refs("impact_path")
     probability_band: str
     consequence: str          # the threatened objective's priority
     time_pressure: str
     evidence_confidence: str
     tier: str
-    tier_rule_id: str         # the named rule that produced the tier
-    component_basis: tuple[tuple[str, str], ...]  # (component, why)
+    tier_rule_id: Label(str)         # the named rule that produced the tier
+    component_basis: Label(tuple[tuple[str, str], ...])  # (component, why)
     status: str
     change_reason: str
     history: tuple[str, ...]

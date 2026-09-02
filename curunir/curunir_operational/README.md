@@ -74,12 +74,12 @@ like `export`.
 | `sitrep` | evidence-bound situation reports (JSON/Markdown/plain text) |
 | `explain` | provenance/quality/history explanation traversal |
 | `sovereignty` | sovereignty manifest, open-export exit test, PACE bundle |
-| `security` | material-reference registry, reference closure, marking admission |
+| `references` | typed reference annotations for contract fields (`Ref`, `Refs`, `DynamicRef`, `Label`) |
+| `security` | reference policy read from the typed contracts, reference closure, marking admission |
 | `canonical` | strict canonical values: the single persisted byte contract |
 | `missions` | mission and objective records |
 | `geometry` | WGS84 geometry and deterministic distances |
 | `delta` | delta bundles: preflight, staged install, conflict semantics |
-| `partition_custody` | custody across store partitions |
 | `xml_safety` | bounded, hostile-input-safe XML handling |
 | `stress` | deterministic load and integrity stress runs |
 | `providers_eval` | provider comparison harness (no analytical provider wired yet) |

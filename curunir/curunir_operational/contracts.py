@@ -14,6 +14,7 @@ from typing import Any, Mapping
 from .access import ACTOR_KINDS, ROLE_RANK, Marking
 from .canonical import require_aware, require_aware_or_none, require_sha256, sha256
 from .geometry import Geometry
+from .references import DynamicRef, Label, OptionalRef, Ref, RefDicts, RefInPairs, Refs
 
 SOURCE_TYPES = ("SYSTEM", "SENSOR", "ORGANISATION", "REPORTER", "PUBLICATION", "SYNTHETIC_FIXTURE", "EVIDENCE_ADAPTER")
 SOURCE_STATUS = ("ACTIVE", "DEGRADED", "SUSPENDED", "RETIRED")
@@ -75,8 +76,32 @@ def _plain(value: Any) -> Any:
     return value
 
 
+RECORD_CLASSES: dict[str, type] = {}
+# Bumped on every registration change, so a policy derived from the registry
+# can tell it is stale.
+REGISTRY_GENERATION = [0]
+
+
+def unregister_record_class(record_type: str) -> None:
+    """Forget a record class (tests define throwaway ones)."""
+    if RECORD_CLASSES.pop(record_type, None) is not None:
+        REGISTRY_GENERATION[0] += 1
+
+
 class Record:
+    """Base of every stored record. Subclasses declare RECORD_TYPE and ID_FIELD."""
     RECORD_TYPE = ""
+    ID_FIELD = ""
+
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
+        record_type = cls.__dict__.get("RECORD_TYPE")
+        if record_type:
+            existing = RECORD_CLASSES.get(record_type)
+            if existing is not None and existing is not cls:
+                raise TypeError(f"record type {record_type!r} is already {existing.__qualname__}")
+            RECORD_CLASSES[record_type] = cls
+            REGISTRY_GENERATION[0] += 1
 
     def to_record(self) -> dict[str, Any]:
         data = {f.name: _plain(getattr(self, f.name)) for f in fields(self)}
@@ -87,10 +112,11 @@ class Record:
 @dataclass(frozen=True)
 class ExternalRef(Record):
     RECORD_TYPE = "external_ref"
+    ID_FIELD = "external_id"
     system: str
     external_id: str
     imported_version: str
-    ingestion_id: str
+    ingestion_id: Ref("ingestion")
     source_time: str | None = None
     sync_status: str = "UNKNOWN"
     # A registry id says two records are the same entity; a report or sighting
@@ -106,18 +132,19 @@ class ExternalRef(Record):
 class EvidenceRef(Record):
     """Evidentiary provenance carried over from ARGUS with nothing dropped."""
     RECORD_TYPE = "evidence_ref"
-    source_object_id: str
-    document_id: str
+    ID_FIELD = "assertion_id"
+    source_object_id: Ref("object_version")
+    document_id: Ref("semantic_document")
     content_sha256: str
     assertion_id: str
-    evidence_basis_id: str
+    evidence_basis_id: Ref("provenance_summary")
     identity_status: str
     authority_state: str
     independence_status: str
     claim_basis_status: str
     review_state: str
     mapping_status: str
-    dependence_group_id: str | None = None
+    dependence_group_id: Label(str | None) = None
     unresolved: tuple[str, ...] = ()
 
     def __post_init__(self):
@@ -127,10 +154,11 @@ class EvidenceRef(Record):
 @dataclass(frozen=True)
 class ProvenanceSummary(Record):
     RECORD_TYPE = "provenance_summary"
+    ID_FIELD = "evidence_basis_id"
     mode: str
-    source_ids: tuple[str, ...] = ()
-    ingestion_ids: tuple[str, ...] = ()
-    transformation_ids: tuple[str, ...] = ()
+    source_ids: Refs("source") = ()
+    ingestion_ids: Refs("ingestion") = ()
+    transformation_ids: Refs("transformation") = ()
     evidence: tuple[EvidenceRef, ...] = ()
 
     def __post_init__(self):
@@ -142,10 +170,11 @@ class ProvenanceSummary(Record):
 @dataclass(frozen=True)
 class SourceRecord(Record):
     RECORD_TYPE = "source"
+    ID_FIELD = "source_id"
     source_id: str
     source_type: str
     source_system: str
-    external_id: str
+    external_id: Label(str)
     operator: str
     authority: str
     reliability: dict[str, Any]
@@ -163,22 +192,23 @@ class SourceRecord(Record):
 @dataclass(frozen=True)
 class IngestionEvent(Record):
     RECORD_TYPE = "ingestion"
+    ID_FIELD = "ingestion_id"
     ingestion_id: str
-    connector_id: str
+    connector_id: Label(str)
     connector_version: str
-    source_id: str
+    source_id: Ref("source")
     source_time: str | None
     received_time: str
     content_sha256: str
-    schema_id: str
+    schema_id: Label(str)
     schema_version: str
     idempotency_key: str
     validation: str
     quarantined: bool
     quarantine_reasons: tuple[str, ...]
-    duplicate_of: str | None
+    duplicate_of: OptionalRef("*")
     late: bool
-    payload_ref: str | None
+    payload_ref: OptionalRef("*")
     marking: Marking
 
     def __post_init__(self):
@@ -193,13 +223,14 @@ class IngestionEvent(Record):
 @dataclass(frozen=True)
 class TransformationRecord(Record):
     RECORD_TYPE = "transformation"
+    ID_FIELD = "transformation_id"
     transformation_id: str
-    implementation_id: str
+    implementation_id: Label(str)
     implementation_version: str
-    mapping_id: str
+    mapping_id: Label(str)
     mapping_version: str
-    input_refs: tuple[dict[str, Any], ...]
-    output_refs: tuple[dict[str, Any], ...]
+    input_refs: RefDicts()
+    output_refs: RefDicts()
     actor: str
     time: str
     warnings: tuple[str, ...]
@@ -217,6 +248,7 @@ class TransformationRecord(Record):
 @dataclass(frozen=True)
 class ObjectVersion(Record):
     RECORD_TYPE = "object_version"
+    ID_FIELD = "object_id"
     object_id: str
     version: int
     object_type: str
@@ -234,7 +266,7 @@ class ObjectVersion(Record):
     epistemic_state: str
     marking: Marking
     provenance: ProvenanceSummary
-    correction_of: str | None = None
+    correction_of: OptionalRef("*") = None
     correction_reason: str = ""
     supersedes_version: int | None = None
 
@@ -260,15 +292,16 @@ class ObjectVersion(Record):
 @dataclass(frozen=True)
 class RelationshipVersion(Record):
     RECORD_TYPE = "relationship_version"
+    ID_FIELD = "relationship_id"
     relationship_id: str
     version: int
     relation_type: str
-    source_object_id: str
-    target_object_id: str
+    source_object_id: Ref("object_version")
+    target_object_id: Ref("object_version")
     valid_from: str | None
     valid_to: str | None
     recorded_time: str
-    evidence_refs: tuple[str, ...]
+    evidence_refs: Refs("*")
     derivation: str
     confidence: float | str
     status: str
@@ -292,21 +325,22 @@ class RelationshipVersion(Record):
 @dataclass(frozen=True)
 class ActivityRecord(Record):
     RECORD_TYPE = "activity"
+    ID_FIELD = "activity_id"
     activity_id: str
     activity_type: str
     epistemic_state: str
-    subject_ids: tuple[str, ...]
+    subject_ids: Refs("object_version")
     description: str
     valid_from: str | None
     valid_to: str | None
     source_time: str | None
     recorded_time: str
-    evidence_refs: tuple[str, ...]
+    evidence_refs: Refs("*")
     marking: Marking
     provenance: ProvenanceSummary
     # Events carry role-typed participants and a bounded time precision; the
     # defaults keep older records valid.
-    participants: tuple[tuple[str, str], ...] = ()  # (object_id, role)
+    participants: RefInPairs("object_version", 0) = ()  # (object_id, role)
     time_precision: str = "UNKNOWN"
 
     def __post_init__(self):
@@ -320,9 +354,10 @@ class ActivityRecord(Record):
 @dataclass(frozen=True)
 class AssociationProposal(Record):
     RECORD_TYPE = "association_proposal"
+    ID_FIELD = "proposal_id"
     proposal_id: str
-    left_object_id: str
-    right_object_id: str
+    left_object_id: Ref("object_version")
+    right_object_id: Ref("object_version")
     object_type: str
     features: dict[str, Any]
     outcome: str
@@ -341,10 +376,11 @@ class AssociationProposal(Record):
 @dataclass(frozen=True)
 class AssociationResolution(Record):
     RECORD_TYPE = "association_resolution"
+    ID_FIELD = "resolution_id"
     resolution_id: str
-    proposal_id: str
+    proposal_id: Ref("*")
     resolution: str
-    actor_id: str
+    actor_id: Label(str)
     actor_kind: str
     rationale: str
     recorded_time: str
@@ -359,12 +395,13 @@ class AssociationResolution(Record):
 @dataclass(frozen=True)
 class Alert(Record):
     RECORD_TYPE = "alert"
+    ID_FIELD = "alert_id"
     alert_id: str
-    rule_id: str
+    rule_id: Label(str)
     rule_version: str
     trigger: str
-    affected_ids: tuple[str, ...]
-    evidence_refs: tuple[str, ...]
+    affected_ids: Refs("*")
+    evidence_refs: Refs("*")
     quality_note: str
     severity: str
     severity_rationale: str
@@ -385,11 +422,12 @@ class Alert(Record):
 @dataclass(frozen=True)
 class AlertTransition(Record):
     RECORD_TYPE = "alert_transition"
+    ID_FIELD = "transition_id"
     transition_id: str
-    alert_id: str
+    alert_id: Ref("alert")
     from_status: str
     to_status: str
-    actor_id: str
+    actor_id: Label(str)
     actor_kind: str
     note: str
     recorded_time: str
@@ -405,21 +443,22 @@ class AlertTransition(Record):
 @dataclass(frozen=True)
 class Recommendation(Record):
     RECORD_TYPE = "recommendation"
+    ID_FIELD = "recommendation_id"
     recommendation_id: str
-    alert_ids: tuple[str, ...]
+    alert_ids: Refs("alert")
     action_kind: str
     proposed_action: str
     rationale: str
     assumptions: tuple[str, ...]
     alternatives: tuple[str, ...]
-    evidence_refs: tuple[str, ...]
+    evidence_refs: Refs("*")
     evidence_snapshot_hash: str
     uncertainty: str
     expected_benefit: str
     potential_risk: str
     expiry: str | None
     required_role: str
-    provider_id: str
+    provider_id: Label(str)
     recorded_time: str
     marking: Marking
 
@@ -437,13 +476,14 @@ class Recommendation(Record):
 @dataclass(frozen=True)
 class AnalystAction(Record):
     RECORD_TYPE = "analyst_action"
+    ID_FIELD = "action_id"
     action_id: str
-    actor_id: str
+    actor_id: Label(str)
     actor_kind: str
     actor_roles: tuple[str, ...]
     kind: str
     subject_kind: str
-    subject_id: str
+    subject_id: DynamicRef("subject_kind")
     note: str
     recorded_time: str
     marking: Marking
@@ -457,9 +497,10 @@ class AnalystAction(Record):
 @dataclass(frozen=True)
 class DecisionRecord(Record):
     RECORD_TYPE = "decision"
+    ID_FIELD = "decision_id"
     decision_id: str
-    recommendation_id: str
-    actor_id: str
+    recommendation_id: Ref("recommendation")
+    actor_id: Label(str)
     actor_role: str
     state: str
     modification: str
@@ -479,12 +520,13 @@ class DecisionRecord(Record):
 @dataclass(frozen=True)
 class ModelPackage(Record):
     RECORD_TYPE = "model_package"
+    ID_FIELD = "model_id"
     model_id: str
     version: str
     provider: str
     task: str
-    input_schema_id: str
-    output_schema_id: str
+    input_schema_id: Label(str)
+    output_schema_id: Label(str)
     training_data: str
     evaluation_summary: str
     limitations: tuple[str, ...]
@@ -513,8 +555,9 @@ def model_integrity_hash(package: ModelPackage) -> str:
 @dataclass(frozen=True)
 class AccreditationRecord(Record):
     RECORD_TYPE = "accreditation"
+    ID_FIELD = "accreditation_id"
     accreditation_id: str
-    model_id: str
+    model_id: Ref("model_package")
     model_version: str
     evaluator: str
     protocol: str
@@ -538,10 +581,11 @@ class AccreditationRecord(Record):
 @dataclass(frozen=True)
 class InferenceRecord(Record):
     RECORD_TYPE = "inference"
+    ID_FIELD = "inference_id"
     inference_id: str
-    model_id: str
+    model_id: Ref("model_package")
     model_version: str
-    input_refs: tuple[str, ...]
+    input_refs: Refs("*")
     input_hash: str
     output: dict[str, Any]
     output_hash: str
@@ -564,8 +608,9 @@ class InferenceRecord(Record):
 @dataclass(frozen=True)
 class AnalyticalProposal(Record):
     RECORD_TYPE = "analytical_proposal"
+    ID_FIELD = "proposal_id"
     proposal_id: str
-    inference_id: str
+    inference_id: Ref("inference")
     proposal_type: str
     content: dict[str, Any]
     status: str
@@ -591,10 +636,11 @@ WORKFLOW_SUBJECT_KINDS = ("requirement", "analyst_task", "evidence_request")
 @dataclass(frozen=True)
 class InformationRequirement(Record):
     RECORD_TYPE = "information_requirement"
+    ID_FIELD = "requirement_id"
     requirement_id: str
     mission_context: str
     question: str
-    affected_ids: tuple[str, ...]
+    affected_ids: Refs("*")
     priority: str
     rationale: str
     required_evidence_type: str
@@ -624,11 +670,12 @@ class InformationRequirement(Record):
 @dataclass(frozen=True)
 class EvidenceRequest(Record):
     RECORD_TYPE = "evidence_request"
+    ID_FIELD = "request_id"
     request_id: str
-    requirement_id: str
+    requirement_id: Ref("information_requirement")
     request_kind: str
     detail: str
-    affected_ids: tuple[str, ...]
+    affected_ids: Refs("*")
     status: str
     created_time: str
     due_time: str | None
@@ -644,17 +691,18 @@ class EvidenceRequest(Record):
 @dataclass(frozen=True)
 class AnalystTask(Record):
     RECORD_TYPE = "analyst_task"
+    ID_FIELD = "task_id"
     task_id: str
     assigned_role: str
     assigned_actor: str
     task_type: str
-    affected_ids: tuple[str, ...]
+    affected_ids: Refs("*")
     required_action: str
     status: str
     created_time: str
     due_time: str | None
-    depends_on: tuple[str, ...]
-    evidence_refs: tuple[str, ...]
+    depends_on: Refs("*")
+    evidence_refs: Refs("*")
     completion_result: str
     marking: Marking
 
@@ -670,14 +718,15 @@ class AnalystTask(Record):
 @dataclass(frozen=True)
 class WorkflowTransition(Record):
     RECORD_TYPE = "workflow_transition"
+    ID_FIELD = "transition_id"
     transition_id: str
     subject_kind: str
-    subject_id: str
+    subject_id: DynamicRef("subject_kind")
     from_status: str
     to_status: str
-    actor_id: str
+    actor_id: Label(str)
     actor_kind: str
-    evidence_refs: tuple[str, ...]
+    evidence_refs: Refs("*")
     note: str
     recorded_time: str
     marking: Marking

@@ -1,7 +1,8 @@
-"""Typed information-flow policy for the whole record graph.
+"""Information-flow policy for the whole record graph.
 
-The policy is data, not code: one registry says which fields carry material
-references to other records. Marking admission and control walks both read it.
+Which fields name other records is read from the record classes' annotations
+(see references.py). Marking admission and the control walks both use that
+one reading, so a field that names a record cannot be forgotten in a table.
 """
 from __future__ import annotations
 
@@ -9,81 +10,57 @@ from dataclasses import dataclass
 from typing import Any, Iterable, Mapping
 
 from .access import Marking, inherited_marking, marking_from_record
+from .contracts import RECORD_CLASSES, REGISTRY_GENERATION
+from .references import FieldSpec, RefTo, field_specs
 
 
-# Record identity is explicit. Actor, model, rule and connector ids stay
-# provenance labels; inference and proposal records are here because a
-# downstream record can embed their retained output.
-PRIMARY_ID_FIELDS: dict[str, str] = {
-    "external_ref": "external_id",
-    "evidence_ref": "assertion_id",
-    "provenance_summary": "evidence_basis_id",
-    "source": "source_id",
-    "ingestion": "ingestion_id",
-    "transformation": "transformation_id",
-    "object_version": "object_id",
-    "relationship_version": "relationship_id",
-    "activity": "activity_id",
-    "association_proposal": "proposal_id",
-    "association_resolution": "resolution_id",
-    "inference": "inference_id",
-    "analytical_proposal": "proposal_id",
-    "alert": "alert_id",
-    "alert_transition": "transition_id",
-    "recommendation": "recommendation_id",
-    "analyst_action": "action_id",
-    "decision": "decision_id",
-    "model_package": "model_id",
-    "accreditation": "accreditation_id",
-    "information_requirement": "requirement_id",
-    "evidence_request": "request_id",
-    "analyst_task": "task_id",
-    "workflow_transition": "transition_id",
-    "fabric_execution": "execution_id",
-    "fabric_source_profile": "profile_id",
-    "fabric_source_status": "status_id",
-    "fabric_information_need": "need_id",
-    "fabric_query": "query_id",
-    "fabric_discovery_plan": "plan_id",
-    "fabric_manifestation": "manifestation_id",
-    "fabric_pivot": "pivot_id",
-    "fabric_coverage": "coverage_id",
-    "fabric_watch": "watch_id",
-    "fabric_watch_run": "run_id",
-    "fabric_change": "change_id",
-    "semantic_document": "document_id",
-    "semantic_observation": "observation_id",
-    "semantic_claim": "claim_id",
-    "semantic_claim_state": "state_id",
-    "semantic_change": "change_id",
-    "hypothesis": "hypothesis_id",
-    "discriminator": "discriminator_id",
-    "collection_route": "route_id",
-    "review_item": "item_id",
-    "analytic_theme": "theme_id",
-    "analytic_narrative": "narrative_id",
-    "narrative_variant": "variant_id",
-    "propagation_edge": "edge_id",
-    "stakeholder_assessment": "assessment_id",
-    "influence_assertion": "influence_id",
-    "mission_objective": "objective_id",
-    "analytic_assumption": "assumption_id",
-    "impact_path": "path_id",
-    "impact_edge": "edge_id",
-    "response_option": "option_id",
-    "historical_episode": "episode_id",
-    "historical_analogue": "analogue_id",
-    "analytic_forecast": "forecast_id",
-    "forecast_indicator": "indicator_id",
-    "strategic_warning": "warning_id",
-    "analytic_transition": "transition_id",
-    "workbench_annotation": "annotation_id",
-    "workbench_report": "report_id",
-    "workbench_report_disposition": "disposition_id",
-    "workbench_saved_view": "view_id",
-    "actor_key": "key_id",
-    "signed_action": "action_id",
-}
+_CONTRACT_MODULES = ("curunir_fabric.contracts", "curunir_semantic.contracts", "curunir_identity.contracts",
+                     "curunir_analytic.contracts", "curunir_workbench.contracts")
+_registered = False
+
+
+def _register_product_contracts() -> None:
+    """Import the product's contract modules once, so every record class is registered.
+
+    An import failure propagates: a policy built from half the classes would
+    fail open, so it is never built.
+    """
+    global _registered
+    if _registered:
+        return
+    import importlib
+    for name in _CONTRACT_MODULES:
+        importlib.import_module(name)
+    _registered = True
+
+
+def record_class(record_type: str) -> type | None:
+    """The registered class for a record type."""
+    cls = RECORD_CLASSES.get(record_type)
+    if cls is None and record_type not in UNTYPED_RECORD_TYPES:
+        _register_product_contracts()
+        cls = RECORD_CLASSES.get(record_type)
+    return cls
+
+
+class _PrimaryIdFields(Mapping[str, str]):
+    """record_type -> the field that holds its id, read from the record classes."""
+
+    def __getitem__(self, record_type: str) -> str:
+        cls = record_class(record_type)
+        if cls is None or not cls.ID_FIELD:
+            raise KeyError(record_type)
+        return cls.ID_FIELD
+
+    def __iter__(self):
+        _register_product_contracts()
+        return iter([name for name, cls in RECORD_CLASSES.items() if cls.ID_FIELD])
+
+    def __len__(self) -> int:
+        return sum(1 for _ in self)
+
+
+PRIMARY_ID_FIELDS: Mapping[str, str] = _PrimaryIdFields()
 
 
 KIND_ALIASES = {
@@ -113,162 +90,29 @@ KIND_ALIASES = {
 }
 
 
-# A generic field name can belong to more than one family; resolution then
-# includes every matching record.
-FIELD_KINDS: dict[str, tuple[str, ...]] = {
-    "source_id": ("source",),
-    "ingestion_id": ("ingestion",),
-    "evidence_basis_id": ("provenance_summary",),
-    "model_id": ("model_package",),
-    "key_id": ("actor_key",),
-    "need_id": ("fabric_information_need",),
-    "plan_id": ("fabric_discovery_plan",),
-    "watch_id": ("fabric_watch",),
-    "run_id": ("fabric_watch_run",),
-    "transition_id": (
-        "analytic_transition", "alert_transition", "workflow_transition"),
-    "claim_id": ("semantic_claim",),
-    "claim_ids": ("semantic_claim",),
-    "supporting_claim_ids": ("semantic_claim",),
-    "contradicting_claim_ids": ("semantic_claim",),
-    "unresolved_claim_ids": ("semantic_claim",),
-    "outcome_claim_ids": ("semantic_claim",),
-    "affected_claim_ids": ("semantic_claim",),
-    "observation_id": ("semantic_observation",),
-    "observation_ids": ("semantic_observation",),
-    "change_observation_ids": ("fabric_change",),
-    "basis_observation_ids": ("semantic_observation",),
-    "prior_observation_id": ("semantic_observation",),
-    "current_observation_id": ("semantic_observation",),
-    "document_id": ("semantic_document",),
-    "manifestation_id": ("fabric_manifestation",),
-    "manifestation_ids": ("fabric_manifestation",),
-    "earliest_manifestation_id": ("fabric_manifestation",),
-    "from_manifestation_id": ("fabric_manifestation",),
-    "to_manifestation_id": ("fabric_manifestation",),
-    "evidence_manifestation_ids": ("fabric_manifestation",),
-    "prior_manifestation_id": ("fabric_manifestation",),
-    "current_manifestation_id": ("fabric_manifestation",),
-    "hypothesis_id": ("hypothesis",),
-    "hypothesis_ids": ("hypothesis",),
-    "discriminator_id": ("discriminator",),
-    "discriminator_ids": ("discriminator",),
-    "requirement_id": ("information_requirement",),
-    "task_id": ("analyst_task",),
-    "execution_id": ("fabric_execution",),
-    "basis_execution_ids": ("fabric_execution",),
-    "activity_id": ("activity",),
-    "entity_ids": ("object_version",),
-    "theme_id": ("analytic_theme",),
-    "parent_theme_id": ("analytic_theme",),
-    "narrative_id": ("analytic_narrative",),
-    "variant_ids": ("narrative_variant",),
-    "counter_narrative_ids": ("analytic_narrative",),
-    "assessment_id": ("stakeholder_assessment",),
-    "influence_id": ("influence_assertion",),
-    "influence_ids": ("influence_assertion",),
-    "objective_id": ("mission_objective",),
-    "objective_ids": ("mission_objective",),
-    "assumption_id": ("analytic_assumption",),
-    "assumption_ids": ("analytic_assumption",),
-    "path_id": ("impact_path",),
-    "impact_path_ids": ("impact_path",),
-    "option_id": ("response_option",),
-    "option_ids": ("response_option",),
-    "episode_id": ("historical_episode",),
-    "forecast_id": ("analytic_forecast",),
-    "forecast_ids": ("analytic_forecast",),
-    "indicator_id": ("forecast_indicator",),
-    "indicator_ids": ("forecast_indicator",),
-    "warning_id": ("strategic_warning",),
-    "alert_id": ("alert",),
-    "alert_ids": ("alert",),
-    "recommendation_id": ("recommendation",),
-    "decision_id": ("decision",),
-    "proposal_id": ("analytical_proposal", "association_proposal"),
-    "inference_id": ("inference",),
-    "reply_to": ("workbench_annotation",),
-    "report_id": ("workbench_report",),
-    "view_id": ("workbench_saved_view",),
-    "relationship_id": ("relationship_version",),
-    "relationship_ids": ("relationship_version",),
-    "relation_ids": ("relationship_version",),
-    "source_object_id": ("object_version",),
-    "target_object_id": ("object_version",),
-    "entity_object_id": ("object_version",),
-    "subject_object_id": ("object_version",),
-    "object_object_id": ("object_version",),
-    "actor_object_ids": ("object_version",),
-    "affected_object_ids": ("object_version",),
-    "left_object_id": ("object_version",),
-    "right_object_id": ("object_version",),
-    "subject_ids": ("object_version",),
-    "event_ids": ("object_version",),
-    "dissent_annotation_ids": ("workbench_annotation",),
-    "supersedes_key_id": ("actor_key",),
-    "absence_required_source_ids": ("source",),
-    "coverage_required_source_ids": ("source",),
-    "considered_source_ids": ("source",),
-    "source_ids": ("source",),
-    "custody_ingestion_id": ("ingestion",),
-    "ingestion_ids": ("ingestion",),
-    "fabric_change_id": ("fabric_change",),
-    "transformation_ids": ("transformation",),
-    "section_id": ("workbench_report",),
-    "sentence_id": ("workbench_report",),
-}
-
-TYPED_PAIR_FIELDS = frozenset({"proposition_refs", "source_refs", "depends_on"})
-DYNAMIC_PAIR_FIELDS = (
-    ("subject_kind", "subject_id"),
-    ("target_kind", "target_id"),
-    ("context_kind", "context_id"),
-    ("query_kind", "query_id"),
-    ("from_kind", "from_id"),
-    ("to_kind", "to_id"),
-)
-ANY_REFERENCE_FIELDS = frozenset({
-    "affected_ids", "basis_ids", "basis_refs", "caused_by", "evidence_refs",
-    "fired_evidence_refs", "resolution_evidence_refs",
-    "input_refs", "output_refs", "external_refs", "world_refs",
-    "current_ref", "prior_ref", "from_ref", "to_ref", "object_ref",
-    "payload_ref", "subject_ref", "target_ref", "claim_subject_ref",
-    "event_subject_ref", "desired_subject_ref", "anchor_ref",
-    "correction_of", "duplicate_of", "source_alert_id", "superseded_by",
-})
-PER_RECORD_EXCLUSIONS = {
-    # A forecast listing its watchers does not embed their restricted state.
-    ("analytic_forecast", "indicator_ids"),
-}
-
-# Identifier-shaped fields that are labels, not references to other records.
-# Listing them explicitly makes any new `*_id`/`*_ref` field fail the
-# policy-completeness test until someone classifies it.
-NON_MATERIAL_REFERENCE_FIELDS = frozenset({
-    "actor_id", "case_id", "connector_id", "dependence_group_id",
-    "dependence_group_ids", "external_id", "implementation_id",
-    "input_schema_id", "mapping_id", "mission_id", "native_id",
-    "output_schema_id", "position_id", "producer_id", "provider_id",
-    "resolver_id", "retrieval_id", "rule_id", "schema_id", "tier_rule_id",
-    "translation_id", "unmatched_query_ids",
-})
-
 REFERENCE_FIELD_SUFFIXES = ("_id", "_ids", "_ref", "_refs")
+
+# Stored families that are free-form mappings rather than record classes.
+UNTYPED_RECORD_TYPES = frozenset({
+    "schema_definition", "mapping_definition", "pipeline_definition",
+    "workshop_definition", "fabric_source_descriptor",
+})
 
 
 def reference_field_is_classified(record_type: str, field_name: str) -> bool:
-    """Whether an identifier-shaped contract field has an explicit policy."""
-    if not field_name.endswith(REFERENCE_FIELD_SUFFIXES):
+    """Whether a field that could carry ids is annotated as a reference, a label,
+    a nested record, or the record's own id. Id-shaped names and tuples of
+    string pairs count as able to carry ids."""
+    cls = record_class(record_type)
+    spec = field_specs(cls).get(field_name) if cls is not None else None
+    shaped = field_name.endswith(REFERENCE_FIELD_SUFFIXES) or (spec is not None and spec.pairs_shaped)
+    if not shaped:
         return True
-    return (
-        PRIMARY_ID_FIELDS.get(record_type) == field_name
-        or field_name in FIELD_KINDS
-        or field_name in ANY_REFERENCE_FIELDS
-        or field_name in TYPED_PAIR_FIELDS
-        or field_name in NON_MATERIAL_REFERENCE_FIELDS
-        or field_name in {item for pair in DYNAMIC_PAIR_FIELDS for item in pair}
-        or (record_type, field_name) in PER_RECORD_EXCLUSIONS
-    )
+    if cls is None:
+        return False
+    if field_name == cls.ID_FIELD:
+        return True
+    return spec is not None and (spec.ref is not None or spec.label or spec.nested is not None)
 
 
 @dataclass(frozen=True, order=True)
@@ -287,53 +131,148 @@ def _strings(value: Any) -> Iterable[str]:
                 yield item
 
 
+def _normalize_kind(kind: str) -> str:
+    return KIND_ALIASES.get(kind.lower(), kind.lower())
+
+
+def _pair_references(value: Any) -> Iterable[MaterialReference]:
+    """References from (kind, id) tuples, {"kind", "ref"|"id"} mappings, or bare ids."""
+    for pair in value or ():
+        if isinstance(pair, (list, tuple)) and len(pair) == 2 \
+                and isinstance(pair[0], str) and isinstance(pair[1], str):
+            yield MaterialReference(KIND_ALIASES.get(pair[0], pair[0]), pair[1])
+        elif isinstance(pair, Mapping):
+            kind = pair.get("kind")
+            ref = pair.get("ref") or pair.get("id")
+            if isinstance(kind, str) and isinstance(ref, str) and ref:
+                yield MaterialReference(_normalize_kind(kind), ref)
+        elif isinstance(pair, str) and pair:
+            yield MaterialReference("*", pair)
+
+
+def _field_references(spec: RefTo, value: Any, owner: Mapping[str, Any]) -> Iterable[MaterialReference]:
+    if spec.pairs:
+        if spec.slot is None:
+            yield from _pair_references(value)
+        else:
+            for pair in value or ():
+                if isinstance(pair, (list, tuple)) and len(pair) > spec.slot and isinstance(pair[spec.slot], str) \
+                        and pair[spec.slot]:
+                    yield MaterialReference(spec.kind, pair[spec.slot])
+        # A pair written as a mapping may carry more than its kind and id.
+        for item in value or ():
+            if isinstance(item, Mapping):
+                yield from _blob_references(item, frozenset())
+        return
+    if spec.kind_from:
+        kind = owner.get(spec.kind_from)
+        if not isinstance(kind, str):
+            return
+        kind = _normalize_kind(kind)
+    else:
+        kind = spec.kind
+    for reference in _strings(value):
+        yield MaterialReference(kind, reference)
+
+
+_BLOB_POLICY: tuple[dict[str, RefTo], tuple[tuple[str, str], ...], int] | None = None
+
+
+def _blob_policy() -> tuple[dict[str, RefTo], tuple[tuple[str, str], ...]]:
+    """Field names that mean a reference anywhere inside an unstructured mapping.
+
+    Derived from every record class, so a name means the same thing inside a
+    free-form payload as it does on a typed record. A name that is a label on
+    one class and a reference on another still counts: joining too much is
+    safe, missing a reference is not. Rebuilt whenever the registry changes.
+    """
+    global _BLOB_POLICY
+    _register_product_contracts()
+    if _BLOB_POLICY is None or _BLOB_POLICY[2] != REGISTRY_GENERATION[0]:
+        fields: dict[str, RefTo] = {}
+        pairs: set[tuple[str, str]] = set()
+        for cls in RECORD_CLASSES.values():
+            for name, spec in field_specs(cls).items():
+                if spec.ref is None:
+                    continue
+                if spec.ref.kind_from:
+                    pairs.add((spec.ref.kind_from, name))
+                elif name in fields and fields[name] != spec.ref:
+                    fields[name] = RefTo("*")
+                else:
+                    fields.setdefault(name, spec.ref)
+        # A record's own id field, seen inside someone else's payload, names that record.
+        for record_type, cls in RECORD_CLASSES.items():
+            name = cls.ID_FIELD
+            if not name:
+                continue
+            if name in fields and fields[name] != RefTo(record_type):
+                fields[name] = RefTo("*")
+            else:
+                fields.setdefault(name, RefTo(record_type))
+        _BLOB_POLICY = (fields, tuple(sorted(pairs)), REGISTRY_GENERATION[0])
+    return _BLOB_POLICY[0], _BLOB_POLICY[1]
+
+
+def _blob_references(value: Any, skip: frozenset[str]) -> Iterable[MaterialReference]:
+    fields, pairs = _blob_policy()
+    if isinstance(value, Mapping):
+        for kind_field, id_field in pairs:
+            kind, record_id = value.get(kind_field), value.get(id_field)
+            if isinstance(kind, str) and isinstance(record_id, str) and record_id:
+                yield MaterialReference(_normalize_kind(kind), record_id)
+        for key, item in value.items():
+            if key in skip:
+                continue
+            spec = fields.get(key)
+            if spec is not None:
+                yield from _field_references(spec, item, value)
+            yield from _blob_references(item, skip)
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            yield from _blob_references(item, skip)
+
+
+def _plain(spec: FieldSpec) -> bool:
+    """A declared field with no reference, label or nested-record annotation."""
+    return spec.ref is None and spec.nested is None and not spec.label
+
+
 def material_references(record: Mapping[str, Any]) -> tuple[MaterialReference, ...]:
-    """Every typed reference the record carries, however deeply nested."""
+    """Every record this record names, read from its class's typed fields."""
     record_type = str(record.get("record_type", ""))
+    _register_product_contracts()
+    cls = record_class(record_type)
+    if cls is None:
+        # Free-form families (schema, mapping, pipeline and workshop definitions,
+        # fabric source descriptors) have no record class: scan them by field name.
+        if record_type not in UNTYPED_RECORD_TYPES:
+            raise ValueError(f"no record class is registered for {record_type!r}")
+        return tuple(sorted(set(_blob_references(record, frozenset({"marking", "record_type"})))))
     found: set[MaterialReference] = set()
 
-    def walk(value: Any) -> None:
-        if isinstance(value, Mapping):
-            for kind_field, id_field in DYNAMIC_PAIR_FIELDS:
-                kind = value.get(kind_field)
-                record_id = value.get(id_field)
-                if isinstance(kind, str) and isinstance(record_id, str) and record_id:
-                    normalized = KIND_ALIASES.get(kind.lower(), kind.lower())
-                    found.add(MaterialReference(normalized, record_id))
-            for key, item in value.items():
-                if key in {"marking", "record_type", PRIMARY_ID_FIELDS.get(record_type)}:
-                    continue
-                if (record_type, key) in PER_RECORD_EXCLUSIONS:
-                    continue
-                if key in TYPED_PAIR_FIELDS:
-                    for pair in item or ():
-                        if isinstance(pair, (list, tuple)) and len(pair) == 2 \
-                                and isinstance(pair[0], str) and isinstance(pair[1], str):
-                            found.add(MaterialReference(
-                                KIND_ALIASES.get(pair[0], pair[0]), pair[1]))
-                        elif isinstance(pair, Mapping):
-                            kind = pair.get("kind")
-                            ref = pair.get("ref") or pair.get("id")
-                            if isinstance(kind, str) and isinstance(ref, str) and ref:
-                                normalized = KIND_ALIASES.get(kind.lower(), kind.lower())
-                                found.add(MaterialReference(normalized, ref))
-                        elif isinstance(pair, str) and pair:
-                            found.add(MaterialReference("*", pair))
-                    continue
-                kinds = FIELD_KINDS.get(key)
-                if kinds:
-                    for reference in _strings(item):
-                        for kind in kinds:
-                            found.add(MaterialReference(kind, reference))
-                elif key in ANY_REFERENCE_FIELDS:
-                    for reference in _strings(item):
-                        found.add(MaterialReference("*", reference))
-                walk(item)
-        elif isinstance(value, (list, tuple)):
-            for item in value:
-                walk(item)
+    def walk(value: Mapping[str, Any], owner_class: type) -> None:
+        specs = field_specs(owner_class)
+        skip = frozenset({"marking", "record_type", owner_class.ID_FIELD})
+        for name, spec in specs.items():
+            item = value.get(name)
+            if item is None or name in skip:
+                continue
+            if spec.ref is not None:
+                found.update(_field_references(spec.ref, item, value))
+            elif spec.nested is not None:
+                nested = item if isinstance(item, (list, tuple)) else (item,)
+                for entry in nested:
+                    if isinstance(entry, Mapping):
+                        walk(entry, spec.nested)
+        # A key the class does not declare, or declares without a reference
+        # annotation, is scanned by name so nothing can hide a reference.
+        extra = {key: item for key, item in value.items()
+                 if key not in skip and (key not in specs or _plain(specs[key]))}
+        if extra:
+            found.update(_blob_references(extra, skip))
 
-    walk(record)
+    walk(record, cls)
     return tuple(sorted(found))
 
 
@@ -382,7 +321,12 @@ def resolve_reference_records(
     store: Any,
     references: Iterable[MaterialReference],
 ) -> tuple[dict, ...]:
-    """Resolve references against current raw state, never a projection."""
+    """Resolve references against current raw state, never a projection.
+
+    An id that resolves to no record contributes no marking, so the order of
+    appends decides what a dangling reference floors. A record that exists is
+    always found and always joined.
+    """
     resolved: list[dict] = []
     seen: set[tuple[str, str]] = set()
     for reference in references:

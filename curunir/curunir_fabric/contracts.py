@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from curunir_operational.access import Marking
 from curunir_operational.canonical import require_aware, require_aware_or_none
 from curunir_operational.contracts import Record, _member
+from curunir_operational.references import Label, OptionalRef, Ref, Refs
 
 from . import ABSENCE_SEMANTICS
 
@@ -56,9 +57,10 @@ URGENCIES = ("ROUTINE", "PRIORITY", "IMMEDIATE")
 class CapabilityProfile(Record):
     """What a source can provide: operations, reach, cadence, cost, connector."""
     RECORD_TYPE = "fabric_source_profile"
+    ID_FIELD = "profile_id"
     profile_id: str
-    source_id: str
-    connector_id: str
+    source_id: Ref("source")
+    connector_id: Label(str)
     connector_version: str
     supported_operations: tuple[str, ...]
     time_coverage: tuple[str | None, str | None]
@@ -94,9 +96,10 @@ class CapabilityProfile(Record):
 class SourceStatusEvent(Record):
     """One recorded success or failure against a source."""
     RECORD_TYPE = "fabric_source_status"
+    ID_FIELD = "status_id"
     status_id: str
-    source_id: str
-    connector_id: str
+    source_id: Ref("source")
+    connector_id: Label(str)
     kind: str
     operation: str
     detail: str
@@ -112,12 +115,13 @@ class SourceStatusEvent(Record):
 class InformationNeed(Record):
     """What a mission needs to know, from the collection side."""
     RECORD_TYPE = "fabric_information_need"
+    ID_FIELD = "need_id"
     need_id: str
-    requirement_id: str
+    requirement_id: Ref("information_requirement")
     mission_context: str
     question: str
     entities: tuple[str, ...]
-    identifiers: tuple[tuple[str, str], ...]  # (scheme, value)
+    identifiers: Label(tuple[tuple[str, str], ...])  # (scheme, value)
     time_bounds: tuple[str | None, str | None]
     geography: tuple[str, ...]
     languages: tuple[str, ...]
@@ -139,17 +143,19 @@ class InformationNeed(Record):
 class QuerySpec(Record):
     """One executable query with its origin."""
     RECORD_TYPE = "fabric_query"
+    ID_FIELD = "query_id"
     query_id: str
     family: str
     value: str
     language: str
     script: str
-    operation: str; source_id: str  # "" = any capable registered source
+    operation: str
+    source_id: Ref("source")  # "" means any capable registered source
     time_bounds: tuple[str | None, str | None]
     origin: str
     origin_detail: str
     rationale: str
-    derived_from: tuple[str, ...]  # pivot ids / manifestation ids that produced it
+    derived_from: Refs("*")  # pivot ids / manifestation ids that produced it
 
     def __post_init__(self):
         _member(self.family, QUERY_FAMILIES, "query family")
@@ -162,10 +168,13 @@ class QuerySpec(Record):
 @dataclass(frozen=True)
 class DiscoveryPlan(Record):
     RECORD_TYPE = "fabric_discovery_plan"
-    plan_id: str; need_id: str; generation: str  # INITIAL | PIVOT_EXPANSION | WATCH
+    ID_FIELD = "plan_id"
+    plan_id: str
+    need_id: Ref("fabric_information_need")
+    generation: str  # INITIAL, PIVOT_EXPANSION or WATCH
     queries: tuple[QuerySpec, ...]
-    considered_source_ids: tuple[str, ...]
-    unmatched_query_ids: tuple[str, ...]  # queries no registered source can execute
+    considered_source_ids: Refs("source")
+    unmatched_query_ids: Label(tuple[str, ...])  # queries no registered source can execute
     budget_max_requests: int
     planner_version: str
     created_time: str
@@ -188,11 +197,12 @@ class ExecutionRecord(Record):
     Empty, failed, refused and not-attempted are distinct outcomes.
     """
     RECORD_TYPE = "fabric_execution"
+    ID_FIELD = "execution_id"
     execution_id: str
-    plan_id: str
-    query_id: str
-    source_id: str
-    connector_id: str
+    plan_id: Ref("fabric_discovery_plan")
+    query_id: Ref("fabric_query")
+    source_id: Ref("source")
+    connector_id: Label(str)
     connector_version: str
     operation: str
     outcome: str
@@ -202,7 +212,7 @@ class ExecutionRecord(Record):
     policy_decision: str
     error_class: str | None
     error_detail: str
-    manifestation_ids: tuple[str, ...]
+    manifestation_ids: Refs("fabric_manifestation")
     started_time: str
     completed_time: str | None
     absence_semantics: str
@@ -226,11 +236,12 @@ class ExecutionRecord(Record):
 class ManifestationRecord(Record):
     """One preserved retrieval. The bytes live in custody; this record names them."""
     RECORD_TYPE = "fabric_manifestation"
+    ID_FIELD = "manifestation_id"
     manifestation_id: str
-    source_id: str
-    connector_id: str
+    source_id: Ref("source")
+    connector_id: Label(str)
     connector_version: str
-    native_id: str
+    native_id: Label(str)
     request_url: str
     final_url: str
     content_sha256: str
@@ -245,11 +256,11 @@ class ManifestationRecord(Record):
     etag: str
     last_modified: str
     truncated: bool
-    retrieval_id: str
-    custody_ingestion_id: str
-    source_object_id: str
-    execution_id: str
-    prior_manifestation_id: str | None
+    retrieval_id: Label(str)
+    custody_ingestion_id: Ref("ingestion")
+    source_object_id: Ref("object_version")
+    execution_id: Ref("fabric_execution")
+    prior_manifestation_id: OptionalRef("fabric_manifestation")
     marking: Marking
 
     def __post_init__(self):
@@ -267,14 +278,15 @@ class ManifestationRecord(Record):
 class PivotEdge(Record):
     """A proposed reason to look somewhere else, citing its evidence."""
     RECORD_TYPE = "fabric_pivot"
+    ID_FIELD = "pivot_id"
     pivot_id: str
     from_kind: str
-    from_ref: str
+    from_ref: Ref("*")
     to_kind: str
-    to_ref: str
+    to_ref: Ref("*")
     pivot_type: str
     rationale: str
-    evidence_manifestation_ids: tuple[str, ...]
+    evidence_manifestation_ids: Refs("fabric_manifestation")
     origin: str
     status: str
     created_time: str
@@ -296,12 +308,13 @@ class PivotEdge(Record):
 @dataclass(frozen=True)
 class CoverageAssessment(Record):
     RECORD_TYPE = "fabric_coverage"
+    ID_FIELD = "coverage_id"
     coverage_id: str
-    need_id: str
-    source_id: str
+    need_id: Ref("fabric_information_need")
+    source_id: Ref("source")
     source_family: str
     state: str
-    basis_execution_ids: tuple[str, ...]
+    basis_execution_ids: Refs("fabric_execution")
     temporal_coverage: tuple[str | None, str | None]
     language_coverage: tuple[str, ...]
     geographic_coverage: tuple[str, ...]
@@ -322,11 +335,12 @@ class CoverageAssessment(Record):
 class WatchDefinition(Record):
     """Keep observing one target at a cadence."""
     RECORD_TYPE = "fabric_watch"
+    ID_FIELD = "watch_id"
     watch_id: str
-    need_id: str
+    need_id: Ref("fabric_information_need")
     target_kind: str
-    target_ref: str
-    source_id: str
+    target_ref: Ref("*")
+    source_id: Ref("source")
     operation: str
     query_value: str
     cadence_seconds: int
@@ -347,17 +361,18 @@ class WatchDefinition(Record):
 @dataclass(frozen=True)
 class WatchRun(Record):
     RECORD_TYPE = "fabric_watch_run"
+    ID_FIELD = "run_id"
     run_id: str
-    watch_id: str
+    watch_id: Ref("fabric_watch")
     scheduled_time: str
     started_time: str
     completed_time: str | None
     outcome: str
-    execution_id: str
+    execution_id: Ref("fabric_execution")
     observed_content_sha256: str
-    observed_records: tuple[tuple[str, str], ...]  # (native_id, source_time or "")
-    manifestation_id: str
-    change_observation_ids: tuple[str, ...]
+    observed_records: Label(tuple[tuple[str, str], ...])  # (native_id, source_time or "")
+    manifestation_id: Ref("fabric_manifestation")
+    change_observation_ids: Refs("fabric_change")
     next_due_time: str
     marking: Marking
 
@@ -372,14 +387,15 @@ class WatchRun(Record):
 @dataclass(frozen=True)
 class ChangeObservation(Record):
     RECORD_TYPE = "fabric_change"
+    ID_FIELD = "change_id"
     change_id: str
-    watch_id: str
-    run_id: str
+    watch_id: Ref("fabric_watch")
+    run_id: Ref("fabric_watch_run")
     change_type: str
     detail: str
-    prior_ref: str
-    current_ref: str
-    evidence_manifestation_ids: tuple[str, ...]
+    prior_ref: Ref("*")
+    current_ref: Ref("*")
+    evidence_manifestation_ids: Refs("fabric_manifestation")
     observed_time: str
     marking: Marking
 

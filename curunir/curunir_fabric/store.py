@@ -4,6 +4,8 @@ from __future__ import annotations
 from curunir_operational.store import EVENT_TYPES as MISSION_EVENT_TYPES
 from curunir_operational.store import MissionDataStore
 
+from . import contracts  # noqa: F401  registers this package's record types
+
 FABRIC_EVENT_TYPES = {
     "FABRIC_SOURCE_DESCRIBED": "fabric_source_descriptor",
     "FABRIC_SOURCE_PROFILE_RECORDED": "fabric_source_profile",

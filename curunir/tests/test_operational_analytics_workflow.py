@@ -4,80 +4,17 @@ from __future__ import annotations
 
 import pytest
 
-from curunir_operational.access import AccessContext
+from curunir_operational.access import AccessContext, can_view
 from curunir_operational.analytics import DeterministicRuleProvider, MockAssessmentProvider
-from curunir_operational.contracts import (EvidenceRef, ExternalRef, ObjectVersion, ProvenanceSummary,
-                                           RelationshipVersion)
+from curunir_operational.contracts import ExternalRef, ObjectVersion
 from curunir_operational.geometry import Geometry
 from curunir_operational.projection import Projection
 from curunir_operational.workflow import WorkflowEngine, WorkflowError, evidence_snapshot_hash
 
-from operational_support import (BASE_MARKING, HIGH_CONTEXT, LOW_CONTEXT, RESTRICTED_MARKING,
-                                 SERVICE_CONTEXT, T0, fake_sha, make_store, t)
+from operational_support import (BASE_MARKING, HIGH_CONTEXT, LOW_CONTEXT, PROV, RESTRICTED_MARKING,
+                                 SERVICE_CONTEXT, T0, build_scene, evidence_ref, make_store, obj, rel, t)
 
 pytestmark = pytest.mark.no_db
-
-PROV = ProvenanceSummary(mode="OPERATIONAL", source_ids=("src-a",), ingestion_ids=("ing-1",))
-
-
-def obj(object_id, object_type, *, version=1, hours=0.0, geometry=None, attributes=None, marking=BASE_MARKING,
-        epistemic="REPORTED", evidence=(), labels=None):
-    provenance = PROV if not evidence else ProvenanceSummary(mode="EVIDENTIARY", source_ids=("src-argus",),
-                                                             ingestion_ids=("ing-e",), evidence=tuple(evidence))
-    return ObjectVersion(object_id=object_id, version=version, object_type=object_type, lifecycle="ACTIVE",
-                         labels=tuple(labels or (object_id,)), external_refs=(), valid_from=t(hours), valid_to=None,
-                         source_time=t(hours), time_precision="HOUR", recorded_time=t(max(hours, 0.0)),
-                         geometry=geometry, attributes=attributes or {}, quality={},
-                         epistemic_state=epistemic, marking=marking, provenance=provenance)
-
-
-def rel(relation_type, source, target, *, marking=BASE_MARKING, hours=0.0):
-    relationship_id = f"rel-{relation_type.lower()}-{source}-{target}"
-    return RelationshipVersion(relationship_id, 1, relation_type, source, target, t(hours), None, t(hours),
-                               ("ing-1",), "MAPPING", "UNKNOWN", "ACTIVE", marking, PROV)
-
-
-def evidence_ref(source_object, group=None):
-    return EvidenceRef(source_object, f"doc-{source_object}", fake_sha(source_object), f"asrt-{source_object}",
-                       "basis-bridge-strike", "IDENTITY_PROVISIONAL", "REPUTABLE_SECONDARY_REPORT",
-                       "UNRESOLVED", "SINGLE_BASIS", "UNREVIEWED", "EXACT", group, ("COMMON_ORIGIN_REVIEW",))
-
-
-def build_scene(tmp_path, *, restrict_first_observation=False):
-    store = make_store(tmp_path)
-    line = Geometry("LINESTRING", ((-30.30, 45.10), (-30.10, 45.20), (-29.90, 45.30)))
-    alt_line = Geometry("LINESTRING", ((-30.30, 45.10), (-30.05, 45.05), (-29.90, 45.30)))
-    group = "evgroup-shared-basis"
-    records = [
-        obj("infra-BR-7", "INFRASTRUCTURE", geometry=Geometry("POINT", (-30.10, 45.20)),
-            attributes={"status": "OPERATIONAL"}),
-        obj("route-R1", "ROUTE", geometry=line),
-        obj("route-R2", "ROUTE", geometry=alt_line),
-        obj("mv-relief-1", "MOVEMENT", epistemic="PLANNED", attributes={"cargo": "medical"}),
-        obj("obs-sensor-1", "OBSERVATION", hours=24.0, attributes={"reported_status": "OPERATIONAL"},
-            marking=RESTRICTED_MARKING if restrict_first_observation else BASE_MARKING),
-        obj("obs-report-1", "OBSERVATION", hours=25.0, attributes={"reported_status": "DAMAGED"},
-            evidence=[evidence_ref("argus-src-1", group)]),
-        obj("obs-report-2", "OBSERVATION", hours=25.5, attributes={"reported_status": "DAMAGED"},
-            evidence=[evidence_ref("argus-src-2", group)]),
-        obj("stock-fuel-alden", "RESOURCE_STOCK", hours=-30.0, attributes={"commodity": "fuel"}),
-    ]
-    for record in records:
-        store.append("OBJECT_VERSION_APPENDED", record, recorded_time=t(max(record.version, 26.0)), actor="fixture")
-    relationships = [
-        rel("REPORTS_ON", "obs-sensor-1", "infra-BR-7",
-            marking=RESTRICTED_MARKING if restrict_first_observation else BASE_MARKING, hours=24.0),
-        rel("REPORTS_ON", "obs-report-1", "infra-BR-7", hours=25.0),
-        rel("REPORTS_ON", "obs-report-2", "infra-BR-7", hours=25.5),
-        rel("DEPENDS_ON", "route-R1", "infra-BR-7"),
-        rel("PLANNED_FOR", "mv-relief-1", "route-R1"),
-        rel("ALTERNATE_OF", "route-R1", "route-R2"),
-    ]
-    for relationship in relationships:
-        store.append("RELATIONSHIP_VERSION_APPENDED", relationship, recorded_time=t(26.0), actor="fixture")
-    projection = Projection(store, snapshot_time=t(26.0), staleness_hours={"RESOURCE_STOCK": 24.0})
-    return store, projection
-
 
 def proposals_of(proposals, proposal_type, rule_id=None):
     chosen = [p for p in proposals if p["proposal_type"] == proposal_type]
@@ -144,16 +81,15 @@ def test_materialization_alerts_dedup_dispute(tmp_path):
 def test_invalid_provider_output_cannot_materialize(tmp_path):
     store, projection = build_scene(tmp_path)
     provider = DeterministicRuleProvider(store)
-    provider.ensure_registered(recorded_time=t(27.0))
-    inference_id = provider._record(input_refs=("route-R1",), inputs={"x": 1},
-                                    output={"rule_id": "rule-x"}, recorded_time=t(27.0),
-                                    marking=BASE_MARKING, downstream=("route-R1",),
-                                    errors=("output schema violation",))
-    proposal = provider._propose(inference_id, "ALERT_CANDIDATE",
+    provider._start(projection, t(27.0))
+    inference = provider._record(inputs={"route-R1": projection.objects["route-R1"]["current"]},
+                                 output={"rule_id": "rule-x"}, recorded_time=t(27.0), downstream=("route-R1",),
+                                 errors=("output schema violation",))
+    proposal = provider._propose(inference, "ALERT_CANDIDATE",
                                  {"rule_id": "rule-x", "rule_version": "1.0", "trigger": "bad",
                                   "affected_ids": ["route-R1"], "evidence_refs": ["route-R1"],
                                   "severity": "INFO", "severity_rationale": "n/a", "dedup_key": "bad:1"},
-                                 t(27.1), BASE_MARKING)
+                                 t(27.1))
     workflow = WorkflowEngine(store)
     with pytest.raises(WorkflowError):
         workflow.materialize(proposal, actor_id="workflow", recorded_time=t(27.2))
@@ -233,3 +169,28 @@ def test_alert_transitions_and_snapshot_recompute(tmp_path):
     alert_record = updated.alerts[alert_id]["record"]
     assert evidence_snapshot_hash(store, tuple(alert_record["evidence_refs"])) \
         == evidence_snapshot_hash(store, tuple(alert_record["evidence_refs"]))
+
+
+def test_provider_refuses_output_that_names_an_object_it_did_not_read(tmp_path):
+    store, projection = build_scene(tmp_path)
+    provider = DeterministicRuleProvider(store)
+    provider._start(projection, t(27.0))
+    read = {"route-R1": projection.objects["route-R1"]["current"]}
+    with pytest.raises(ValueError, match="infra-BR-7"):
+        provider._record(inputs=read, output={"rule_id": "x", "note": "depends on infra-BR-7"},
+                         recorded_time=t(27.0), downstream=("route-R1",))
+    inference = provider._record(inputs=read, output={"rule_id": "x"}, recorded_time=t(27.0),
+                                 downstream=("route-R1",))
+    with pytest.raises(ValueError, match="mv-relief-1"):
+        provider._propose(inference, "ALERT_CANDIDATE", {"trigger": "mv-relief-1 at risk"}, t(27.1))
+
+
+def test_inference_marking_is_the_join_of_everything_it_read(tmp_path):
+    store, projection = build_scene(tmp_path, restrict_first_observation=True)
+    provider = DeterministicRuleProvider(store)
+    provider._start(projection, t(27.0))
+    inference = provider._record(inputs={o: projection.objects[o]["current"] for o in ("route-R1", "obs-sensor-1")},
+                                 output={"rule_id": "x"}, recorded_time=t(27.0), downstream=("route-R1",))
+    assert not can_view(inference.marking, LOW_CONTEXT) and can_view(inference.marking, HIGH_CONTEXT)
+    proposal = provider._propose(inference, "ALERT_CANDIDATE", {"trigger": "obs-sensor-1 reports"}, t(27.1))
+    assert not can_view(proposal["marking"], LOW_CONTEXT)

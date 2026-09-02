@@ -18,10 +18,10 @@ campaign are outside scope.
 1. `curunir_operational/canonical.py` owns strict canonical values. Records,
    signatures, manifests, and imported values pass the same finite,
    Unicode-well-formed, deterministic JSON rule.
-2. `curunir_operational/security.py` owns the typed material-reference registry,
-   transitive reference closure, and marking admission. Every reference-shaped
-   schema field is classified as material or explicitly non-material. A new
-   unclassified reference field fails the registry-completeness test.
+2. `curunir_operational/security.py` owns the reference policy, transitive
+   reference closure, and marking admission. The policy is read from the typed
+   contract fields: every reference-shaped field is annotated as a reference or
+   explicitly as a label, and an unannotated one fails the completeness test.
 3. `MissionDataStore.append` is the unavoidable record admission point. It
    floors a marked record on its previous version and all resolved material
    dependencies before hashing. Import never repairs authenticated history; it

@@ -7,9 +7,11 @@ can record a human decision.
 """
 from __future__ import annotations
 
-from typing import Any, Iterable, Mapping
+import re
+from dataclasses import dataclass
+from typing import Any, Iterable, Iterator, Mapping
 
-from .access import AccessContext, Marking, can_view, inherited_marking, marking_from_record
+from .access import AccessContext, Marking, can_view, inherited_marking
 from .canonical import digest_id, sha256
 from .contracts import AnalyticalProposal, InferenceRecord, ModelPackage
 from .geometry import haversine_m, point_to_linestring_m
@@ -54,38 +56,95 @@ def _joined(markings: Iterable[Mapping[str, Any] | Marking]) -> Marking:
     return inherited_marking(markings[0], list(markings[1:]))
 
 
+def _text(value: Any) -> Iterator[str]:
+    """Every string inside a value, however deeply nested."""
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, Mapping):
+        for key, item in value.items():
+            yield str(key)
+            yield from _text(item)
+    elif isinstance(value, (list, tuple, set, frozenset)):
+        for item in value:
+            yield from _text(item)
+
+
+@dataclass(frozen=True)
+class Inference:
+    """A written inference record: its id, its marking and the object ids it read."""
+    inference_id: str
+    marking: Marking
+    inputs: frozenset[str]
+
+
 class _ProviderBase:
+    """Writes inference records and proposals.
+
+    A rule hands `_record` the records it read, keyed by object id. The
+    inference and every proposal made from it inherit the join of those
+    records' markings, and neither may name a projection object the rule did
+    not read: that would put an id in front of a viewer who may not see it.
+    """
+
     def __init__(self, store: MissionDataStore, package: ModelPackage, provider_actor: str):
         self.store = store
         self.package = package
         self.provider_actor = provider_actor
+        self._object_ids: re.Pattern[str] | None = None
+        self._started = False
 
     def ensure_registered(self, *, recorded_time: str) -> None:
         registered = [m for m in self.store.records_of("model_package") if m["model_id"] == self.package.model_id]
         if not registered:
             self.store.append("MODEL_REGISTERED", self.package, recorded_time=recorded_time, actor=self.provider_actor)
 
-    def _record(self, *, input_refs: tuple[str, ...], inputs: Any, output: Mapping[str, Any],
-                recorded_time: str, marking: Marking, downstream: tuple[str, ...],
-                errors: tuple[str, ...] = ()) -> str:
+    def _start(self, projection: Projection, recorded_time: str) -> None:
+        """Register the package and remember every object id the projection holds."""
+        self.ensure_registered(recorded_time=recorded_time)
+        ids = sorted(projection.objects, key=len, reverse=True)
+        # An id counts wherever letters or digits do not run straight into it.
+        self._object_ids = re.compile(r"(?<![A-Za-z0-9])(?:%s)(?![A-Za-z0-9])" % "|".join(map(re.escape, ids))) \
+            if ids else None
+        self._started = True
+
+    def _check_reads(self, what: str, value: Any, read: frozenset[str]) -> None:
+        """Refuse output that names an object the rule did not read."""
+        if not self._started:
+            raise RuntimeError("a rule records only inside a run: call _start first")
+        if self._object_ids is None:
+            return
+        unread = set(self._object_ids.findall(" ".join(_text(value)))) - read
+        if unread:
+            raise ValueError(f"{what} names {sorted(unread)} without reading them")
+
+    def _record(self, *, inputs: Mapping[str, Mapping[str, Any]], output: Mapping[str, Any], recorded_time: str,
+                downstream: tuple[str, ...], input_refs: tuple[str, ...] | None = None,
+                errors: tuple[str, ...] = ()) -> Inference:
+        read = frozenset(inputs)
+        self._check_reads("inference output", output, read)
+        marking = _joined([record["marking"] for record in inputs.values()])
         input_hash = sha256(inputs)
         inference = InferenceRecord(
             inference_id=digest_id("inf", self.package.model_id, input_hash, recorded_time),
             model_id=self.package.model_id, model_version=self.package.version,
-            input_refs=input_refs, input_hash=input_hash, output=dict(output), output_hash=sha256(output),
+            input_refs=input_refs if input_refs is not None else tuple(inputs), input_hash=input_hash,
+            output=dict(output), output_hash=sha256(output),
             started=recorded_time, completed=recorded_time, parameters={},
             errors=errors, validation="INVALID" if errors else "VALID", marking=marking,
             downstream_use=downstream,
         )
         self.store.append("INFERENCE_RECORDED", inference, recorded_time=recorded_time, actor=self.provider_actor)
-        return inference.inference_id
+        return Inference(inference.inference_id, marking, read)
 
-    def _propose(self, inference_id: str, proposal_type: str, content: Mapping[str, Any],
-                 recorded_time: str, marking: Marking) -> dict[str, Any]:
+    def _propose(self, inference: Inference, proposal_type: str, content: Mapping[str, Any],
+                 recorded_time: str) -> dict[str, Any]:
+        # A refusal here leaves the inference already in the log: evidence of
+        # the attempt, never state, since nothing materializes a bare inference.
+        self._check_reads(f"{proposal_type} proposal", content, inference.inputs)
         proposal = AnalyticalProposal(
-            proposal_id=digest_id("prop", inference_id, proposal_type, sha256(content)),
-            inference_id=inference_id, proposal_type=proposal_type, content=dict(content),
-            status="PROPOSED", recorded_time=recorded_time, marking=marking,
+            proposal_id=digest_id("prop", inference.inference_id, proposal_type, sha256(content)),
+            inference_id=inference.inference_id, proposal_type=proposal_type, content=dict(content),
+            status="PROPOSED", recorded_time=recorded_time, marking=inference.marking,
         )
         event = self.store.append(
             "ANALYTICAL_PROPOSAL_RECORDED", proposal,
@@ -120,17 +179,20 @@ class DeterministicRuleProvider(_ProviderBase):
 
     def run(self, projection: Projection, context: AccessContext, *, recorded_time: str,
             route_proximity_m: float = 500.0, hazard_impact_m: float = 30_000.0) -> list[dict[str, Any]]:
-        self.ensure_registered(recorded_time=recorded_time)
-        objects = self._visible_objects(projection, context)
-        relationships = self._visible_relationships(projection, context, set(objects))
-        proposals: list[dict[str, Any]] = []
-        proposals += self._rule_infrastructure_conflict(objects, relationships, recorded_time)
-        proposals += self._rule_reported_disruption(objects, relationships, recorded_time)
-        proposals += self._rule_hazard_impact(objects, recorded_time, hazard_impact_m)
-        proposals += self._rule_route_exposure(objects, relationships, recorded_time, route_proximity_m)
-        proposals += self._rule_stale_records(objects, recorded_time)
-        proposals += self._rule_source_dependence(projection, objects, recorded_time)
-        return proposals
+        self._start(projection, recorded_time)
+        try:
+            objects = self._visible_objects(projection, context)
+            relationships = self._visible_relationships(projection, context, set(objects))
+            proposals: list[dict[str, Any]] = []
+            proposals += self._rule_infrastructure_conflict(objects, relationships, recorded_time)
+            proposals += self._rule_reported_disruption(objects, relationships, recorded_time)
+            proposals += self._rule_hazard_impact(objects, recorded_time, hazard_impact_m)
+            proposals += self._rule_route_exposure(objects, relationships, recorded_time, route_proximity_m)
+            proposals += self._rule_stale_records(objects, recorded_time)
+            proposals += self._rule_source_dependence(projection, objects, recorded_time)
+            return proposals
+        finally:
+            self._started = False
 
     def _rule_hazard_impact(self, objects, recorded_time, hazard_impact_m) -> list[dict[str, Any]]:
         """Proposals for hazards close to a route or infrastructure object.
@@ -164,12 +226,10 @@ class DeterministicRuleProvider(_ProviderBase):
                     findings.append({"target_id": target_id, "distance_m": round(distance, 1)})
             if not findings:
                 continue
-            marking = _joined([hazard["marking"], *[targets[f["target_id"]]["marking"] for f in findings]])
-            inference = self._record(input_refs=(hazard_id, *[f["target_id"] for f in findings]),
-                                     inputs={"hazard": hazard, "findings": findings},
+            inputs = {hazard_id: hazard, **{f["target_id"]: targets[f["target_id"]] for f in findings}}
+            inference = self._record(inputs=inputs,
                                      output={"rule_id": rule_id, "hazard": hazard_id, "findings": findings},
-                                     recorded_time=recorded_time, marking=marking,
-                                     downstream=(hazard_id, *[f["target_id"] for f in findings]))
+                                     recorded_time=recorded_time, downstream=tuple(inputs))
             uncertainty = ("hazard geometry uncertainty "
                            f"{hazard_geometry.get('uncertainty_m') or 'UNKNOWN'} m; source timestamps preserved "
                            "verbatim from the feed (timezone-naive); distances are equirectangular approximations")
@@ -184,7 +244,7 @@ class DeterministicRuleProvider(_ProviderBase):
                                                                 "distance_m": finding["distance_m"],
                                                                 "threshold_m": hazard_impact_m},
                                                 "uncertainty": uncertainty},
-                                               recorded_time, marking))
+                                               recorded_time))
             proposals.append(self._propose(inference, "ALERT_CANDIDATE",
                                            {"rule_id": rule_id, "rule_version": self.RULES_VERSION,
                                             "trigger": f"hazard {hazard_id} "
@@ -198,7 +258,7 @@ class DeterministicRuleProvider(_ProviderBase):
                                                                   "follows the feed alert level",
                                             "dedup_key": f"{rule_id}:{hazard_id}",
                                             "expiry_condition": "until the hazard event closes"},
-                                           recorded_time, marking))
+                                           recorded_time))
         return proposals
 
     def _rule_reported_disruption(self, objects, relationships, recorded_time) -> list[dict[str, Any]]:
@@ -216,11 +276,9 @@ class DeterministicRuleProvider(_ProviderBase):
             if status not in DISRUPTION_STATES or target is None \
                     or target["current"]["object_type"] not in ("INFRASTRUCTURE", "ROUTE"):
                 continue
-            marking = _joined([observation["marking"], target["current"]["marking"]])
-            inference = self._record(input_refs=(observation["object_id"],), inputs=observation,
+            inference = self._record(inputs={observation["object_id"]: observation, target_id: target["current"]},
                                      output={"rule_id": rule_id, "target": target_id, "status": status},
-                                     recorded_time=recorded_time, marking=marking,
-                                     downstream=(target_id, observation["object_id"]))
+                                     recorded_time=recorded_time, downstream=(target_id, observation["object_id"]))
             proposals.append(self._propose(inference, "ALERT_CANDIDATE",
                                            {"rule_id": rule_id, "rule_version": self.RULES_VERSION,
                                             "trigger": f"{target_id} reported {status} by {observation['object_id']}",
@@ -230,7 +288,7 @@ class DeterministicRuleProvider(_ProviderBase):
                                             "severity_rationale": "reported disruption of corridor infrastructure",
                                             "dedup_key": f"{rule_id}:{target_id}:{status}",
                                             "expiry_condition": "until a superseding status report arrives"},
-                                           recorded_time, marking))
+                                           recorded_time))
         return proposals
 
     def _rule_infrastructure_conflict(self, objects, relationships, recorded_time) -> list[dict[str, Any]]:
@@ -250,23 +308,20 @@ class DeterministicRuleProvider(_ProviderBase):
             if len(distinct) < 2:
                 continue
             involved = sorted(statuses)
-            marking = _joined([objects[o]["current"]["marking"] for o in involved]
-                              + ([objects[target]["current"]["marking"]] if target in objects else []))
-            inputs = {o: objects[o]["current"] for o in involved}
-            inference = self._record(input_refs=tuple(involved), inputs=inputs,
+            inference = self._record(inputs={o: objects[o]["current"] for o in (*involved, target)},
                                      output={"rule_id": rule_id, "target": target, "statuses": statuses},
-                                     recorded_time=recorded_time, marking=marking, downstream=(target, *involved))
+                                     recorded_time=recorded_time, downstream=(target, *involved))
             pairs = [(involved[i], involved[j]) for i in range(len(involved)) for j in range(i + 1, len(involved))
                      if statuses[involved[i]] != statuses[involved[j]]]
             for left, right in pairs:
                 proposals.append(self._propose(inference, "RELATIONSHIP_CANDIDATE",
                                                {"relation_type": "CONFLICTS_WITH", "left": left, "right": right,
                                                 "rationale": f"{left} reports {statuses[left]}; {right} reports {statuses[right]}"},
-                                               recorded_time, marking))
+                                               recorded_time))
             proposals.append(self._propose(inference, "STATE_CANDIDATE",
                                            {"object_id": target, "epistemic_state": "DISPUTED",
                                             "reason": f"conflicting reported status: {distinct}"},
-                                           recorded_time, marking))
+                                           recorded_time))
             proposals.append(self._propose(inference, "ALERT_CANDIDATE",
                                            {"rule_id": rule_id, "rule_version": self.RULES_VERSION,
                                             "trigger": f"conflicting infrastructure reports on {target}",
@@ -275,7 +330,7 @@ class DeterministicRuleProvider(_ProviderBase):
                                             "severity_rationale": "conflicting reports on movement-critical infrastructure",
                                             "dedup_key": f"{rule_id}:{target}",
                                             "expiry_condition": "until conflict resolved"},
-                                           recorded_time, marking))
+                                           recorded_time))
             proposals.append(self._propose(inference, "RECOMMENDATION_CANDIDATE",
                                            {"action_kind": "INFORMATION_REQUEST",
                                             "proposed_action": f"request an additional independent observation of {target}",
@@ -287,7 +342,7 @@ class DeterministicRuleProvider(_ProviderBase):
                                             "potential_risk": "delay while awaiting observation",
                                             "required_role": "ANALYST",
                                             "dedup_key": f"rec:{rule_id}:{target}:observe"},
-                                           recorded_time, marking))
+                                           recorded_time))
             proposals.append(self._propose(inference, "RECOMMENDATION_CANDIDATE",
                                            {"action_kind": "SOURCE_INSPECTION",
                                             "proposed_action": f"inspect the conflicting reporting chain for {target}",
@@ -299,7 +354,7 @@ class DeterministicRuleProvider(_ProviderBase):
                                             "potential_risk": "analyst time",
                                             "required_role": "ANALYST",
                                             "dedup_key": f"rec:{rule_id}:{target}:inspect"},
-                                           recorded_time, marking))
+                                           recorded_time))
         return proposals
 
     def _rule_route_exposure(self, objects, relationships, recorded_time, route_proximity_m) -> list[dict[str, Any]]:
@@ -361,28 +416,30 @@ class DeterministicRuleProvider(_ProviderBase):
         involved = sorted(routes)
         if not involved:
             return proposals
-        # Every object a finding names contributes content, so the assessment
-        # inherits its marking too.
-        exposed = sorted({value for findings in exposure.values() for f in findings
-                          for key in ("disruption_id", "dependency") if (value := f.get(key))})
-        marking = _joined([routes[r]["current"]["marking"] for r in involved]
-                          + [objects[d]["current"]["marking"] for d in exposed if d in objects])
-        inference = self._record(input_refs=tuple(involved),
-                                 inputs={r: routes[r]["current"] for r in involved},
+        def named(findings):
+            return sorted({value for f in findings for key in ("disruption_id", "dependency") if (value := f.get(key))})
+
+        exposed = named([f for findings in exposure.values() for f in findings])
+        inference = self._record(inputs={o: objects[o]["current"] for o in (*involved, *exposed)},
                                  output={"rule_id": rule_id, "exposure": exposure},
-                                 recorded_time=recorded_time, marking=marking, downstream=tuple(involved))
+                                 recorded_time=recorded_time, downstream=tuple(involved))
         proposals.append(self._propose(inference, "ASSESSMENT",
                                        {"rule_id": rule_id, "kind": "route-exposure",
                                         "exposure": exposure,
                                         "least_exposed": min(sorted(exposure), key=lambda r: len(exposure[r]))},
-                                       recorded_time, marking))
+                                       recorded_time))
         for route_id, findings in sorted(exposure.items()):
             if not findings:
                 continue
             for movement_id in sorted(planned.get(route_id, ())):
                 clear_alternates = sorted(a for a in alternates.get(route_id, ()) if not exposure.get(a))
                 evidence = [route_id, movement_id] + [f["disruption_id"] for f in findings]
-                proposals.append(self._propose(inference, "ALERT_CANDIDATE",
+                read = (route_id, movement_id, *named(findings), *sorted(alternates.get(route_id, ())))
+                movement = self._record(inputs={o: objects[o]["current"] for o in read},
+                                        output={"rule_id": "rule-movement-route-risk", "route": route_id,
+                                                "movement": movement_id, "clear_alternates": clear_alternates},
+                                        recorded_time=recorded_time, downstream=(movement_id, route_id))
+                proposals.append(self._propose(movement, "ALERT_CANDIDATE",
                                                {"rule_id": "rule-movement-route-risk", "rule_version": self.RULES_VERSION,
                                                 "trigger": f"planned movement {movement_id} is exposed to disruption on {route_id}",
                                                 "affected_ids": [movement_id, route_id],
@@ -390,9 +447,9 @@ class DeterministicRuleProvider(_ProviderBase):
                                                 "severity_rationale": "planned movement routed over a disrupted or disputed segment",
                                                 "dedup_key": f"rule-movement-route-risk:{route_id}:{movement_id}",
                                                 "expiry_condition": "until movement completes or replans"},
-                                               recorded_time, marking))
+                                               recorded_time))
                 if clear_alternates:
-                    proposals.append(self._propose(inference, "RECOMMENDATION_CANDIDATE",
+                    proposals.append(self._propose(movement, "RECOMMENDATION_CANDIDATE",
                                                    {"action_kind": "ROUTE_CHANGE",
                                                     "proposed_action": f"replan movement {movement_id} onto {clear_alternates[0]}",
                                                     "rationale": f"{route_id} has {len(findings)} known disruption(s); "
@@ -406,7 +463,7 @@ class DeterministicRuleProvider(_ProviderBase):
                                                     "potential_risk": "longer distance; unverified alternate state",
                                                     "required_role": "SUPERVISOR",
                                                     "dedup_key": f"rec:route-change:{movement_id}"},
-                                                   recorded_time, marking))
+                                                   recorded_time))
         return proposals
 
     def _rule_stale_records(self, objects, recorded_time) -> list[dict[str, Any]]:
@@ -416,10 +473,9 @@ class DeterministicRuleProvider(_ProviderBase):
         proposals = []
         if not stale:
             return proposals
-        marking = _joined([e["current"]["marking"] for e in stale.values()])
-        inference = self._record(input_refs=tuple(stale), inputs={o: e["freshness"] for o, e in stale.items()},
-                                 output={"rule_id": rule_id, "stale": sorted(stale)},
-                                 recorded_time=recorded_time, marking=marking, downstream=tuple(stale))
+        inference = self._record(inputs={o: e["current"] for o, e in stale.items()},
+                                 output={"rule_id": rule_id, "stale": {o: e["freshness"] for o, e in stale.items()}},
+                                 recorded_time=recorded_time, downstream=tuple(stale))
         for object_id, entry in stale.items():
             proposals.append(self._propose(inference, "ALERT_CANDIDATE",
                                            {"rule_id": rule_id, "rule_version": self.RULES_VERSION,
@@ -432,7 +488,7 @@ class DeterministicRuleProvider(_ProviderBase):
                                             "severity_rationale": "planning over stale stock misstates readiness",
                                             "dedup_key": f"{rule_id}:{object_id}",
                                             "expiry_condition": "until a fresh stock report arrives"},
-                                           recorded_time, marking))
+                                           recorded_time))
             proposals.append(self._propose(inference, "RECOMMENDATION_CANDIDATE",
                                            {"action_kind": "SCHEDULE_CHANGE",
                                             "proposed_action": f"delay dependent movement until {object_id} is re-reported",
@@ -445,7 +501,7 @@ class DeterministicRuleProvider(_ProviderBase):
                                             "potential_risk": "schedule slip",
                                             "required_role": "SUPERVISOR",
                                             "dedup_key": f"rec:delay:{object_id}"},
-                                           recorded_time, marking))
+                                           recorded_time))
         return proposals
 
     def _rule_source_dependence(self, projection: Projection, objects, recorded_time) -> list[dict[str, Any]]:
@@ -455,10 +511,9 @@ class DeterministicRuleProvider(_ProviderBase):
             visible = [m for m in members if m in objects]
             if len(visible) < 2:
                 continue
-            marking = _joined([objects[m]["current"]["marking"] for m in visible])
-            inference = self._record(input_refs=tuple(visible), inputs={"group": group_id, "members": visible},
+            inference = self._record(inputs={m: objects[m]["current"] for m in visible},
                                      output={"rule_id": rule_id, "group_id": group_id, "members": visible},
-                                     recorded_time=recorded_time, marking=marking, downstream=tuple(visible))
+                                     recorded_time=recorded_time, downstream=tuple(visible))
             proposals.append(self._propose(inference, "ALERT_CANDIDATE",
                                            {"rule_id": rule_id, "rule_version": self.RULES_VERSION,
                                             "trigger": f"{len(visible)} reports share one underlying evidence basis "
@@ -468,7 +523,7 @@ class DeterministicRuleProvider(_ProviderBase):
                                             "severity_rationale": "dependent reporting can masquerade as corroboration",
                                             "dedup_key": f"{rule_id}:{group_id}",
                                             "expiry_condition": "standing notice while group persists"},
-                                           recorded_time, marking))
+                                           recorded_time))
         return proposals
 
 
@@ -481,20 +536,26 @@ class MockAssessmentProvider(_ProviderBase):
 
     def run(self, projection: Projection, context: AccessContext, object_id: str, *,
             recorded_time: str) -> dict[str, Any] | None:
-        self.ensure_registered(recorded_time=recorded_time)
+        self._start(projection, recorded_time)
+        try:
+            return self._assess(projection, context, object_id, recorded_time)
+        finally:
+            self._started = False
+
+    def _assess(self, projection: Projection, context: AccessContext, object_id: str,
+                recorded_time: str) -> dict[str, Any] | None:
         entry = projection.objects.get(object_id)
         if entry is None or not can_view(entry["current"].get("marking"), context):
             return None
         current = entry["current"]
         input_hash = sha256(current)
         grade = ["MINOR", "MODERATE", "SEVERE"][int(input_hash[:2], 16) % 3]
-        marking = marking_from_record(current["marking"])
-        inference = self._record(input_refs=(f"{object_id}@v{current['version']}",), inputs=current,
+        inference = self._record(inputs={object_id: current}, input_refs=(f"{object_id}@v{current['version']}",),
                                  output={"assessment": f"STRUCTURAL_IMPACT_{grade}",
                                          "caveat": "MOCK_OUTPUT_NO_ANALYTICAL_VALIDITY"},
-                                 recorded_time=recorded_time, marking=marking, downstream=(object_id,))
+                                 recorded_time=recorded_time, downstream=(object_id,))
         return self._propose(inference, "ASSESSMENT",
                              {"kind": "mock-damage-assessment", "object_id": object_id,
                               "assessment": f"STRUCTURAL_IMPACT_{grade}",
                               "caveat": "MOCK_OUTPUT_NO_ANALYTICAL_VALIDITY"},
-                             recorded_time, marking)
+                             recorded_time)

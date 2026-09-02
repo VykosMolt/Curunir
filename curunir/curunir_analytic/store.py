@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from curunir_semantic.store import SemanticStore
 
+from . import contracts  # noqa: F401  registers this package's record types
+
 ANALYTIC_EVENT_TYPES = {
     "ANALYTIC_THEME_RECORDED": "analytic_theme",
     "ANALYTIC_NARRATIVE_RECORDED": "analytic_narrative",
