@@ -1,21 +1,22 @@
 {
   "format": "curunir-v6.7-reconstruction-v1",
   "repository_layout": {
-    "package_root": "argus_demo",
+    "package_root": "curunir",
     "tracked_source": "git archive of the requested commit"
   },
   "external_kernel": {
     "availability": "operator-supplied; this repository has no download locator",
-    "mount_path": "argus_demo/argus",
+    "mount_path": "kernel/argus",
     "identity_algorithm": "sha256 over sorted Python source paths and bytes as path NUL bytes NUL",
     "python_file_count": 140,
-    "tree_sha256": "4c173df7412952b8318b7838a06ee991638fd9144eee2be36232c64aecfb7906"
+    "tree_sha256": "4c173df7412952b8318b7838a06ee991638fd9144eee2be36232c64aecfb7906",
+    "resolution": "CURUNIR_ARGUS_KERNEL, else <repository>/kernel/argus; verified against tree_sha256 before use"
   },
   "runtime": {
     "implementation": "CPython",
     "major_minor": "3.12",
     "platform": "Linux x86_64, glibc 2.28 or newer",
-    "requirements_file": "argus_demo/requirements.txt",
+    "requirements_file": "curunir/requirements.txt",
     "requirements_sha256": "c38db687b51b28ba785f608db4e7bcbd0d9da4564dc1ee84af04641daac0ac04"
   },
   "system_dependencies": {
@@ -24,5 +25,13 @@
     "postgresql": "required only for DB-marked legacy tests; absent service is reported as skipped"
   },
   "canonical_command": "uv run --python 3.12 --with-requirements requirements.txt python tools/reconstruct_v67.py --kernel /path/to/pinned/argus --output /tmp/curunir-v67-reconstructed",
-  "terminal_validation_command": "PLAYWRIGHT_BROWSERS_PATH=/path/to/playwright-cache uv run --python 3.12 --with-requirements requirements.txt python tools/validate_v67.py --kernel /path/to/pinned/argus --report /tmp/curunir-v67-terminal.json"
+  "terminal_validation_command": "PLAYWRIGHT_BROWSERS_PATH=/path/to/playwright-cache uv run --python 3.12 --with-requirements requirements.txt python tools/validate_v67.py --kernel /path/to/pinned/argus --report /tmp/curunir-v67-terminal.json",
+  "revised_2026_09_02": {
+    "date": "2026-09-02",
+    "repository": "Curunír, carved out of Saulot with git filter-repo",
+    "repository_root": "/home/moloch/Curunir",
+    "commit_ids": "Curunír ids; the Saulot ids they replaced are recoverable through CURUNIR_COMMIT_MAP_SAULOT.txt",
+    "paths": "argus_demo -> curunir; argus_demo/argus -> kernel/argus; worktrees folded into main",
+    "supersedes_sha256": "c3955e726c30d42aa1d16294f4394d8df947b7c94b4c3e9cbc2ab59871e78cb1"
+  }
 }

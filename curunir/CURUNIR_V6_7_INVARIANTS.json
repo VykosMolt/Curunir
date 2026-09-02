@@ -1,19 +1,67 @@
 {
   "schema": "curunir-v6.7-invariant-ledger-v1",
-  "rewrite_base": "97053154fd73707fdb9b66509bf4490a8f5a4ce6",
-  "reference_ref": "archive/curunir-v67-round38-33330efe6ae3",
-  "reference_head": "33330efe6ae3504150b012c88bfd1934f0871136",
+  "rewrite_base": "70f8503d70ec4b5febd58323ef4532b9e6185563",
+  "reference_ref": "archive/curunir-v67-round38-5341c25bc77c",
+  "reference_head": "5341c25bc77c310bb167ae492ef49408d04bc3f9",
   "contract_status": "FROZEN_BEFORE_IMPLEMENTATION",
   "invariants": [
     {
       "id": "V67-MARK-001",
       "name": "never_write_down",
       "protected_property": "A record, version, transition, alert, review item, or other derived artifact is never visible to a context that cannot view every material state value or existence fact it embeds.",
-      "objects_resources": ["all marked records", "versioned records", "analytic transitions", "workflow transitions", "association resolutions", "semantic changes", "alerts", "review items", "derived collection records"],
+      "objects_resources": [
+        "all marked records",
+        "versioned records",
+        "analytic transitions",
+        "workflow transitions",
+        "association resolutions",
+        "semantic changes",
+        "alerts",
+        "review items",
+        "derived collection records"
+      ],
       "trust_boundary": "restricted source or prior state to lower-marked background, authoring, refresh, or workflow context",
       "canonical_enforcement_point": "curunir_operational.security.admit_marking called by MissionDataStore.append; analytic append_version and record_transition supply typed material references; Projection.view filters embedded audit children and derives status from the visible transition prefix",
-      "historical_motivators": ["R-01", "R-02", "F-01", "F-02", "F-03b", "F-04", "R23B-1", "R24-A1/A2/A3", "R25A-1/A2/A3", "R26A-2", "R27A-2", "R28A-2/A4", "R29A-M2/M3", "R30A-C4", "R32A", "R33A", "R34A", "R35A-Ck1", "R36A", "R37-Ck1", "R38-Ck1", "REWRITE-V2-NESTED-TRANSITION-COMPOSITION", "V67-REV-C1", "V67-REV-C2", "V67-REV-M4", "V67-REV2-C1"],
-      "regression_tests": ["tests/v67/test_marking_regressions.py", "tests/v67/test_independent_review_regressions.py", "tests/test_analytic_analogues.py", "tests/test_operational_v2_integration.py", "tests/test_marking_information_flow_property.py", "tests/test_forecast_resolution_marking_leak.py", "tests/test_semantic_change_marking_leak.py", "tests/test_analytic_refresh_marking_leak.py", "tests/test_analytic_authoring_marking_leak.py", "tests/test_analytic_warning.py"],
+      "historical_motivators": [
+        "R-01",
+        "R-02",
+        "F-01",
+        "F-02",
+        "F-03b",
+        "F-04",
+        "R23B-1",
+        "R24-A1/A2/A3",
+        "R25A-1/A2/A3",
+        "R26A-2",
+        "R27A-2",
+        "R28A-2/A4",
+        "R29A-M2/M3",
+        "R30A-C4",
+        "R32A",
+        "R33A",
+        "R34A",
+        "R35A-Ck1",
+        "R36A",
+        "R37-Ck1",
+        "R38-Ck1",
+        "REWRITE-V2-NESTED-TRANSITION-COMPOSITION",
+        "V67-REV-C1",
+        "V67-REV-C2",
+        "V67-REV-M4",
+        "V67-REV2-C1"
+      ],
+      "regression_tests": [
+        "tests/v67/test_marking_regressions.py",
+        "tests/v67/test_independent_review_regressions.py",
+        "tests/test_analytic_analogues.py",
+        "tests/test_operational_v2_integration.py",
+        "tests/test_marking_information_flow_property.py",
+        "tests/test_forecast_resolution_marking_leak.py",
+        "tests/test_semantic_change_marking_leak.py",
+        "tests/test_analytic_refresh_marking_leak.py",
+        "tests/test_analytic_authoring_marking_leak.py",
+        "tests/test_analytic_warning.py"
+      ],
       "failure_behavior": "Interactive mutation refuses a non-expressible join. Background derivation records a deny-all sealed marking. No weaker record is committed.",
       "enforcement_scope": "prospective for new writes; historical markings are preserved across import, backup, replay, and key lifecycle"
     },
@@ -21,11 +69,43 @@
       "id": "V67-MARK-002",
       "name": "material_reference_completeness",
       "protected_property": "Every in-store field that carries a material object reference has one typed policy classification and participates in transitive marking and authority walks; association-only and provenance fields are explicit exclusions.",
-      "objects_resources": ["record schemas", "nested reference carriers", "basis_refs", "proposition_refs", "assumption_ids", "option_ids", "lineage", "depends_on", "relationship endpoints", "desired_subject_ref"],
+      "objects_resources": [
+        "record schemas",
+        "nested reference carriers",
+        "basis_refs",
+        "proposition_refs",
+        "assumption_ids",
+        "option_ids",
+        "lineage",
+        "depends_on",
+        "relationship endpoints",
+        "desired_subject_ref"
+      ],
       "trust_boundary": "schema evolution or alternate caller to the shared marking and gate policy",
       "canonical_enforcement_point": "curunir_operational.security material-reference registry plus registry-completeness regression",
-      "historical_motivators": ["R25A-2/A4", "R26A-1/A3/A4", "R27A-1/A3", "R28A-3/A4", "R29A", "R31A", "R32A", "R33A", "R34A-1/A2", "R35A-Ck1/Ck2", "R36A", "R37-Ck2", "R38-Ck2", "V67-REV-M3"],
-      "regression_tests": ["tests/v67/test_security_primitives.py", "tests/v67/test_independent_review_regressions.py", "tests/test_marking_information_flow_property.py", "tests/test_workbench_reports.py", "tests/test_analytic_warning.py"],
+      "historical_motivators": [
+        "R25A-2/A4",
+        "R26A-1/A3/A4",
+        "R27A-1/A3",
+        "R28A-3/A4",
+        "R29A",
+        "R31A",
+        "R32A",
+        "R33A",
+        "R34A-1/A2",
+        "R35A-Ck1/Ck2",
+        "R36A",
+        "R37-Ck2",
+        "R38-Ck2",
+        "V67-REV-M3"
+      ],
+      "regression_tests": [
+        "tests/v67/test_security_primitives.py",
+        "tests/v67/test_independent_review_regressions.py",
+        "tests/test_marking_information_flow_property.py",
+        "tests/test_workbench_reports.py",
+        "tests/test_analytic_warning.py"
+      ],
       "failure_behavior": "An unclassified reference-shaped schema field fails validation/tests; an unresolved required in-store reference fails closed rather than contributing no marking or authority state.",
       "enforcement_scope": "prospective and historical during authoritative replay walks"
     },
@@ -33,11 +113,42 @@
       "id": "V67-CTRL-001",
       "name": "authoritative_gate_complete_mediation",
       "protected_property": "A control decision reads authoritative raw state and transitive current basis, never merely the actor-filtered view. Hidden dissent, retraction, dispute, dead status, stale basis, expired temporal scope, or open review blocks approval on plain and signed paths.",
-      "objects_resources": ["report approval", "dissent", "four-eyes separation", "current claim state", "analytic status vocabularies", "review items", "report citations"],
+      "objects_resources": [
+        "report approval",
+        "dissent",
+        "four-eyes separation",
+        "current claim state",
+        "analytic status vocabularies",
+        "review items",
+        "report citations"
+      ],
       "trust_boundary": "access-filtered presentation layer to load-bearing authorization decision",
       "canonical_enforcement_point": "curunir_workbench.authority.authoritative_basis_concerns, called once by the shared report approval command before either plain or signed commit",
-      "historical_motivators": ["C-4/M-3", "four-eyes over-restriction", "B-3", "R23B-3", "R24-B1", "R25A-4", "R26A-1", "R27A-1/A3/A4", "R28A-1/A3", "R29A-C1/C2", "R30A-C1/C2", "R31A-C1/C2", "R32A", "R34A-4", "R35A-Ck2", "R36A", "R37-Ck2", "R38-Ck2"],
-      "regression_tests": ["tests/test_workbench_reports.py", "tests/test_identity_signed_operations.py", "tests/test_store_durability_review.py"],
+      "historical_motivators": [
+        "C-4/M-3",
+        "four-eyes over-restriction",
+        "B-3",
+        "R23B-3",
+        "R24-B1",
+        "R25A-4",
+        "R26A-1",
+        "R27A-1/A3/A4",
+        "R28A-1/A3",
+        "R29A-C1/C2",
+        "R30A-C1/C2",
+        "R31A-C1/C2",
+        "R32A",
+        "R34A-4",
+        "R35A-Ck2",
+        "R36A",
+        "R37-Ck2",
+        "R38-Ck2"
+      ],
+      "regression_tests": [
+        "tests/test_workbench_reports.py",
+        "tests/test_identity_signed_operations.py",
+        "tests/test_store_durability_review.py"
+      ],
       "failure_behavior": "Refuse with a typed report-validation concern. Hidden details remain undisclosed; the existence of a blocker may be signalled only within the report's own basis scope.",
       "enforcement_scope": "historical and current authoritative state"
     },
@@ -45,11 +156,29 @@
       "id": "V67-AUTH-001",
       "name": "ed25519_key_lifecycle",
       "protected_property": "Each public key has one permanent actor owner; enrollment, rotation, retirement, revocation, and compromise are append-only and marked without write-down. Multiple bounded active device keys are supported. Historical verification uses the key status at signing time, while compromise is retroactive.",
-      "objects_resources": ["actor_key records", "public keys", "key ownership", "active-key set", "historical signatures"],
+      "objects_resources": [
+        "actor_key records",
+        "public keys",
+        "key ownership",
+        "active-key set",
+        "historical signatures"
+      ],
       "trust_boundary": "bearer-bootstrapped enrollment and registry mutation to cryptographic actor authority",
       "canonical_enforcement_point": "curunir_identity.registry.KeyRegistry",
-      "historical_motivators": ["identity F1 cross-actor hijack", "identity F2 multi-device self-brick", "F2 active-key bound", "rotate self-brick", "round-14/16 key marking floors", "V67-REV-M1"],
-      "regression_tests": ["tests/v67/test_independent_review_regressions.py", "tests/test_identity_crypto.py", "tests/test_identity_server.py", "tests/test_store_migration.py"],
+      "historical_motivators": [
+        "identity F1 cross-actor hijack",
+        "identity F2 multi-device self-brick",
+        "F2 active-key bound",
+        "rotate self-brick",
+        "round-14/16 key marking floors",
+        "V67-REV-M1"
+      ],
+      "regression_tests": [
+        "tests/v67/test_independent_review_regressions.py",
+        "tests/test_identity_crypto.py",
+        "tests/test_identity_server.py",
+        "tests/test_store_migration.py"
+      ],
       "failure_behavior": "Refuse conflicting ownership, invalid resurrection, excess active keys, or invalid lifecycle transitions without retiring a working key as a side effect.",
       "enforcement_scope": "prospective lifecycle and historical verification"
     },
@@ -57,11 +186,28 @@
       "id": "V67-AUTH-002",
       "name": "bounded_single_use_sessions",
       "protected_property": "Challenge nonces and sessions are short-lived, single-use, actor-bound, bearer-gated at issuance, bounded per owner, and rechecked against live key status on every use.",
-      "objects_resources": ["authentication challenges", "session identifiers", "pending/session memory", "live key state"],
+      "objects_resources": [
+        "authentication challenges",
+        "session identifiers",
+        "pending/session memory",
+        "live key state"
+      ],
       "trust_boundary": "network client to authenticated actor session",
       "canonical_enforcement_point": "curunir_identity.sessions.SessionManager and authenticated HTTP challenge/time endpoints",
-      "historical_motivators": ["identity F5 unbounded anonymous challenge", "round-2 unbounded sessions", "B-5 victim eviction", "R23B-5 owner accounting", "V67-REV-M2", "V67-REV2-m1"],
-      "regression_tests": ["tests/v67/test_independent_review_regressions.py", "tests/test_identity_crypto.py", "tests/test_identity_server.py", "tests/test_workbench_signed_identity_browser.py"],
+      "historical_motivators": [
+        "identity F5 unbounded anonymous challenge",
+        "round-2 unbounded sessions",
+        "B-5 victim eviction",
+        "R23B-5 owner accounting",
+        "V67-REV-M2",
+        "V67-REV2-m1"
+      ],
+      "regression_tests": [
+        "tests/v67/test_independent_review_regressions.py",
+        "tests/test_identity_crypto.py",
+        "tests/test_identity_server.py",
+        "tests/test_workbench_signed_identity_browser.py"
+      ],
       "failure_behavior": "Expire, evict the flooder's own oldest state, or refuse with AuthError; never evict another principal as attacker-selected collateral. Capacity refusal after successful challenge verification preserves that still-valid challenge for retry.",
       "enforcement_scope": "prospective"
     },
@@ -69,11 +215,29 @@
       "id": "V67-AUTH-003",
       "name": "signed_action_exact_binding_and_order",
       "protected_property": "A signed action binds actor, actor kind, action type, target kind/id, exact target version token, mission, nonce, bounded timestamp, and material command. Verification consumes no authority record; authorization runs after verification; the signed audit record is appended only after successful effect.",
-      "objects_resources": ["signed action payloads", "report approval", "mission identity", "target versions", "nonces", "signed-action audit"],
+      "objects_resources": [
+        "signed action payloads",
+        "report approval",
+        "mission identity",
+        "target versions",
+        "nonces",
+        "signed-action audit"
+      ],
       "trust_boundary": "authenticated key holder to load-bearing product command",
       "canonical_enforcement_point": "curunir_identity.actions.verify_action plus curunir_workbench.signed_ops shared command application",
-      "historical_motivators": ["F-05 target transplant", "F-06 pre-authorization audit", "F-07 attacker timestamp", "F-08 actor-kind mismatch", "signed wrong-shape 500", "non-finite signed payload"],
-      "regression_tests": ["tests/test_identity_crypto.py", "tests/test_identity_signed_operations.py", "tests/test_identity_server.py"],
+      "historical_motivators": [
+        "F-05 target transplant",
+        "F-06 pre-authorization audit",
+        "F-07 attacker timestamp",
+        "F-08 actor-kind mismatch",
+        "signed wrong-shape 500",
+        "non-finite signed payload"
+      ],
+      "regression_tests": [
+        "tests/test_identity_crypto.py",
+        "tests/test_identity_signed_operations.py",
+        "tests/test_identity_server.py"
+      ],
       "failure_behavior": "Deterministic refusal status before command execution and before nonce/audit commitment. A successful command is applied once; crash between effect and audit remains an explicitly reported safe-direction limitation.",
       "enforcement_scope": "prospective and replay-historical"
     },
@@ -81,11 +245,24 @@
       "id": "V67-AUTH-004",
       "name": "browser_identity_last_mile",
       "protected_property": "The interactive browser uses a non-extractable WebCrypto Ed25519 device key and canonical bytes independently reproduced by the server; bearer identity cannot substitute for the private key on the signed approval path.",
-      "objects_resources": ["browser device key", "IndexedDB key handle", "canonical JavaScript serializer", "signed approval wire request"],
+      "objects_resources": [
+        "browser device key",
+        "IndexedDB key handle",
+        "canonical JavaScript serializer",
+        "signed approval wire request"
+      ],
       "trust_boundary": "interactive browser to HTTP signed-operation endpoint",
       "canonical_enforcement_point": "curunir_workbench/static/js/identity.js and canonical.js plus server-side verify_action",
-      "historical_motivators": ["browser identity product requirement", "F-J1 surrogate/key canonical divergence", "negative-zero parity", "transplant/stale/revoked browser probes"],
-      "regression_tests": ["tests/test_workbench_canonical_js_parity.py", "tests/test_workbench_signed_identity_browser.py"],
+      "historical_motivators": [
+        "browser identity product requirement",
+        "F-J1 surrogate/key canonical divergence",
+        "negative-zero parity",
+        "transplant/stale/revoked browser probes"
+      ],
+      "regression_tests": [
+        "tests/test_workbench_canonical_js_parity.py",
+        "tests/test_workbench_signed_identity_browser.py"
+      ],
       "failure_behavior": "Refuse unsupported or non-canonical signing values and invalid wire signatures; explicit bearer fallback does not claim cryptographic non-repudiation.",
       "enforcement_scope": "prospective"
     },
@@ -93,11 +270,36 @@
       "id": "V67-CANON-001",
       "name": "strict_total_interchange_values",
       "protected_property": "Persisted, signed, imported, provider-returned, and rendered values are deterministic well-formed interchange JSON: no lone surrogate, non-finite float, duplicate key, unsafe mixed container, or unbounded integer conversion reaches canonical persistence.",
-      "objects_resources": ["event records", "manifests", "signed payloads", "provider output", "HTTP validation errors", "browser canonical bytes"],
+      "objects_resources": [
+        "event records",
+        "manifests",
+        "signed payloads",
+        "provider output",
+        "HTTP validation errors",
+        "browser canonical bytes"
+      ],
       "trust_boundary": "hostile or exotic values to persistence, signing, replication, or response rendering",
       "canonical_enforcement_point": "curunir_operational.canonical strict validator; edge-specific total scrubbers only convert semantically untrusted proposal/render data before this refusal seam",
-      "historical_motivators": ["F8 surrogate series", "F-P1", "F-W1", "NEW-1", "NEW-A", "NEW-B", "NEW-C", "MAJOR-1 import by-value", "MAJOR-2 provider non-finite", "N-1 totality", "N-4 duplicate keys", "N-5 depth"],
-      "regression_tests": ["tests/test_store_durability_review.py", "tests/test_provider_egress_gate.py", "tests/test_identity_server.py", "tests/test_workbench_canonical_js_parity.py"],
+      "historical_motivators": [
+        "F8 surrogate series",
+        "F-P1",
+        "F-W1",
+        "NEW-1",
+        "NEW-A",
+        "NEW-B",
+        "NEW-C",
+        "MAJOR-1 import by-value",
+        "MAJOR-2 provider non-finite",
+        "N-1 totality",
+        "N-4 duplicate keys",
+        "N-5 depth"
+      ],
+      "regression_tests": [
+        "tests/test_store_durability_review.py",
+        "tests/test_provider_egress_gate.py",
+        "tests/test_identity_server.py",
+        "tests/test_workbench_canonical_js_parity.py"
+      ],
       "failure_behavior": "Refuse authoritative persistence/import/signature with a typed error and zero bytes committed. Untrusted provider/render data is safely normalized and remains explicitly untrusted.",
       "enforcement_scope": "prospective writes and historical foreign-artifact validation"
     },
@@ -105,11 +307,29 @@
       "id": "V67-STORE-001",
       "name": "append_and_torn_tail_durability",
       "protected_property": "The event log is a monotonic hash chain written under one append lock. Readers split only on LF. Recovery holds the same lock and repairs only a non-LF-terminated final write, preserving the original; committed corruption and incompatible versions are refused.",
-      "objects_resources": ["events.jsonl", ".append.lock", "event hash chain", "torn forensic copy", "store_meta.json"],
+      "objects_resources": [
+        "events.jsonl",
+        ".append.lock",
+        "event hash chain",
+        "torn forensic copy",
+        "store_meta.json"
+      ],
       "trust_boundary": "process crash or concurrent writer/recovery to durable mission history",
       "canonical_enforcement_point": "MissionDataStore append/read/recover_torn_tail primitives",
-      "historical_motivators": ["C-1 Unicode split", "C-2 recovery race", "C-3 rename window", "M-1 unterminated tail", "M-2 UTF-8 cut", "round-2 rollback window", "round-36/37 lock symlink/hardlink", "round-36 FIFO reads"],
-      "regression_tests": ["tests/test_store_crash_recovery.py", "tests/test_store_durability_review.py"],
+      "historical_motivators": [
+        "C-1 Unicode split",
+        "C-2 recovery race",
+        "C-3 rename window",
+        "M-1 unterminated tail",
+        "M-2 UTF-8 cut",
+        "round-2 rollback window",
+        "round-36/37 lock symlink/hardlink",
+        "round-36 FIFO reads"
+      ],
+      "regression_tests": [
+        "tests/test_store_crash_recovery.py",
+        "tests/test_store_durability_review.py"
+      ],
       "failure_behavior": "Typed StoreError with original bytes untouched for anything not proven to be an uncommitted torn tail.",
       "enforcement_scope": "historical and prospective"
     },
@@ -117,11 +337,32 @@
       "id": "V67-STORE-002",
       "name": "content_addressed_payload_integrity",
       "protected_property": "Payload names equal their SHA-256 content, writes are atomic, reads verify content, and non-regular/symlink/torn slots never yield evidence or a successful backup.",
-      "objects_resources": ["payload directory", "64-hex payload slots", "semantic evidence bodies", "backup payload inventory"],
+      "objects_resources": [
+        "payload directory",
+        "64-hex payload slots",
+        "semantic evidence bodies",
+        "backup payload inventory"
+      ],
       "trust_boundary": "filesystem crash or hostile destination/source layout to evidence custody",
       "canonical_enforcement_point": "MissionDataStore put_payload/get_payload and shared regular-file primitive",
-      "historical_motivators": ["R23 A-F2", "R24 B-1/B-2", "R25B-1/B-3", "R26B-1/B-2", "R27B-1", "R28B-3", "R29B-2", "R30B-3", "R31B-3", "R32/R34 dangling symlink", "R37 FIFO payload read"],
-      "regression_tests": ["tests/test_store_durability_review.py", "tests/test_backup_restore_marking.py", "tests/test_operational_v2_fabric.py"],
+      "historical_motivators": [
+        "R23 A-F2",
+        "R24 B-1/B-2",
+        "R25B-1/B-3",
+        "R26B-1/B-2",
+        "R27B-1",
+        "R28B-3",
+        "R29B-2",
+        "R30B-3",
+        "R31B-3",
+        "R32/R34 dangling symlink",
+        "R37 FIFO payload read"
+      ],
+      "regression_tests": [
+        "tests/test_store_durability_review.py",
+        "tests/test_backup_restore_marking.py",
+        "tests/test_operational_v2_fabric.py"
+      ],
       "failure_behavior": "Loud StoreError; a safe torn self-repair is allowed only when the caller supplies the correct body whose digest names the slot.",
       "enforcement_scope": "historical and prospective"
     },
@@ -129,11 +370,47 @@
       "id": "V67-IMPORT-001",
       "name": "validate_then_install_once",
       "protected_property": "Full restore, delta import, and bundle import strictly parse and preflight the entire authenticated artifact, every event, payload, version, path, destination, and overlap before any authoritative install. Full restore stages and publishes one complete store.",
-      "objects_resources": ["open export", "delta bundle", "PACE bundle", "events", "store metadata", "payloads", "destination root"],
+      "objects_resources": [
+        "open export",
+        "delta bundle",
+        "PACE bundle",
+        "events",
+        "store metadata",
+        "payloads",
+        "destination root"
+      ],
       "trust_boundary": "foreign, old, tampered, or crash-interrupted artifact to live mission store",
       "canonical_enforcement_point": "MissionDataStore validated staged installer and delta.apply_imported_events_locked using the same validators/file primitives",
-      "historical_motivators": ["F-I1", "NEW-2", "NEW-3", "M4 traversal", "MAJOR-1 imported poison", "MINOR-3/N-3 atomic delta", "N-4 duplicate keys", "A3/B-4 payload traversal", "R25B-2", "R26B-3/B-4", "R27B", "R28B", "R29B", "R30B", "R31B", "R32B", "R33B", "R34B", "R35B", "R36B", "R37B", "R38B"],
-      "regression_tests": ["tests/test_store_durability_review.py", "tests/test_operational_v2_fabric.py", "tests/test_store_migration.py", "tests/test_backup_restore_marking.py"],
+      "historical_motivators": [
+        "F-I1",
+        "NEW-2",
+        "NEW-3",
+        "M4 traversal",
+        "MAJOR-1 imported poison",
+        "MINOR-3/N-3 atomic delta",
+        "N-4 duplicate keys",
+        "A3/B-4 payload traversal",
+        "R25B-2",
+        "R26B-3/B-4",
+        "R27B",
+        "R28B",
+        "R29B",
+        "R30B",
+        "R31B",
+        "R32B",
+        "R33B",
+        "R34B",
+        "R35B",
+        "R36B",
+        "R37B",
+        "R38B"
+      ],
+      "regression_tests": [
+        "tests/test_store_durability_review.py",
+        "tests/test_operational_v2_fabric.py",
+        "tests/test_store_migration.py",
+        "tests/test_backup_restore_marking.py"
+      ],
       "failure_behavior": "Typed refusal with no installed root and no applied delta prefix for any preflight-detectable defect. Hostile omitted payloads fail loudly at read if generic completeness is not decidable.",
       "enforcement_scope": "historical foreign artifacts and prospective installation"
     },
@@ -141,11 +418,22 @@
       "id": "V67-EGRESS-001",
       "name": "guarded_network_egress",
       "protected_property": "Acquisition permits only HTTP(S) destinations whose resolved addresses are all public and rechecks redirect/final URLs before accepting bytes. Alternate numeric, IPv6, userinfo, case, trailing-dot, mapped, transition, multicast, metadata, and reserved-address forms do not bypass policy.",
-      "objects_resources": ["connector transport", "URLs", "DNS answers", "redirect chain", "retrieved bytes"],
+      "objects_resources": [
+        "connector transport",
+        "URLs",
+        "DNS answers",
+        "redirect chain",
+        "retrieved bytes"
+      ],
       "trust_boundary": "attacker-influenced source URL to network and ingestion",
       "canonical_enforcement_point": "curunir_fabric.transport.SafePublicTransport installed directly by connector base; each hop resolves once and the socket connects only to that validated address set",
-      "historical_motivators": ["SSRF review B soundness corpus"],
-      "regression_tests": ["tests/v67/test_egress_and_resources.py", "tests/test_fabric_executor_coverage.py"],
+      "historical_motivators": [
+        "SSRF review B soundness corpus"
+      ],
+      "regression_tests": [
+        "tests/v67/test_egress_and_resources.py",
+        "tests/test_fabric_executor_coverage.py"
+      ],
       "failure_behavior": "Refuse before opening a socket to an unsafe initial or redirect target. DNS answers containing any non-public address are refused, and validated addresses are pinned through connection to close re-resolution rebinding.",
       "enforcement_scope": "prospective"
     },
@@ -153,11 +441,26 @@
       "id": "V67-EGRESS-002",
       "name": "provider_governance",
       "protected_property": "A provider call is governed before egress by the effective marking of its material inputs; provider output remains an untrusted candidate requiring human acceptance and exact materialization binding.",
-      "objects_resources": ["provider policy", "input references", "provider cargo", "inference record", "analytical candidate"],
+      "objects_resources": [
+        "provider policy",
+        "input references",
+        "provider cargo",
+        "inference record",
+        "analytical candidate"
+      ],
       "trust_boundary": "mission evidence to external model/provider and provider result back to authoritative state",
       "canonical_enforcement_point": "curunir_analytic.providers.AnalyticalAssist.propose resolves declared references plus record ids carried in provider cargo against authoritative state; substrate candidate acceptance binds materialization",
-      "historical_motivators": ["provider egress requirement", "F-P1", "MAJOR-2", "N-1 totality", "B-6 declared refs versus cargo"],
-      "regression_tests": ["tests/v67/test_egress_and_resources.py", "tests/test_analytic_substrate.py"],
+      "historical_motivators": [
+        "provider egress requirement",
+        "F-P1",
+        "MAJOR-2",
+        "N-1 totality",
+        "B-6 declared refs versus cargo"
+      ],
+      "regression_tests": [
+        "tests/v67/test_egress_and_resources.py",
+        "tests/test_analytic_substrate.py"
+      ],
       "failure_behavior": "Refuse before provider call when governance is insufficient or any declared reference is unresolved; retain an INVALID inference record for hostile output without admitting it as a candidate.",
       "enforcement_scope": "prospective; provider seam is currently unwired"
     },
@@ -165,11 +468,27 @@
       "id": "V67-RESOURCE-001",
       "name": "limits_are_not_negative_evidence",
       "protected_property": "A truncated, throttled, malformed, source-error, or otherwise incomplete read cannot prove absence, removal, retraction, or a lifecycle downgrade. Genuine parsed empty results remain distinguishable.",
-      "objects_resources": ["fabric executions", "manifestations", "semantic changes", "forecast absence coverage", "source status"],
+      "objects_resources": [
+        "fabric executions",
+        "manifestations",
+        "semantic changes",
+        "forecast absence coverage",
+        "source status"
+      ],
       "trust_boundary": "resource cap or source failure to semantic/forecast truth claim",
       "canonical_enforcement_point": "execution outcome classification plus semantic truncation classification consumed by change interpretation and forecast absence coverage",
-      "historical_motivators": ["resource truncation forecast requirement", "F4 truncation removal", "round-2 normalizer caps", "round-4 region-map false positive", "source-side error 200"],
-      "regression_tests": ["tests/v67/test_egress_and_resources.py", "tests/v67/test_semantic_resource_limits.py", "tests/test_analytic_forecasts.py"],
+      "historical_motivators": [
+        "resource truncation forecast requirement",
+        "F4 truncation removal",
+        "round-2 normalizer caps",
+        "round-4 region-map false positive",
+        "source-side error 200"
+      ],
+      "regression_tests": [
+        "tests/v67/test_egress_and_resources.py",
+        "tests/v67/test_semantic_resource_limits.py",
+        "tests/test_analytic_forecasts.py"
+      ],
       "failure_behavior": "Record FAILED or UNRESOLVED_CHANGE with explicit warnings; never EMPTY, REMOVED, RETRACTED, or absence-supported FALSE unless the complete source semantics establish it.",
       "enforcement_scope": "prospective"
     },
@@ -177,11 +496,32 @@
       "id": "V67-RESOURCE-002",
       "name": "bounded_work_and_fault_provenance",
       "protected_property": "Hostile input cannot cause unbounded fetch, address failover, redirect time, parse, retry, fan-out, subprocess output, pending-auth state, or provider serialization. Source/content/network faults are contained as source failures; local custody, memory, and store-integrity faults propagate.",
-      "objects_resources": ["connector bodies", "RSS/XML", "pdftotext", "processing retries", "pivot proposals", "auth maps", "provider outputs"],
+      "objects_resources": [
+        "connector bodies",
+        "RSS/XML",
+        "pdftotext",
+        "processing retries",
+        "pivot proposals",
+        "auth maps",
+        "provider outputs"
+      ],
       "trust_boundary": "hostile content or remote failure to local availability and truthful blame",
       "canonical_enforcement_point": "one transport deadline shared across address attempts and redirects, connector/executor provenance boundary, shared XML admission guard, streaming bounded PDF subprocess wrapper, semantic retry budget, pivot cap, session caps, and strict provider-response admission",
-      "historical_motivators": ["F3/F6 RSS DTD", "F5 auth bounds", "F8 rounds 2/4/5/7", "F8-E1/E2/E3", "semantic poison retry", "fan-out cap", "pdftotext output bound", "N-1 provider totality"],
-      "regression_tests": ["tests/v67/test_egress_and_resources.py", "tests/v67/test_semantic_resource_limits.py", "tests/test_identity_server.py"],
+      "historical_motivators": [
+        "F3/F6 RSS DTD",
+        "F5 auth bounds",
+        "F8 rounds 2/4/5/7",
+        "F8-E1/E2/E3",
+        "semantic poison retry",
+        "fan-out cap",
+        "pdftotext output bound",
+        "N-1 provider totality"
+      ],
+      "regression_tests": [
+        "tests/v67/test_egress_and_resources.py",
+        "tests/v67/test_semantic_resource_limits.py",
+        "tests/test_identity_server.py"
+      ],
       "failure_behavior": "Bounded, typed, provenance-correct failure. Local integrity faults stop the operation; a bad remote source cannot abort unrelated plan/watch work.",
       "enforcement_scope": "prospective"
     },
@@ -189,11 +529,27 @@
       "id": "V67-BACKUP-001",
       "name": "consistent_backup_restore_replay",
       "protected_property": "Backup observes one locked, caught-up store state; its manifest authenticates metadata, event bytes, head, and every payload. Restore and deterministic replay reproduce identity, markings, access behavior, and mission state without network/provider access.",
-      "objects_resources": ["mission store", "backup manifest", "restored store", "signed-action replay", "access projections"],
+      "objects_resources": [
+        "mission store",
+        "backup manifest",
+        "restored store",
+        "signed-action replay",
+        "access projections"
+      ],
       "trust_boundary": "live concurrent store to disaster-recovery artifact and restored authority state",
       "canonical_enforcement_point": "MissionDataStore.export_to/import_from plus deterministic replay validators",
-      "historical_motivators": ["backup/restore product requirement", "B-2 stale exporter", "R25B-1", "R26B", "tampered backup cases"],
-      "regression_tests": ["tests/test_backup_restore_marking.py", "tests/test_identity_signed_operations.py", "tests/test_store_crash_recovery.py"],
+      "historical_motivators": [
+        "backup/restore product requirement",
+        "B-2 stale exporter",
+        "R25B-1",
+        "R26B",
+        "tampered backup cases"
+      ],
+      "regression_tests": [
+        "tests/test_backup_restore_marking.py",
+        "tests/test_identity_signed_operations.py",
+        "tests/test_store_crash_recovery.py"
+      ],
       "failure_behavior": "Backup fails at creation if it cannot prove consistency; restore refuses tampering/corruption before publication.",
       "enforcement_scope": "historical and prospective"
     },
@@ -201,11 +557,25 @@
       "id": "V67-MIGRATION-001",
       "name": "version_and_default_fail_closed",
       "protected_property": "Every store open and import checks contract compatibility. Missing privilege/visibility fields default to least privilege or deny, never to a more visible/human state. Rollback uses a previously verified backup and does not reinterpret history.",
-      "objects_resources": ["store metadata", "legacy records", "actor_kind", "marking min_role", "backup rollback"],
+      "objects_resources": [
+        "store metadata",
+        "legacy records",
+        "actor_kind",
+        "marking min_role",
+        "backup rollback"
+      ],
       "trust_boundary": "older or partial state to current runtime semantics",
       "canonical_enforcement_point": "MissionDataStore constructor/import version guard, fail-closed record decoders, verified backup restore",
-      "historical_motivators": ["M-4 constructor version bypass", "M-5 marking laundering", "legacy actor_kind privilege", "migration/rollback requirement"],
-      "regression_tests": ["tests/test_store_migration.py", "tests/test_backup_restore_marking.py"],
+      "historical_motivators": [
+        "M-4 constructor version bypass",
+        "M-5 marking laundering",
+        "legacy actor_kind privilege",
+        "migration/rollback requirement"
+      ],
+      "regression_tests": [
+        "tests/test_store_migration.py",
+        "tests/test_backup_restore_marking.py"
+      ],
       "failure_behavior": "Typed incompatibility refusal or least-privilege interpretation; no silent migration and no write-down.",
       "enforcement_scope": "historical and prospective"
     },
@@ -213,11 +583,26 @@
       "id": "V67-ORDER-001",
       "name": "referent_before_referrer",
       "protected_property": "When a non-transactional operation appends multiple records, it writes durable referents before records that claim those referents exist. Retry/version guards prevent duplicate authoritative effects.",
-      "objects_resources": ["manifestations and executions", "changes and watch summaries", "report versions and dispositions", "signed command and audit"],
+      "objects_resources": [
+        "manifestations and executions",
+        "changes and watch summaries",
+        "report versions and dispositions",
+        "signed command and audit"
+      ],
       "trust_boundary": "crash between appends to referential integrity and exactly-once replay",
       "canonical_enforcement_point": "shared operation-specific commit sequences documented and locked at integration boundaries",
-      "historical_motivators": ["F8-E2 execution dangling manifestations", "F-B1 watch ordering", "C-4 interrupted submit", "F-06 signed-action ordering"],
-      "regression_tests": ["tests/test_fabric_executor_coverage.py", "tests/test_fabric_watch.py", "tests/test_store_crash_recovery.py", "tests/test_identity_signed_operations.py"],
+      "historical_motivators": [
+        "F8-E2 execution dangling manifestations",
+        "F-B1 watch ordering",
+        "C-4 interrupted submit",
+        "F-06 signed-action ordering"
+      ],
+      "regression_tests": [
+        "tests/test_fabric_executor_coverage.py",
+        "tests/test_fabric_watch.py",
+        "tests/test_store_crash_recovery.py",
+        "tests/test_identity_signed_operations.py"
+      ],
       "failure_behavior": "A crash may leave an unreferenced fact or omit a non-authoritative audit record, never a committed claim to a missing authoritative referent or a duplicated effect.",
       "enforcement_scope": "prospective"
     },
@@ -225,13 +610,36 @@
       "id": "V67-REPRO-001",
       "name": "clean_checkout_reconstruction",
       "protected_property": "A clean tracked checkout plus explicitly hash-pinned external assets and declared dependencies can collect and run the V6.7 validation without local caches, untracked fixtures, implicit keys, databases for no_db tests, or working-tree imports.",
-      "objects_resources": ["tracked source", "test configuration", "dependency declaration", "external argus kernel", "terminal validation command"],
+      "objects_resources": [
+        "tracked source",
+        "test configuration",
+        "dependency declaration",
+        "external argus kernel",
+        "terminal validation command"
+      ],
       "trust_boundary": "developer workstation state to reproducible build/test environment",
       "canonical_enforcement_point": "tracked reconstruction manifest and terminal validation script that verifies the external kernel tree hash before running",
-      "historical_motivators": ["M-6 under-specified kernel hash", "archived pytest.ini untracked", "archived no_db suite skipped by autouse database fixture", "stale 6509-pass handoff count"],
-      "regression_tests": ["tests/v67/test_clean_reconstruction.py", "tools/validate_v67.py", "CURUNIR_V6_7_BASELINE_NONPASSING.json"],
+      "historical_motivators": [
+        "M-6 under-specified kernel hash",
+        "archived pytest.ini untracked",
+        "archived no_db suite skipped by autouse database fixture",
+        "stale 6509-pass handoff count"
+      ],
+      "regression_tests": [
+        "tests/v67/test_clean_reconstruction.py",
+        "tools/validate_v67.py",
+        "CURUNIR_V6_7_BASELINE_NONPASSING.json"
+      ],
       "failure_behavior": "Terminal validation stops with an explicit missing/mismatched dependency or external asset; it never falls back to the foreground worktree or an undeclared installed package.",
       "enforcement_scope": "prospective reconstruction with historical external-kernel identity"
     }
-  ]
+  ],
+  "revised_2026_09_02": {
+    "date": "2026-09-02",
+    "repository": "Curunír, carved out of Saulot with git filter-repo",
+    "repository_root": "/home/moloch/Curunir",
+    "commit_ids": "Curunír ids; the Saulot ids they replaced are recoverable through CURUNIR_COMMIT_MAP_SAULOT.txt",
+    "paths": "argus_demo -> curunir; argus_demo/argus -> kernel/argus; worktrees folded into main",
+    "supersedes_sha256": "f43ece4eb9f9c992c3bfca7167440b7c2127ce1f125b339dd3345ab123ca8b2b"
+  }
 }

@@ -4,7 +4,7 @@
   "objective": "Remove the retired research-campaign tree (curunir_operational/v3 through v5_8_1) and the tests that exercised only it, after lifting the surface the live product still depended on.",
   "archive": {
     "git_tag": "archive/curunir-campaign-tree-v5x",
-    "commit": "b314da83dd92a910cddcb97710a78b9e3151a25c",
+    "commit": "d845bdbd29782ec8b7c3e35a826968690539efcd",
     "note": "Every removed file is reachable at this tag. Nothing in this excision is unrecoverable."
   },
   "lift": {
@@ -54,7 +54,7 @@
       "after": 10886
     },
     "also_removed": {
-      "curunir_operational/write_observation.py": "767 lines; zero live importers \u2014 imported only by the campaign tree."
+      "curunir_operational/write_observation.py": "767 lines; zero live importers — imported only by the campaign tree."
     },
     "split_not_deleted": {
       "tests/test_c11_capability_gaps.py": "Mixed legacy and live coverage. F01 (kernel acquisition policy) and F14 (sovereignty exit test) retained; F03 prediction and the V4 security-review guard removed with the tree."
@@ -77,7 +77,7 @@
     "interpretation": "Every surviving node kept its exact outcome. The collection count drop is declared here and is the excision itself, not a regression or an increase in skipping."
   },
   "residual_nonpassing_after": {
-    "measured_environment": "committed tree, external ARGUS kernel mounted at argus_demo/argus/, full pytest run",
+    "measured_environment": "committed tree, external ARGUS kernel mounted at kernel/argus/, full pytest run",
     "count": 62,
     "node_set_sha256": "fd7198066a722d865e002792aa32d526ece9cb30f915edf606411f2e9d35e0e9",
     "curunir_product_plane": {
@@ -108,11 +108,19 @@
       "cause": "separate ARGUS research lines sharing this repository; they need corpora, models and ledgers that are not tracked here",
       "owned_by_this_programme": false
     },
-    "environment_gated_note": "tests/v67/test_clean_reconstruction.py needs the kernel (CURUNIR_ARGUS_KERNEL or argus_demo/argus/); with it supplied, all 3 pass. tests/test_curunir_v68.py refuses a dirty checkout by design; all 23 pass on a clean one."
+    "environment_gated_note": "tests/v67/test_clean_reconstruction.py needs the kernel (CURUNIR_ARGUS_KERNEL or kernel/argus/); with it supplied, all 3 pass. tests/test_curunir_v68.py refuses a dirty checkout by design; all 23 pass on a clean one."
   },
   "verification": {
     "clean_checkout_reconstruction": "tests/v67/test_clean_reconstruction.py PASSES (3/3): exports committed bytes with git archive, mounts the pinned kernel, and runs import -> create store -> export -> import -> replay with the isolated tree as the only import path. This is the load-bearing evidence that nothing the product needs was removed.",
     "curunir_product_plane": "769 passed, 1 pre-existing failure, 5 skipped",
     "v6_8_harness": "23/23 pass on a clean checkout"
+  },
+  "revised_2026_09_02": {
+    "date": "2026-09-02",
+    "repository": "Curunír, carved out of Saulot with git filter-repo",
+    "repository_root": "/home/moloch/Curunir",
+    "commit_ids": "Curunír ids; the Saulot ids they replaced are recoverable through CURUNIR_COMMIT_MAP_SAULOT.txt",
+    "paths": "argus_demo -> curunir; argus_demo/argus -> kernel/argus; worktrees folded into main",
+    "supersedes_sha256": "ca51894f5d27b98c245ba6a017b8b6a9762ecf9d9154851c0504e3efc678da6a"
   }
 }

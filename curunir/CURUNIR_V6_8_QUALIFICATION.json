@@ -2,20 +2,28 @@
   "format": "curunir-v6.8-qualification-contract-v2",
   "contract_state": "ACCEPTANCE_FROZEN_BEFORE_REPAIR; CAMPAIGN_ROOT_ADVANCED_BEFORE_HUMAN_PILOT",
   "frozen_on": "2026-08-21",
-  "supersedes_contract_sha256": "0a96f38e0962ffa73f63854905ac643fa8eee786b8a3c0d9dd4b10fcf9bc0149",
+  "supersedes_contract_sha256": "0df1f385662b9f56c115bb8dba796fb9a95bf9382e9213da1ce4dc067964a2b4",
   "objective": "Establish whether accepted Curunir V6 operates coherently across realistic heterogeneous intelligence missions with genuine human operation, preserved lineage, measurable outputs, and semantic replay.",
   "base_authority": {
-    "accepted_v6_7_commit": "5f0eb4d65986262f36d1d4356c65c3232928b60a",
-    "accepted_executable_parent": "dcbba239d222173da66abe0e974b25400864490b",
+    "accepted_v6_7_commit": "9c0182d47381344a01af996d3b0a4b3e2aec10f2",
+    "accepted_executable_parent": "6d014bda5d7d7561a5f2bf830684ead8bb3b6f7f",
     "accepted_terminal_status": "PASS_WITH_ACCEPTED_BASELINE_RESIDUALS",
     "repository_truth": "CURUNIR_V6_8_REPOSITORY_TRUTH.json",
     "mission_set": "CURUNIR_V6_8_MISSIONS.json",
     "repair_contract": {
       "path": "CURUNIR_V6_8_REPAIR_CONTRACT.json",
-      "sha256": "e2c74f8ce517379d9948ef2199385b44ee2b468fe0f3ddf4ac92ed295752cc5b"
+      "sha256": "ce1213a0ff1e8a358692b342a043d45ab82673e757221d48602ff54841a037ea"
     }
   },
-  "scope": ["three heterogeneous missions", "one continuous capstone", "real human pilot", "measurement", "evidence faithfulness", "custody replay", "terminal V6 qualification"],
+  "scope": [
+    "three heterogeneous missions",
+    "one continuous capstone",
+    "real human pilot",
+    "measurement",
+    "evidence faithfulness",
+    "custody replay",
+    "terminal V6 qualification"
+  ],
   "invariants": [
     "One inherited hash-chained mission store remains authoritative; V6.8 creates no parallel provenance system.",
     "All V6.7 marking, identity, signed-action, egress, recovery, replay, resource, and baseline gates remain in force.",
@@ -25,22 +33,79 @@
   ],
   "operator_protocol": {
     "path": "CURUNIR_V6_8_PILOT_PROTOCOL.md",
-    "sha256": "b1fe7e605cc9538d16f7c40e9f33d623dd5cca313a5d2a708f3641afd3ab62d6",
+    "sha256": "37b1a34ca03ada3efcaa8c01bc065910f69240f7f5c250dd4b12c9ea2afce128",
     "revision_note": "V68_TERMINAL_001 through V68_TERMINAL_003 are retained pre-human roots. Canonical human-pilot root is V68_TERMINAL_004 after closing remaining M3 path and content-binding residuals. Acceptance criteria are unchanged.",
     "surface": "Existing Curunir workbench, CLI, and HTTP API only; no new UI.",
-    "participants": ["one genuine primary human operator", "one distinct genuine human approver for every mission's four-eyes signed disposition"],
-    "sequence": ["read frozen mission brief", "authenticate with assigned actor identity", "start instrumented session", "inspect mission state and exact evidence", "record hypotheses and uncertainty", "task and receive collection where required", "revise analysis after evidence update", "record corrections and failures", "produce final artifact", "perform signed disposition", "end session"],
-    "instrumentation": ["task start and end", "actor and action kind", "system event sequence before and after", "evidence opened", "source provenance used", "hypothesis and forecast revisions", "collection and alert actions", "decisions and signed dispositions", "errors and refusals", "operator corrections and rework"],
+    "participants": [
+      "one genuine primary human operator",
+      "one distinct genuine human approver for every mission's four-eyes signed disposition"
+    ],
+    "sequence": [
+      "read frozen mission brief",
+      "authenticate with assigned actor identity",
+      "start instrumented session",
+      "inspect mission state and exact evidence",
+      "record hypotheses and uncertainty",
+      "task and receive collection where required",
+      "revise analysis after evidence update",
+      "record corrections and failures",
+      "produce final artifact",
+      "perform signed disposition",
+      "end session"
+    ],
+    "instrumentation": [
+      "task start and end",
+      "actor and action kind",
+      "system event sequence before and after",
+      "evidence opened",
+      "source provenance used",
+      "hypothesis and forecast revisions",
+      "collection and alert actions",
+      "decisions and signed dispositions",
+      "errors and refusals",
+      "operator corrections and rework"
+    ],
     "privacy": "Record actor ids and mission actions only. Do not record secrets, bearer tokens, private keys, unrelated browsing, keystrokes, or personal data."
   },
   "source_policy": {
-    "allowed": ["lawful public live sources already registered in V6", "preserved public captures", "clearly labeled notional fixtures with frozen bytes"],
-    "forbidden": ["credential bypass", "private or unlawfully obtained data", "search snippets as evidence", "uncustodied manual paste presented as source evidence", "test mocks claimed as production acquisition"]
+    "allowed": [
+      "lawful public live sources already registered in V6",
+      "preserved public captures",
+      "clearly labeled notional fixtures with frozen bytes"
+    ],
+    "forbidden": [
+      "credential bypass",
+      "private or unlawfully obtained data",
+      "search snippets as evidence",
+      "uncustodied manual paste presented as source evidence",
+      "test mocks claimed as production acquisition"
+    ]
   },
   "measurement_record": {
     "one_per_mission": true,
-    "required_fields": ["mission_status", "operator_elapsed_seconds", "system_processing_seconds", "evidence_items_inspected", "sources_used", "collection_actions", "alerts_or_warnings_reviewed", "hypothesis_revisions", "forecast_revisions", "operator_corrections", "system_refusals_or_errors", "lineage_complete_conclusions", "lineage_required_conclusions", "replay_status", "final_artifact_status", "confidence_before_after_when_authored"],
-    "separation": ["measured_value", "interpretation", "criterion"],
+    "required_fields": [
+      "mission_status",
+      "operator_elapsed_seconds",
+      "system_processing_seconds",
+      "evidence_items_inspected",
+      "sources_used",
+      "collection_actions",
+      "alerts_or_warnings_reviewed",
+      "hypothesis_revisions",
+      "forecast_revisions",
+      "operator_corrections",
+      "system_refusals_or_errors",
+      "lineage_complete_conclusions",
+      "lineage_required_conclusions",
+      "replay_status",
+      "final_artifact_status",
+      "confidence_before_after_when_authored"
+    ],
+    "separation": [
+      "measured_value",
+      "interpretation",
+      "criterion"
+    ],
     "threshold_law": "No performance threshold is invented. Binary integrity conditions may require exact success; descriptive timing and count measurements are reported without pass thresholds."
   },
   "evidence_requirements": [
@@ -58,7 +123,15 @@
     "Evidence arrival, state transitions, hypotheses, forecasts, collections, alerts, analyst decisions, and signed disposition reconstruct semantically.",
     "Semantic identity is canonical JSON over the defined audit state; irrelevant wall-clock duration, port, path, and UI rendering are excluded."
   ],
-  "mission_success": ["mission-specific completion criteria all hold", "genuine operator session is retained", "distinct approver's genuine signature is retained", "final artifact is complete", "faithfulness verification passes", "replay passes", "no manual waiver"],
+  "mission_success": [
+    "mission-specific completion criteria all hold",
+    "genuine operator session is retained",
+    "distinct approver's genuine signature is retained",
+    "final artifact is complete",
+    "faithfulness verification passes",
+    "replay passes",
+    "no manual waiver"
+  ],
   "terminal_verdict": {
     "PASS": "All V6.8 conditions hold and the full repository has no residual nonpass.",
     "PASS_WITH_ACCEPTED_BASELINE_RESIDUALS": "All V6.8 conditions hold, no new regression exists, and only the exact accepted V6.7 baseline residual subset remains.",
@@ -77,9 +150,86 @@
     "E": "Environment or external-source failure; retain as failure data and retry only within frozen policy.",
     "F": "Accepted baseline residual unrelated to mission validity; retain exact identity and severity."
   },
-  "required_coverage": ["mission and objectives", "source registry and policy", "acquisition and custody", "structured and unstructured evidence", "semantic world state and temporal change", "hypotheses and active collection", "analytical context and forecasting", "alerts warnings and decisions", "collaboration and access control", "evidence drilldown", "signed disposition", "export import and replay"],
-  "explicitly_out_of_scope": ["UI redesign or new frontend", "new architecture tranche", "imagery or video analysis", "persistent tracking", "multi-sensor fusion", "AIS or ADS-B operational fusion", "geospatial track association", "common operational picture", "live asset tracks", "operational map overlays", "Maven or Palantir parity", "V6.1 campaign changes", "Netwatch work"],
-  "forbidden_shortcuts": ["mocking a claimed production path", "hard-coded pass result", "trusting packaged status or coverage without live-root re-derivation", "synthetic human event", "unsigned manual result injection", "uncustodied evidence", "post-hoc contract weakening", "lossy capability aliasing", "mission waiver", "baseline-test weakening"],
-  "terminal_evidence": ["live-root re-derivation and byte agreement with each canonical package", "capability coverage matrix using exact frozen labels", "V7 follow-up ledger", "focused V6.8 adversarial tests", "focused V6.7 tests", "product-plane tests", "full accepted-residual and outcome-kind comparison", "clean reconstruction and kernel identity", "deterministic terminal report"],
-  "escalation": ["Stop for the genuine human pilot boundary.", "Stop before any change that would weaken a V6.7 invariant.", "Defer any missing Maven-class function to V7.", "Return NOT_ACHIEVED when required evidence cannot be established."]
+  "required_coverage": [
+    "mission and objectives",
+    "source registry and policy",
+    "acquisition and custody",
+    "structured and unstructured evidence",
+    "semantic world state and temporal change",
+    "hypotheses and active collection",
+    "analytical context and forecasting",
+    "alerts warnings and decisions",
+    "collaboration and access control",
+    "evidence drilldown",
+    "signed disposition",
+    "export import and replay"
+  ],
+  "explicitly_out_of_scope": [
+    "UI redesign or new frontend",
+    "new architecture tranche",
+    "imagery or video analysis",
+    "persistent tracking",
+    "multi-sensor fusion",
+    "AIS or ADS-B operational fusion",
+    "geospatial track association",
+    "common operational picture",
+    "live asset tracks",
+    "operational map overlays",
+    "Maven or Palantir parity",
+    "V6.1 campaign changes",
+    "Netwatch work"
+  ],
+  "forbidden_shortcuts": [
+    "mocking a claimed production path",
+    "hard-coded pass result",
+    "trusting packaged status or coverage without live-root re-derivation",
+    "synthetic human event",
+    "unsigned manual result injection",
+    "uncustodied evidence",
+    "post-hoc contract weakening",
+    "lossy capability aliasing",
+    "mission waiver",
+    "baseline-test weakening"
+  ],
+  "terminal_evidence": [
+    "live-root re-derivation and byte agreement with each canonical package",
+    "capability coverage matrix using exact frozen labels",
+    "V7 follow-up ledger",
+    "focused V6.8 adversarial tests",
+    "focused V6.7 tests",
+    "product-plane tests",
+    "full accepted-residual and outcome-kind comparison",
+    "clean reconstruction and kernel identity",
+    "deterministic terminal report"
+  ],
+  "escalation": [
+    "Stop for the genuine human pilot boundary.",
+    "Stop before any change that would weaken a V6.7 invariant.",
+    "Defer any missing Maven-class function to V7.",
+    "Return NOT_ACHIEVED when required evidence cannot be established."
+  ],
+  "supersession_chain": [
+    "0a96f38e0962ffa73f63854905ac643fa8eee786b8a3c0d9dd4b10fcf9bc0149",
+    "0df1f385662b9f56c115bb8dba796fb9a95bf9382e9213da1ce4dc067964a2b4"
+  ],
+  "authority_supersession": [
+    {
+      "superseded_on": "2026-09-02",
+      "reason": "Curunír became its own repository; paths and commit ids in the authority files were revised. Campaign roots prepared under this authority set (V68_TERMINAL_001..004) remain valid and are recognised by the harness through this ledger.",
+      "contract_sha256": "0df1f385662b9f56c115bb8dba796fb9a95bf9382e9213da1ce4dc067964a2b4",
+      "missions_sha256": "4bb1b0a0568a268693d5a59bdd11bbdc7d1e27d5b39a288ebfad5c768a7940c5",
+      "repository_truth_sha256": "f249ff7ce68d212395e51d1966e10a6e53f5d3df7dba4e24ef2da547dfe69037",
+      "repair_contract_sha256": "e2c74f8ce517379d9948ef2199385b44ee2b468fe0f3ddf4ac92ed295752cc5b",
+      "pilot_protocol_sha256": "b1fe7e605cc9538d16f7c40e9f33d623dd5cca313a5d2a708f3641afd3ab62d6"
+    }
+  ],
+  "revised_2026_09_02": {
+    "date": "2026-09-02",
+    "repository": "Curunír, carved out of Saulot with git filter-repo",
+    "repository_root": "/home/moloch/Curunir",
+    "commit_ids": "Curunír ids; the Saulot ids they replaced are recoverable through CURUNIR_COMMIT_MAP_SAULOT.txt",
+    "paths": "argus_demo -> curunir; argus_demo/argus -> kernel/argus; worktrees folded into main",
+    "supersedes_sha256": "0df1f385662b9f56c115bb8dba796fb9a95bf9382e9213da1ce4dc067964a2b4",
+    "note": "MISSIONS.json is byte-identical to the frozen version; the other four authority files were revised and re-pinned here"
+  }
 }

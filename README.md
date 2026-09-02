@@ -36,7 +36,10 @@ Saulot, then verify (`kernel/README.md`).
 ## History of the layout
 
 Until 2026-09-02 the product lived in the Saulot repository as `argus_demo/`,
-with the kernel mounted inside it. Frozen manifests and evidence written before
-that date still use those paths; `argus_demo` means `curunir` and
-`argus_demo/argus` means `kernel/argus`. Nothing frozen was rewritten.
-`NAVIGATION.md` is the map; `HOUSEKEEPING.md` is the rule set that keeps it so.
+with the kernel mounted inside it. The frozen manifests were revised the same
+day to the new paths and commit ids: each carries a `revised_2026_09_02` block
+naming the byte identity it supersedes, the V6.8 qualification contract ledgers
+the superseded authority hashes so the existing pilot evidence still verifies,
+and `curunir/CURUNIR_COMMIT_MAP_SAULOT.txt` maps every Saulot commit id. The
+untracked pilot evidence under `curunir_v68_runs/` was not edited and still
+records Saulot ids. `NAVIGATION.md` is the map; `HOUSEKEEPING.md` the rules.

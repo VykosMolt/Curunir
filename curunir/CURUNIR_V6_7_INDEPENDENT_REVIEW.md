@@ -3,7 +3,7 @@
 ## Frozen target and disposition
 
 Grok 4.6 xhigh independently reviewed clean-rewrite commit
-`300ee0c38350b30b56762396ce308f4414d65227` read-only.  It verified the
+`cf61eebde40cab95a90853059473bf3eee72906f` read-only.  It verified the
 archive/base/rewrite custody claims and the baseline-residual accounting, but
 returned `REJECT` / `DO_NOT_MERGE` because production probes demonstrated two
 write-downs and four material coverage/identity defects.  That rejection
@@ -31,7 +31,7 @@ The reviewer made no repository edits.
 ## Second review and retained findings
 
 Grok 4.6 xhigh independently reviewed repair commit
-`9dea19fbd9bf7e4e816a6d0ad1d915ccac4fafbe` read-only and again returned
+`a8b1a2aa5a3a2d3f095414277e8e8f04716eafb3` read-only and again returned
 `REJECT` / `DO_NOT_MERGE`.  It confirmed the claimed closures from the first
 review, then found one sibling write-down and one retry-semantics defect:
 
@@ -45,7 +45,7 @@ The second reviewer made no repository edits.
 ## Third review and acceptance
 
 Grok 4.6 xhigh independently reviewed repair commit
-`dcbba239d222173da66abe0e974b25400864490b` read-only and returned
+`6d014bda5d7d7561a5f2bf830684ead8bb3b6f7f` read-only and returned
 `ACCEPT` / `MERGE`.  It found no critical, major, or minor defect.  The
 reviewer independently established all of the following:
 
@@ -75,4 +75,4 @@ complete terminal validator or live network tests; it hash-checked the two
 primary engineer terminal reports and executed focused causal, concurrency,
 identity, and product probes.  It made no repository, ref, worktree, or
 dependency edits.  This independent disposition closes the review gate for
-the executable tree at `dcbba239d222173da66abe0e974b25400864490b`.
+the executable tree at `6d014bda5d7d7561a5f2bf830684ead8bb3b6f7f`.

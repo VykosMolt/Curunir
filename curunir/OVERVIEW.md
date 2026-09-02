@@ -1,9 +1,10 @@
 # curunir — the product root
 
 Every runnable path starts here. Until 2026-09-02 this directory was called
-`argus_demo/` (ARGUS was Curunír's earlier name); frozen manifests and evidence
-written before that date still say `argus_demo` and mean this directory. The
-ARGUS kernel is no longer mounted inside it: it lives in `../kernel/argus`.
+`argus_demo/` (ARGUS was Curunír's earlier name); the manifests were revised to
+the new name that day, and only the untracked pilot evidence still says
+`argus_demo`. The ARGUS kernel is no longer mounted inside it: it lives in
+`../kernel/argus`.
 
 ```bash
 cd curunir && export PYTHONPATH="$PWD:$PWD/../kernel"

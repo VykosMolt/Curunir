@@ -32,6 +32,8 @@ from tools.curunir_v68 import (
     _sha256_bytes,
     _supported_sentence_binding,
     _tree_manifest,
+    _accepted_authorities,
+    _current_authority,
     _validate_frozen_authority_files,
     _v67_report_findings,
     _write_json,
@@ -72,7 +74,7 @@ def test_repair_contract_freezes_protocol_and_corrected_starting_states():
     assert qualification["base_authority"]["repair_contract"]["sha256"] \
         == v68._sha256_file(REPAIR_CONTRACT_PATH)
     assert repair["reviewed_executable_sha"] \
-        == "5bb32e92d6ebb6fcf399631abaa1e0f4d81cc133"
+        == "83df706af0664e6c1ee31a6458f730ff005f3179"  # Curunír id; Saulot 5bb32e92 per CURUNIR_COMMIT_MAP_SAULOT.txt
     assert "baseline live captures" in missions[0]["starting_state"]
     assert "no preparation-authored analytical conclusion" in missions[1]["starting_state"]
     _validate_frozen_authority_files()
@@ -569,3 +571,34 @@ def test_failed_pilot_package_is_retained_without_credentials_or_waiver(tmp_path
     assert verify_package(root)["status"] == "PASS"
     with pytest.raises(V68Error, match="refusing to overwrite"):
         finalize_mission(root)
+
+
+def test_superseded_authority_is_accepted_only_when_ledgered_in_the_contract(monkeypatch: pytest.MonkeyPatch):
+    """A campaign root prepared under a superseded authority set is recognised
+    only through the frozen contract's ``authority_supersession`` ledger; an
+    unledgered set is refused, and an incomplete ledger entry is an error."""
+    current = _current_authority()
+    contract = json.loads(v68.CONTRACT_PATH.read_text(encoding="utf-8"))
+    ledgered = contract["authority_supersession"]
+    assert ledgered, "the 2026-09-02 revision must be ledgered"
+    accepted = _accepted_authorities()
+    assert accepted[0] == current
+    for entry in ledgered:
+        superseded = {**current, **{key: entry[key] for key in (
+            "contract_sha256", "missions_sha256", "repository_truth_sha256",
+            "repair_contract_sha256", "pilot_protocol_sha256")}}
+        assert superseded in accepted
+        forged = dict(superseded, pilot_protocol_sha256="f" * 64)
+        assert forged not in accepted
+    # the canonical human pilot root still verifies through the ledger
+    pilot = v68.REPO_ROOT / "curunir_v68_runs" / "V68_TERMINAL_004" / "M1_CORPORATE_REGISTRY_CAPSTONE"
+    if pilot.is_dir():
+        recorded = json.loads((pilot / "qualification_authority.json").read_text(encoding="utf-8"))
+        assert recorded in accepted
+
+    broken = dict(contract)
+    broken["authority_supersession"] = [{"contract_sha256": "0" * 64}]
+    monkeypatch.setattr(v68, "_read_json", lambda path: broken if path == v68.CONTRACT_PATH else json.loads(Path(path).read_text(encoding="utf-8")))
+    with pytest.raises(V68Error, match="incomplete"):
+        _accepted_authorities()
+

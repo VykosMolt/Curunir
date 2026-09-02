@@ -57,14 +57,17 @@ tag or commit it can be recovered from.
 The tests that asserted over it are deleted in the same change, with the same
 ledger line, so the suite never carries dead assertions silently.
 
-## 4. Frozen documents are read, not edited
+## 4. Frozen documents change only by ledgered revision
 
 Anything marked frozen or hash-pinned (`CURUNIR_V6_7_RECONSTRUCTION.json`,
 `*_REPOSITORY_TRUTH.json`, `CURUNIR_V6_8_PILOT_PROTOCOL.md`,
 `CURUNIR_V6_8_QUALIFICATION.json`, `CURUNIR_V6_9_EXCISION.json`) keeps its
-bytes. When the layout changes, the *code* that consumes them changes
-(environment variable, repo-relative default) and a note goes into
-`curunir/CURUNIR_DOCUMENTS.md`. This is why those files still say `argus_demo`.
+bytes between revisions. A revision is a change-control event and leaves three
+traces: a `revised_<date>` block in the file naming the sha256 it supersedes,
+an `authority_supersession` entry in the qualification contract when any of
+the five V6.8 authority files changed (so existing campaign roots still
+verify), and a section in `curunir/CURUNIR_DOCUMENTS.md`. Pilot evidence under
+`curunir_v68_runs/` is never revised.
 
 ## 5. The kernel is gold
 

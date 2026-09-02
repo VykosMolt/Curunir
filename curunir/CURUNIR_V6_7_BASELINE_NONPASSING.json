@@ -1,6 +1,6 @@
 {
   "format": "curunir-v6.7-accepted-baseline-nonpassing-v1",
-  "accepted_base_commit": "97053154fd73707fdb9b66509bf4490a8f5a4ce6",
+  "accepted_base_commit": "70f8503d70ec4b5febd58323ef4532b9e6185563",
   "measurement_method": "git archive of accepted base, external kernel mounted by exact V6.7 tree hash, current tracked no_db harness overlaid, current pinned requirements, full pytest suite with no cache provider",
   "harness": {
     "tests_conftest_sha256": "061f7d3193bb20978247dabbf02d0e8640c1ef80255a103d6392537f25c8b8b7",
@@ -158,5 +158,13 @@
     "tests.test_universal_extractor_v5h::test_v5h_fetch_manifest_covers_every_source_file",
     "tests.test_universal_extractor_v5h::test_v5h_heldout_expansion_is_additive_and_clean",
     "tests.test_universal_extractor_v5h::test_v5h_third_train_supersedes_with_convention_direction"
-  ]
+  ],
+  "revised_2026_09_02": {
+    "date": "2026-09-02",
+    "repository": "Curunír, carved out of Saulot with git filter-repo",
+    "repository_root": "/home/moloch/Curunir",
+    "commit_ids": "Curunír ids; the Saulot ids they replaced are recoverable through CURUNIR_COMMIT_MAP_SAULOT.txt",
+    "paths": "argus_demo -> curunir; argus_demo/argus -> kernel/argus; worktrees folded into main",
+    "supersedes_sha256": "f640956cc69f1d4251867267fd72e84fc77221ca72238f1b7a135448f469fa58"
+  }
 }

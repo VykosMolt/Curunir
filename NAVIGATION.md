@@ -53,7 +53,7 @@ Curunir/
 `curunir/CURUNIR_RECONSTRUCTION.md` → `kernel/README.md` → `curunir/tools/README.md`
 
 **"What happened historically?"**
-`curunir/CURUNIR_DOCUMENTS.md` → `curunir/CURUNIR_COMMIT_MAP_SAULOT.txt` →
+`curunir/CURUNIR_DOCUMENTS.md` (the revision section) → `curunir/CURUNIR_COMMIT_MAP_SAULOT.txt` →
 git tag `archive/curunir-campaign-tree-v5x` → the Saulot repository
 
 ## Conventions
@@ -61,7 +61,8 @@ git tag `archive/curunir-campaign-tree-v5x` → the Saulot repository
 - A directory's `README.md` is authoritative for that directory. If code and
   README disagree, that is a bug in the README — fix it in the same commit.
 - A document marked **frozen** was sealed before the work it governs. Several are
-  hash-pinned by another document. Editing one is a change-control event, which
-  is why the 2026-09-02 split left them saying `argus_demo`.
+  hash-pinned by another document. Editing one is a change-control event: the
+  2026-09-02 revision is recorded in each file's `revised_2026_09_02` block and
+  in the qualification contract's `authority_supersession` ledger.
 - Anything removed is recoverable from a git tag named in the ledger that
   removed it. Nothing is deleted without a ledger entry.

@@ -216,6 +216,40 @@ def _write_actors(root: Path) -> Path:
     return actors_path
 
 
+def _current_authority() -> dict[str, str]:
+    return {
+        "contract": CONTRACT_PATH.name,
+        "contract_sha256": _sha256_file(CONTRACT_PATH),
+        "missions": MISSIONS_PATH.name,
+        "missions_sha256": _sha256_file(MISSIONS_PATH),
+        "repository_truth": TRUTH_PATH.name,
+        "repository_truth_sha256": _sha256_file(TRUTH_PATH),
+        "repair_contract": REPAIR_CONTRACT_PATH.name,
+        "repair_contract_sha256": _sha256_file(REPAIR_CONTRACT_PATH),
+        "pilot_protocol": PROTOCOL_PATH.name,
+        "pilot_protocol_sha256": _sha256_file(PROTOCOL_PATH),
+    }
+
+
+def _accepted_authorities() -> list[dict[str, str]]:
+    """The authority sets a campaign root may carry.
+
+    The current byte identities of the five authority files come first.  A
+    superseded set is accepted only if the frozen qualification contract
+    ledgers it under ``authority_supersession`` with all five hashes: a
+    revision of the authority files is a change-control event recorded in the
+    contract, never an implicit pass."""
+    current = _current_authority()
+    accepted = [current]
+    for entry in _read_json(CONTRACT_PATH).get("authority_supersession", ()):
+        keys = ("contract_sha256", "missions_sha256", "repository_truth_sha256",
+                "repair_contract_sha256", "pilot_protocol_sha256")
+        if not all(isinstance(entry.get(key), str) and len(entry[key]) == 64 for key in keys):
+            raise V68Error("authority_supersession entry is incomplete")
+        accepted.append({**current, **{key: entry[key] for key in keys}})
+    return accepted
+
+
 def _copy_mission_authority(root: Path, mission_id: str) -> None:
     _validate_frozen_authority_files()
     _write_json(root / "mission_definition.json", _mission_definition(mission_id))
@@ -1985,20 +2019,9 @@ def assess_mission(root: Path, faithfulness: Mapping[str, Any],
     require(identity == current_identity, "PREPARATION_EXECUTABLE_IDENTITY_MISMATCH",
             "campaign was not prepared by this exact clean executable and pinned kernel")
     authority = _read_json(root / "qualification_authority.json")
-    expected_authority = {
-        "contract": CONTRACT_PATH.name,
-        "contract_sha256": _sha256_file(CONTRACT_PATH),
-        "missions": MISSIONS_PATH.name,
-        "missions_sha256": _sha256_file(MISSIONS_PATH),
-        "repository_truth": TRUTH_PATH.name,
-        "repository_truth_sha256": _sha256_file(TRUTH_PATH),
-        "repair_contract": REPAIR_CONTRACT_PATH.name,
-        "repair_contract_sha256": _sha256_file(REPAIR_CONTRACT_PATH),
-        "pilot_protocol": PROTOCOL_PATH.name,
-        "pilot_protocol_sha256": _sha256_file(PROTOCOL_PATH),
-    }
-    require(authority == expected_authority, "QUALIFICATION_AUTHORITY_MISMATCH",
-            "campaign authority hashes do not match the frozen repaired contract")
+    require(authority in _accepted_authorities(), "QUALIFICATION_AUTHORITY_MISMATCH",
+            "campaign authority hashes match neither the frozen repaired contract "
+            "nor a superseded authority set ledgered in it")
 
     record_types = {event["record"].get("record_type") for event in store_events}
     primary_brief = any(item.get("actor_id") == PRIMARY_ACTOR

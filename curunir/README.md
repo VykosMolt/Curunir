@@ -18,7 +18,8 @@ established.
 ## Where things are
 
 This directory is the product root. It was called `argus_demo/` until
-2026-09-02; frozen manifests still say so. `OVERVIEW.md` is the node map.
+2026-09-02, when the manifests were revised to the new layout (see
+`CURUNIR_DOCUMENTS.md`). `OVERVIEW.md` is the node map.
 
 | Path | What it is |
 |---|---|

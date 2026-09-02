@@ -1,9 +1,9 @@
 # Curunír V6.7 clean architecture contract
 
 This contract is frozen before implementation. Repository evidence at
-`archive/curunir-v67-round38-33330efe6ae3`, not that branch's architecture, is
+`archive/curunir-v67-round38-5341c25bc77c`, not that branch's architecture, is
 the behavioral reference. The rewrite starts at accepted V6.6 commit
-`97053154fd73707fdb9b66509bf4490a8f5a4ce6`.
+`70f8503d70ec4b5febd58323ef4532b9e6185563`.
 
 ## Objective and scope
 

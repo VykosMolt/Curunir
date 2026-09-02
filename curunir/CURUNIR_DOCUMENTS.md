@@ -62,24 +62,22 @@ and frozen, M2 signed but harness-`NOT_ACHIEVED`, M3 prepared and not run.
 | `CURUNIR_V6_9_HANDOFF.md` | Live | **Start here to resume work.** Branch and head, current state, what the last session did, the traps that cost it time, what is open and in what order. |
 | `CURUNIR_V6_9_EXCISION.json` | Ledger | Removal of the `v3`..`v5_8_1` research-campaign tree: what was lifted first and how equivalence was proven, what was removed, what was retained and why, and the measured node-set effect (zero new nodes, zero outcome-kind changes). The removed files live at tag `archive/curunir-campaign-tree-v5x`. |
 
-## A note on paths in frozen documents
+## Revision of 2026-09-02 — the repository split
 
-On 2026-09-02 the product root was renamed from `argus_demo/` to `curunir/`,
-the ARGUS kernel moved from `argus_demo/argus/` to `../kernel/argus/`, and the
-research lines moved to `../capsules/`. Frozen and evidence documents
-(`*_REPOSITORY_TRUTH.json`, `CURUNIR_V6_7_RECONSTRUCTION.json`,
-`CURUNIR_V6_8_PILOT_PROTOCOL.md`, `CURUNIR_V6_9_EXCISION.json`) still carry the
-old paths because their bytes are pinned; read `argus_demo` as `curunir` and
-`argus_demo/argus` as `kernel/argus`. The harness resolves the kernel from
-`CURUNIR_ARGUS_KERNEL` or `../kernel/argus` and verifies it against the frozen
-hash, so the recorded absolute path is evidence, not configuration.
+Curunír was carved out of the Saulot repository with `git filter-repo` on
+2026-09-02, and the frozen manifests were revised the same day. What changed
+and how it is accounted for:
 
-## Commit ids after the 2026-09-02 repository split
+| Change | Where it is recorded |
+|---|---|
+| Paths: `argus_demo` → `curunir`, `argus_demo/argus` → `kernel/argus`, `/home/moloch/Saulot` → `/home/moloch/Curunir`, worktrees folded into `main` | every revised JSON carries a `revised_2026_09_02` block with the sha256 it supersedes; the protocol has a revision note at its end |
+| Commit ids: every id in the frozen documents is now a Curunír id | `CURUNIR_COMMIT_MAP_SAULOT.txt` — one `old new` pair per line, covering `main` and the V6.7 reference lineage (tag `archive/curunir-v67-round38-33330efe6ae3`, whose *name* keeps the Saulot short id as a label) |
+| The five V6.8 authority files: `QUALIFICATION`, `MISSIONS` (byte-identical), `REPOSITORY_TRUTH`, `REPAIR_CONTRACT`, `PILOT_PROTOCOL` | `CURUNIR_V6_8_QUALIFICATION.json` re-pins the protocol and repair contract and ledgers the superseded hash set under `authority_supersession`; `tools/curunir_v68.py::_accepted_authorities` accepts a campaign root's authority set only if it is the current one or a ledgered one, and `tests/test_curunir_v68.py` proves an unledgered set is refused |
+| Pilot evidence (`../curunir_v68_runs/`) | **not edited.** It records Saulot ids and the superseded hashes; `V68_TERMINAL_004`'s three missions verify through the ledger |
+| The pinned kernel (`../kernel/argus/`) | untouched; three of its scripts still contain `argus_demo` strings, which is exactly what the hash guarantees |
 
-This repository was carved out of `Saulot` with `git filter-repo`, keeping only
-the product's paths. Every commit id changed. `CURUNIR_COMMIT_MAP_SAULOT.txt`
-is the map (old id, new id, one per line); frozen documents and pilot evidence
-cite the old ids, and the Saulot repository still holds them unchanged.
+The qualification contract's `supersession_chain` lists the byte identities it
+has passed through, oldest first.
 
 ## Conventions
 

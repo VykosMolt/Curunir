@@ -3,7 +3,7 @@
   "state": "FROZEN_BEFORE_REPAIR_IMPLEMENTATION_AND_BEFORE_HUMAN_PILOT",
   "frozen_on": "2026-08-21",
   "supersedes_qualification_sha256": "0a96f38e0962ffa73f63854905ac643fa8eee786b8a3c0d9dd4b10fcf9bc0149",
-  "reviewed_executable_sha": "5bb32e92d6ebb6fcf399631abaa1e0f4d81cc133",
+  "reviewed_executable_sha": "83df706af0664e6c1ee31a6458f730ff005f3179",
   "precondition": "No genuine V6.8 human pilot has occurred; every prepared or adversarial root remains ineligible for repaired qualification.",
   "objective": "Close independently demonstrated pre-pilot trust defects without adding product capability, UI work, architecture, or V7 scope.",
   "accepted_findings": {
@@ -47,5 +47,13 @@
     "M3 full and truncated restricted identifiers are detected and public mutation is refused.",
     "All original focused protections and affected V6.7 gates remain green under accepted residual methodology."
   ],
-  "escalation": "If a repair requires a product architecture change, UI redesign, V6.7 weakening, or V7 capability, retain NOT_ACHIEVED and stop before the human pilot."
+  "escalation": "If a repair requires a product architecture change, UI redesign, V6.7 weakening, or V7 capability, retain NOT_ACHIEVED and stop before the human pilot.",
+  "revised_2026_09_02": {
+    "date": "2026-09-02",
+    "repository": "Curunír, carved out of Saulot with git filter-repo",
+    "repository_root": "/home/moloch/Curunir",
+    "commit_ids": "Curunír ids; the Saulot ids they replaced are recoverable through CURUNIR_COMMIT_MAP_SAULOT.txt",
+    "paths": "argus_demo -> curunir; argus_demo/argus -> kernel/argus; worktrees folded into main",
+    "supersedes_sha256": "e2c74f8ce517379d9948ef2199385b44ee2b468fe0f3ddf4ac92ed295752cc5b"
+  }
 }

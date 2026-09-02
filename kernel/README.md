@@ -46,8 +46,9 @@ Curunír resolves the kernel from `CURUNIR_ARGUS_KERNEL` (the `argus` package
 directory itself) or, by default, `../kernel/argus` relative to the product
 root. `curunir/conftest.py` puts `kernel/` on `sys.path`; `tools/validate_v67.py`
 and `tools/reconstruct_v67.py` take `--kernel`. Before 2026-09-02 the tree was
-mounted inside the product root as `argus_demo/argus/`; frozen manifests still
-record that path as *evidence of what was used*, not as configuration.
+mounted inside the product root as `argus_demo/argus/`; the manifests were
+revised to `kernel/argus` that day and the harness verifies the hash, never
+the path.
 
 ## What else is here
 

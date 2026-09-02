@@ -182,12 +182,8 @@ LEDGER_MODE = 0o600
 #: genesis" is decidable.
 GENESIS_HASH = "0" * 64
 
-#: Repository root: ``.../argus_demo``.
+#: The product root (``.../curunir``).
 _REPO = Path(__file__).resolve().parent.parent
-
-_CAMPAIGN = (
-    _REPO / "artifacts" / "curunir_autonomous_completion_v5_8_1_20260725"
-)
 
 
 @dataclass(frozen=True)

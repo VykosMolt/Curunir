@@ -1,21 +1,24 @@
 # Curunír V6.9 — handoff
 
 **Date:** 2026-08-26 · **Branch:** `feature/curunir-v69-excision`
-**Worktree:** `/home/moloch/Saulot/.worktrees/curunir-v69` *(folded into `main` on 2026-09-02; see §0)*
-**Head:** `2bba6a8` · 7 commits ahead of `feature/curunir-v68-terminal-validation`
+**Worktree:** `/home/moloch/Curunir` *(folded into `main` on 2026-09-02; see §0)*
+**Head:** `0494a2e` · 7 commits ahead of `feature/curunir-v68-terminal-validation`
 **Nothing is pushed.** Nothing is merged.
 
 ---
 
 ## 0. Layout note (2026-09-02, after this handoff was written)
 
-`main` was fast-forwarded to this branch and the main working tree at
-`/home/moloch/Saulot` now carries it. The repository was then split into three
-planes: `argus_demo/` became **`curunir/`**, the ARGUS kernel moved to
-**`kernel/argus/`** (with its pinned tarball and its own tests), and the
-neural/capsule research lines moved to **`capsules/`**. Paths below that say
-`argus_demo` mean `curunir`; `argus_demo/argus` means `kernel/argus`. Frozen
-manifests were not rewritten. `../README.md` and `../NAVIGATION.md` are current.
+`main` was fast-forwarded to this branch, the product was split away from the
+ARGUS research lines, and Curunír became its own repository at
+`/home/moloch/Curunir` (private on GitHub as `VykosMolt/Curunir`). The product
+root is **`curunir/`** (formerly `argus_demo/`); the ARGUS kernel is an
+untracked, hash-verified tree at **`kernel/argus/`**; the neural and capsule
+lines stayed in Saulot. Commit ids in this repository differ from Saulot's:
+`CURUNIR_COMMIT_MAP_SAULOT.txt` maps them, and the frozen manifests were
+revised accordingly (`CURUNIR_DOCUMENTS.md`, "Revision of 2026-09-02"). The
+ids and paths quoted below are the revised ones. `../README.md` and
+`../NAVIGATION.md` are current.
 
 ## 1. Read this first
 
@@ -38,7 +41,7 @@ Orientation, in order: `../README.md` → `../NAVIGATION.md` →
 
 ## 3. What this session did
 
-**Excised the research-campaign tree** (`3f194d5`, `75ab5ee`).
+**Excised the research-campaign tree** (`cf740a3`, `0f06c3c`).
 `curunir_operational` went 67,314 → 10,886 lines; the suite 5,699 → 1,493
 nodes. 4,206 nodes removed, **all inside the declared removal set, zero new
 nodes, zero outcome-kind changes**. Ledger: `CURUNIR_V6_9_EXCISION.json`.
@@ -52,7 +55,7 @@ execution (58 documents, 116 invocations, 493 observations, **0 mismatches**).
 That module holds the multilingual provenance extractor — CELEX/ELI/Amtsblatt/
 Journal officiel identifiers — and is the most "European" asset in the repo.
 
-**Wired real model providers** (`ad35960`). `anthropic` and `openai` behind the
+**Wired real model providers** (`0942f52`). `anthropic` and `openai` behind the
 existing governed seam, plus a deterministic offline backend. The
 structured-output schema is *generated* from `CANDIDATE_BINDING_KEYS` and the
 `contracts` enums, so provider constraint and human review path cannot drift. A
@@ -60,11 +63,11 @@ provider may cite only identifiers it was shown. Credentials delegate to each
 SDK's own chain. Both SDKs optional and lazily imported; **neither is installed**.
 `POST /api/commands/proposals`, `GET /api/model/status`.
 
-**Documented the tree** (`079b99b`, `0a3400c`). Root `README.md`,
+**Documented the tree** (`9898d86`, `7c96d9a`). Root `README.md`,
 `NAVIGATION.md`, `OVERVIEW.md`, `CURUNIR_DOCUMENTS.md`, and a README at every
 node.
 
-**Rebuilt the workbench surface** (`e657a44`, `2bba6a8`). See §5.
+**Rebuilt the workbench surface** (`e550eed`, `0494a2e`). See §5.
 
 ## 4. Traps that cost time — do not rediscover these
 
@@ -131,15 +134,15 @@ Fixed at source. The overview header no longer opens with `store … · state �
   `argus_report_surface_v0` tarballs are 92 MB each, 22 minutes apart — one is
   almost certainly redundant.
 - **The kernel had no backup.** The pinned tree existed only as the live
-  `argus_demo/argus/`. `argus_kernel_pinned_4c173df7.tar.gz` now exists at the
+  `kernel/argus/`. `argus_kernel_pinned_4c173df7.tar.gz` now exists at the
   repo root and verifies against the pin. Keep it.
 
 ## 8. Running it
 
 ```bash
-cd /home/moloch/Saulot/curunir
+cd /home/moloch/Curunir/curunir
 export PYTHONPATH="$PWD:$PWD/../kernel"
-VENV=/home/moloch/Saulot/curunir/.venv/bin/python
+VENV=/home/moloch/Curunir/curunir/.venv/bin/python
 
 $VENV -m pytest tests/ -q -p no:cacheprovider          # the suite
 

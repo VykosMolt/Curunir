@@ -7,7 +7,7 @@ it is not a new UI or product plane.
 ## Custody and participants
 
 Use one new campaign root prepared by the repaired executable. Roots prepared
-by the reviewed `5bb32e9` executable and the superseded pre-human rehearsal
+by the reviewed `83df706` executable and the superseded pre-human rehearsal
 roots `V68_TERMINAL_001`, `V68_TERMINAL_002`, and `V68_TERMINAL_003` are
 retained evidence and are not qualification inputs. Never reuse, edit, or
 delete a mission root after
@@ -31,12 +31,12 @@ browsing.
 
 ## Common launch and session procedure
 
-From `argus_demo` in the V6.8 executable checkout:
+From `curunir` in the V6.8 executable checkout (`/home/moloch/Curunir/curunir`; the kernel is `../kernel/argus`):
 
 ```bash
-export PYTHONPATH="$PWD:/home/moloch/Saulot/argus_demo"
-export V68_PYTHON=/home/moloch/Saulot/argus_demo/.venv/bin/python
-export CAMPAIGN_ROOT=/home/moloch/Saulot/curunir_v68_runs/V68_TERMINAL_004
+export PYTHONPATH="$PWD:/home/moloch/Curunir/kernel"
+export V68_PYTHON=/home/moloch/Curunir/curunir/.venv/bin/python
+export CAMPAIGN_ROOT=/home/moloch/Curunir/curunir_v68_runs/V68_TERMINAL_004
 $V68_PYTHON -m tools.curunir_v68 prepare-all --campaign-root "$CAMPAIGN_ROOT"
 ```
 
@@ -234,7 +234,7 @@ From a clean exact executable checkout, the terminal reproduction command is:
 ```bash
 PLAYWRIGHT_BROWSERS_PATH=/tmp/curunir-v68-playwright \
   $V68_PYTHON tools/validate_v67.py \
-  --kernel /home/moloch/Saulot/argus_demo/argus \
+  --kernel /home/moloch/Curunir/kernel/argus \
   --report /tmp/curunir-v68-v67-current.json && \
 $V68_PYTHON -m tools.curunir_v68 terminal \
   --campaign-root "$CAMPAIGN_ROOT" \
@@ -249,3 +249,12 @@ kinds, test-collection bounds, clean reconstruction, and kernel pin. For each
 mission it also re-runs faithfulness, denied-network replay, assessment,
 measurement, and coverage from the live immutable root and requires exact
 agreement with the packaged projections.
+
+---
+
+## Revision note (2026-09-02)
+
+Paths and commit ids in this protocol were revised when Curunír became its own
+repository. The steps, participants, custody and session discipline are
+unchanged. The previous byte identity (sha256 `b1fe7e605cc9538d16f7c40e9f33d623dd5cca313a5d2a708f3641afd3ab62d6`)
+is recorded in `CURUNIR_V6_8_QUALIFICATION.json` under `authority_supersession`.

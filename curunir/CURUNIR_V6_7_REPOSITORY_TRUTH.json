@@ -1,9 +1,9 @@
 {
   "captured_date": "2026-08-21",
-  "repository_root": "/home/moloch/Saulot",
+  "repository_root": "/home/moloch/Curunir",
   "foreground": {
     "branch": "feature/curunir-v67-hardening",
-    "head": "33330efe6ae3504150b012c88bfd1934f0871136",
+    "head": "5341c25bc77c310bb167ae492ef49408d04bc3f9",
     "status": {
       "modified": 14,
       "untracked": 382,
@@ -12,25 +12,25 @@
     }
   },
   "main": {
-    "head": "97053154fd73707fdb9b66509bf4490a8f5a4ce6",
+    "head": "70f8503d70ec4b5febd58323ef4532b9e6185563",
     "subject": "fix(curunir): close the two derivation surfaces the root fix missed (5th review)",
-    "parent": "023348bbe26bbbe0284c317429acaf89988a1144"
+    "parent": "e885026703ed7796638c65b810920df7a4efa519"
   },
   "v6_6_terminal": {
-    "commit": "97053154fd73707fdb9b66509bf4490a8f5a4ce6",
+    "commit": "70f8503d70ec4b5febd58323ef4532b9e6185563",
     "verified_as_pre_v6_7_base": true,
     "evidence": [
       "It is main HEAD.",
       "It is the merge base of main and the archived V6.7 branch.",
-      "It is the sole parent of the first V6.7 commit da44a460fd926749d84c45b9360b1b6bfa9b6985.",
+      "It is the sole parent of the first V6.7 commit b69500092050a316c8385feaef477a0b1a88db35.",
       "The V6.7 branch contains 42 commits after it and main contains zero commits not in the V6.7 branch."
     ]
   },
   "v6_7_reference": {
     "historical_branch": "feature/curunir-v67-hardening",
-    "head": "33330efe6ae3504150b012c88bfd1934f0871136",
-    "tree": "36effa85d29f450c18a54f6803c85a8287cf183a",
-    "archival_ref": "refs/heads/archive/curunir-v67-round38-33330efe6ae3",
+    "head": "5341c25bc77c310bb167ae492ef49408d04bc3f9",
+    "tree": "0f3d5d645ff32a3ddda70a2494e1aa6cf01124a9",
+    "archival_ref": "refs/tags/archive/curunir-v67-round38-33330efe6ae3",
     "commits_after_base": 42,
     "round_at_head": 38,
     "merge_state": "NOT_CONVERGED",
@@ -41,18 +41,31 @@
       "CURUNIR_V6_7_HANDOFF.md",
       "CURUNIR_RECONSTRUCTION.md"
     ],
-    "prompt_discrepancy": "The prompt described approximately 37 rounds. Repository HEAD is an explicit round-38 repair and its handoff requires round 39; it is not converged."
+    "prompt_discrepancy": "The prompt described approximately 37 rounds. Repository HEAD is an explicit round-38 repair and its handoff requires round 39; it is not converged.",
+    "archival_ref_note": "the tag name keeps the Saulot short id 33330efe6ae3 as its historical label"
   },
   "rewrite": {
     "branch": "feature/curunir-v67-clean-rewrite",
-    "worktree": "/home/moloch/Saulot/.worktrees/curunir-v67-clean-rewrite",
-    "base": "97053154fd73707fdb9b66509bf4490a8f5a4ce6",
+    "worktree": "/home/moloch/Curunir (the clean-rewrite worktree was folded into main; its branch became main at the acceptance commit)",
+    "base": "70f8503d70ec4b5febd58323ef4532b9e6185563",
     "initial_status": "clean"
   },
   "tags": [
-    {"name": "report-surface-audit-v0", "object": "b78bcdc56a794c37b75c6f69d6ce117d51a897e2"},
-    {"name": "report-surface-v0-weak", "object": "5b702227897c1d01abd01a4e4fb8c64fbd61f708"},
-    {"name": "tiny256-story-capsule-v0", "object": "e1783279ed52f685165ed0892a46f4ec5cd2469d"}
+    {
+      "name": "report-surface-audit-v0",
+      "object": "6996a9ff091a55d16c383651593cf77182b6b10d",
+      "note": "capsule-line tag; lives in the Saulot repository, not here"
+    },
+    {
+      "name": "report-surface-v0-weak",
+      "object": "e89a86d282acce48e28d46e665f54e054c5dc39f",
+      "note": "capsule-line tag; lives in the Saulot repository, not here"
+    },
+    {
+      "name": "tiny256-story-capsule-v0",
+      "object": "bb3d9008abfd83cccde312a72362d1a25543d2af",
+      "note": "capsule-line tag; lives in the Saulot repository, not here"
+    }
   ],
   "tracked_structure": {
     "base_files": 1012,
@@ -67,14 +80,22 @@
       "curunir_workbench"
     ],
     "v6_7_added_package": "curunir_identity",
-    "external_kernel_mount": "argus_demo/argus"
+    "external_kernel_mount": "kernel/argus"
   },
   "baseline_measurement": {
     "command_shape": "python -m pytest tests/ -q -p no:cacheprovider with the exact tree first on PYTHONPATH and the external argus kernel mount second",
     "accepted_base_collected": 5543,
-    "accepted_base_result": {"passed": 362, "skipped": 5179, "failed": 2},
+    "accepted_base_result": {
+      "passed": 362,
+      "skipped": 5179,
+      "failed": 2
+    },
     "archived_v6_7_collected": 5843,
-    "archived_v6_7_result": {"passed": 362, "skipped": 5479, "failed": 2},
+    "archived_v6_7_result": {
+      "passed": 362,
+      "skipped": 5479,
+      "failed": 2
+    },
     "failures": [
       "tests/test_codec_stage2_field_head_study.py::test_no_symbolic_inverse",
       "tests/test_neural_carrier_no_symbolic_decoder.py::test_capsule_package_has_no_forbidden_inverse_or_payload_decoder"
@@ -83,12 +104,32 @@
   },
   "repaired_harness_comparison": {
     "method": "accepted V6.6 git archive and clean rewrite each executed with identical tracked no_db harness, pinned requirements, and hash-identical external kernel",
-    "accepted_base": {"tests": 5543, "passed": 5179, "skipped": 262, "failed": 84, "errors": 18},
-    "rewrite_at_fe1cb7625deed7a064286e02ade3ca653f26d59d": {"tests": 5665, "passed": 5314, "skipped": 262, "failed": 71, "errors": 18},
+    "accepted_base": {
+      "tests": 5543,
+      "passed": 5179,
+      "skipped": 262,
+      "failed": 84,
+      "errors": 18
+    },
+    "rewrite_at_fe1cb7625deed7a064286e02ade3ca653f26d59d": {
+      "tests": 5665,
+      "passed": 5314,
+      "skipped": 262,
+      "failed": 71,
+      "errors": 18
+    },
     "rewrite_only_nonpassing": 0,
     "accepted_base_only_nonpassing": 13,
     "outcome_kind_changes": 0,
     "exact_ledger": "CURUNIR_V6_7_BASELINE_NONPASSING.json",
     "interpretation": "All remaining rewrite nonpasses reproduce on the accepted base under the same harness. Eighty-seven require historical generated artifacts, corpora, models, or ledger files absent from tracked state; two are unchanged capsule symbolic-inverse assertions."
+  },
+  "revised_2026_09_02": {
+    "date": "2026-09-02",
+    "repository": "Curunír, carved out of Saulot with git filter-repo",
+    "repository_root": "/home/moloch/Curunir",
+    "commit_ids": "Curunír ids; the Saulot ids they replaced are recoverable through CURUNIR_COMMIT_MAP_SAULOT.txt",
+    "paths": "argus_demo -> curunir; argus_demo/argus -> kernel/argus; worktrees folded into main",
+    "supersedes_sha256": "f0abd13b1e934b370733124d286a57fa3d68a62b0023b55bcd4832c9f0400d74"
   }
 }
