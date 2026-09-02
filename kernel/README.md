@@ -40,6 +40,28 @@ rm -rf argus && tar xzf argus_kernel_pinned_4c173df7.tar.gz   # unpacks argus/
 The tarball's top-level entry is `argus/`, so it unpacks straight into place.
 Unpack as a real directory, never a symlink — the identity check rejects one.
 
+## How CI gets it
+
+The tarball is a GitHub release asset, never a tracked file. The workflow in
+`.github/workflows/ci.yml` downloads it from the release `kernel-4c173df7` and
+unpacks it with `curunir/tools/kernel_bundle.py`, which refuses any tree whose
+hash is not the pinned one. Publish (once, from a machine that holds the tarball):
+
+```bash
+gh release create kernel-4c173df7 kernel/argus_kernel_pinned_4c173df7.tar.gz \
+  --title "Pinned ARGUS kernel 4c173df7" --notes "Tree sha256 4c173df7… (140 files). See kernel/README.md."
+gh release upload kernel-4c173df7 kernel/schema.sql   # hash-checked by tests/test_operational_protection.py
+```
+
+Published on 2026-09-02; the release holds both assets.
+
+The same tool packs a fresh tarball from a verified tree and verifies a mounted one:
+
+```bash
+python curunir/tools/kernel_bundle.py verify kernel/argus
+python curunir/tools/kernel_bundle.py pack kernel/argus --out kernel/argus_kernel_pinned_4c173df7.tar.gz
+```
+
 ## How the product finds it
 
 Curunír resolves the kernel from `CURUNIR_ARGUS_KERNEL` (the `argus` package

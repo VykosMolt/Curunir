@@ -4,7 +4,6 @@ checks, PACE path safety, and the record index behind reference resolution."""
 from __future__ import annotations
 
 import hashlib
-import os
 
 import pytest
 
@@ -375,29 +374,6 @@ def test_b11_full_bundle_invariant_raises_store_error(tmp_path, monkeypatch):
                         lambda *a, **kw: {"base_entry_hash": "f" * 64})
     with pytest.raises(StoreError):
         delta.build_full_bundle(store, tmp_path / "bundle")
-
-
-# ---- B12: an unseal is recorded before the store becomes readable ----------
-
-def test_b12_unseal_is_registered_before_the_chmod(tmp_path, monkeypatch):
-    from curunir_operational import partition_custody as custody
-    store_path = tmp_path / "store.jsonl"
-    store_path.write_text('{"unit_id": "unit-1"}\n', encoding="utf-8")
-    croot = str(tmp_path / "custody")
-    custody.seal_store("TEST_STORE", root=croot, relative_path=str(store_path), reason="test")
-
-    registered_at_chmod: list[bool] = []
-    real_chmod = os.chmod
-
-    def spy(path, mode, *args, **kwargs):
-        registered_at_chmod.append("TEST_STORE" in custody._UNSEALED)
-        return real_chmod(path, mode, *args, **kwargs)
-
-    monkeypatch.setattr(custody.os, "chmod", spy)
-    with custody.open_sealed_partition("TEST_STORE", purpose="test", root=croot,
-                                       prerequisites={"ready": True}):
-        pass
-    assert registered_at_chmod and registered_at_chmod[0] is True
 
 
 # ---- P2: the record index answers exactly what a scan would ----------------

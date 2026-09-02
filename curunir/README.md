@@ -30,7 +30,7 @@ This directory is the product root. It was called `argus_demo/` until
 | `curunir_identity/` | Ed25519 actor identity, sessions, signed actions, replay verification |
 | `curunir_workbench/` | HTTP command surface + the analyst SPA |
 | `tests/` | the product suite: 64 modules plus the `v67/` security tranche |
-| `tools/` | Campaign harnesses and validators (`curunir_v68.py`, `validate_v67.py`, `reconstruct_v67.py`) |
+| `tools/` | Campaign harnesses and validators (`curunir_v68.py`, `validate_v67.py`, `reconstruct_v67.py`), the executable ledger (`ledger.py`) and the kernel bundle tool (`kernel_bundle.py`) |
 | `v68/` | frozen notional mission fixtures |
 
 Roughly 33k lines of product against 36k lines of tests.

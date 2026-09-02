@@ -1,0 +1,55 @@
+# Curunír CI: the product suite against the pinned ARGUS kernel.
+#
+# The kernel is not tracked (HOUSEKEEPING.md §5). CI fetches the pinned tarball
+# from the GitHub release named in KERNEL_RELEASE and refuses to run until its
+# tree hash matches the reconstruction manifest.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  KERNEL_RELEASE: kernel-4c173df7
+  KERNEL_ASSET: argus_kernel_pinned_4c173df7.tar.gz
+
+jobs:
+  product:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # the V6.8 harness records the exact commit
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: curunir/requirements.txt
+
+      - name: Install the pinned requirements
+        run: python -m pip install -r curunir/requirements.txt
+
+      - name: Install Chromium for the browser journeys
+        run: python -m playwright install --with-deps chromium
+
+      - name: Fetch the pinned kernel and its schema
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download "$KERNEL_RELEASE" --pattern "$KERNEL_ASSET" --dir kernel
+          gh release download "$KERNEL_RELEASE" --pattern schema.sql --dir kernel
+
+      - name: Unpack and verify the kernel
+        run: python curunir/tools/kernel_bundle.py unpack "kernel/$KERNEL_ASSET" --into kernel
+
+      - name: Product suite
+        working-directory: curunir
+        env:
+          PYTHONPATH: ${{ github.workspace }}/curunir:${{ github.workspace }}/kernel
+          CURUNIR_ARGUS_KERNEL: ${{ github.workspace }}/kernel/argus
+        run: >
+          python -m pytest tests/ -q -p no:cacheprovider
+          --deselect tests/test_operational_v2_integration.py::test_live_vs_synthetic_distinct

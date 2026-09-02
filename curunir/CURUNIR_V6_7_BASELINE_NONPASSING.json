@@ -166,5 +166,18 @@
     "commit_ids": "Curunír ids; the Saulot ids they replaced are recoverable through CURUNIR_COMMIT_MAP_SAULOT.txt",
     "paths": "argus_demo -> curunir; argus_demo/argus -> kernel/argus; worktrees folded into main",
     "supersedes_sha256": "f640956cc69f1d4251867267fd72e84fc77221ca72238f1b7a135448f469fa58"
+  },
+  "revised_2026_09_02_standalone_floors": {
+    "date": "2026-09-02",
+    "note": "tools/validate_v67.py collection floors re-based to the standalone Curunír suite after the partition-custody excision; the accepted nonpassing node set below is unchanged and all of its nodes belong to research lines that no longer live in this repository.",
+    "floors": {
+      "full_tests": 793,
+      "full_skips": 0,
+      "focused_v67_tests": 131,
+      "focused_skips": 0,
+      "product_tests": 555,
+      "product_skips": 0
+    },
+    "ledger": "tests/ledger.json"
   }
 }

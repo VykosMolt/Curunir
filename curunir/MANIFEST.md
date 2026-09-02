@@ -8,8 +8,8 @@ here and what does not.
 | Path | Tracked | Role |
 |---|---|---|
 | `curunir_fabric/ curunir_semantic/ curunir_analytic/ curunir_operational/ curunir_identity/ curunir_workbench/` | yes | the six product packages; each has a README |
-| `tests/` | yes | the product suite; `v67/` is the security tranche; `*_support.py` shared fixtures; `js/` the canonical-parity harness |
-| `tools/` | yes | `curunir_v68.py`, `validate_v67.py`, `reconstruct_v67.py`, `reconstruction_smoke.py` |
+| `tests/` | yes | the product suite; `v67/` is the security tranche; `*_support.py` shared fixtures; `js/` the canonical-parity harness; `ledger.json` the executable ledger (`tools/ledger.py --update`) |
+| `tools/` | yes | `curunir_v68.py`, `validate_v67.py`, `reconstruct_v67.py`, `reconstruction_smoke.py`, `ledger.py`, `kernel_bundle.py` |
 | `v68/` | yes | frozen notional mission fixtures (hash-verified by the harness) |
 | `CURUNIR_*.md`, `CURUNIR_*.json`, `CURUNIR_V6_7_REFERENCE_COMMITS.txt`, `CURUNIR_COMMIT_MAP_SAULOT.txt` | yes | contracts, ledgers, evidence, handoffs, the Saulot commit map — indexed in `CURUNIR_DOCUMENTS.md` |
 | `README.md`, `OVERVIEW.md`, `MANIFEST.md`, `C11_CAPABILITY_GAPS_HANDOFF.md` | yes | orientation |

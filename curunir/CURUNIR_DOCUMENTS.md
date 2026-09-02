@@ -79,6 +79,17 @@ and how it is accounted for:
 The qualification contract's `supersession_chain` lists the byte identities it
 has passed through, oldest first.
 
+## Revision of 2026-09-02 — partition custody excised
+
+`curunir_operational/partition_custody.py` (research-campaign custody with no
+product importer, retained in the V6.9 excision because its own test exercised
+it), that test module, and the untracked `tests/test_v3_adjudication_infra.py`
+(skipped itself at import since its subject tree left in V6.9) were removed.
+They are recoverable at the tag `archive/curunir-partition-custody-2026-09-02`.
+The record of the removal is the executable ledger, `tests/ledger.json`
+(`excised`), held by `tests/test_ledger.py`; `CURUNIR_V6_9_EXCISION.json`
+keeps its bytes and its now-historical "retained" note.
+
 ## Conventions
 
 - A document saying `FROZEN_BEFORE_...` was sealed before the work it governs, so

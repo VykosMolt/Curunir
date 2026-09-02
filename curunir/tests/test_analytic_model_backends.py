@@ -415,3 +415,72 @@ def test_proposal_endpoint_reports_an_unseeable_ref_as_unknown(tmp_path, monkeyp
         "task": "t", "target_kind": "analytic_theme",
         "input_refs": [seeded["secret_assumption_id"]]})
     assert response.status_code == 404
+
+
+# ---- every proposable kind works offline, end to end -----------------------
+
+def _kind_inputs(ctx, seeded):
+    """Real ids for every binding field, taken from the seeded mission."""
+    from curunir_analytic.analogues import record_episode
+    from curunir_analytic.narratives import create_narrative
+    from curunir_analytic.themes import create_theme
+    store = ctx.store
+    claims = [c["claim_id"] for c in seeded["claims"].values()]
+    objects = [r["object_id"] for r in store.records_of("object_version")
+               if not r["marking"].get("compartments")]
+    manifestations = [r["manifestation_id"] for r in store.records_of("fabric_manifestation")]
+    theme = create_theme(ctx, title="registry standing", supporting_claim_ids=claims[:1])
+    narrative = create_narrative(ctx, statement="Acme is a going concern", supporting_claim_ids=claims[:1])
+    episode = record_episode(ctx, title="the 2019 registry lapse", summary="a lapse that was cured",
+                             actor_object_ids=tuple(objects[:1]), event_ids=(), institutional_setting="registry",
+                             mechanism="lapsed renewal", claim_ids=tuple(claims[:1]))
+    return {
+        "analytic_theme": {"supporting_claim_ids": claims},
+        "analytic_narrative": {"supporting_claim_ids": claims},
+        "narrative_variant": {"claim_ids": claims[:1]},
+        "propagation_edge": {"narrative_id": narrative["narrative_id"],
+                             "from_manifestation_id": manifestations[0], "to_manifestation_id": manifestations[1]},
+        "stakeholder_assessment": {"entity_object_id": objects[0], "context_id": "mission", "claims": claims[:1]},
+        "influence_assertion": {"source_object_id": objects[0], "target_object_id": objects[1]},
+        "response_option": {"objective_id": seeded["objective"]["objective_id"], "path_id": seeded["path"]["path_id"]},
+        "historical_analogue": {"query_id": theme["theme_id"], "episode_id": episode["episode_id"]},
+        "analytic_forecast": {"claims": claims[:1]},
+        "forecast_indicator": {"forecast_ids": [seeded["forecast"]["forecast_id"]]},
+    }
+
+
+def test_the_offline_backend_proposes_every_kind_a_human_can_then_accept(tmp_path):
+    """One candidate per proposable kind: emitted, schema-valid, citing only
+    what it was shown, recorded, and accepted. A kind the offline seam cannot
+    complete is a defect, not a skip."""
+    from workbench_support import make_workbench, seed_mission
+    pipeline, ctx = make_workbench(tmp_path)
+    seeded = seed_mission(pipeline, ctx)
+    backend = DeterministicBackend()
+    assist = AnalyticalAssist(package=backend.package(), backend=backend)
+    inputs = _kind_inputs(ctx, seeded)
+    assert set(inputs) == set(proposable_kinds())
+    failures = {}
+    for kind in proposable_kinds():
+        result = assist.propose(ctx, task=f"propose {kind}", target_kind=kind,
+                                inputs=inputs[kind], input_refs=())
+        if result.get("status") != "PROPOSED":
+            failures[kind] = result
+            continue
+        content = result["proposal"]["content"]
+        schema = candidate_schema(kind)
+        for field, shape in schema["properties"].items():
+            value = content.get(field)
+            if shape.get("enum"):
+                assert value in shape["enum"], (kind, field, value)
+            elif shape.get("type") == "number":
+                assert 0 < value < 1, (kind, field, value)
+            elif shape.get("type") == "array":
+                assert value and all(isinstance(v, str) and v for v in value), (kind, field, value)
+            else:
+                assert isinstance(value, str) and value, (kind, field, value)
+        assert not unresolvable_ids(kind, content, available_ids(inputs[kind])), kind
+        resolved = resolve_candidate(ctx, result["proposal"]["proposal_id"], accept=True,
+                                     actor_id="jan", actor_kind="HUMAN")
+        assert resolved["content"]["target_kind"] == kind
+    assert not failures, failures

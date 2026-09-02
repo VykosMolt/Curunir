@@ -51,11 +51,18 @@ points at the old one. Then it is deleted, not kept "just in case":
 | Handoff and audit prose at the root | belongs in the plane it is about, or in a ledger. Delete the copy at the root. |
 | Duplicate copies of a tracked file | the working tree has one copy. If a byte-identical copy exists elsewhere in the repo, delete it. |
 
-Every deletion of something that was ever load-bearing gets a line in the
-nearest ledger (`curunir/CURUNIR_V6_9_EXCISION.json` style), naming the git
-tag or commit it can be recovered from.
-The tests that asserted over it are deleted in the same change, with the same
-ledger line, so the suite never carries dead assertions silently.
+Every deletion of something that was ever load-bearing gets an entry in the
+executable ledger, `curunir/tests/ledger.json` (`excised`: the paths, the date,
+the reason and the git tag they can be recovered from). `tests/test_ledger.py`
+then holds the tree to it: the paths stay gone and the tag stays reachable.
+The same ledger records what every test module collected when it was last
+accepted, so a module cannot shrink, vanish or skip itself away unnoticed, and
+which product modules are entry points, so nothing survives with no importer.
+Move the numbers on purpose with `python tools/ledger.py --update` in the
+change that earns them. Do not start a new prose ledger for a deletion; the
+JSON ledgers that exist stay as the record of their own revisions.
+The tests that asserted over a deleted thing are deleted in the same change,
+so the suite never carries dead assertions silently.
 
 ## 4. Frozen documents change only by ledgered revision
 

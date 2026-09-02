@@ -1,6 +1,6 @@
 # Tests
 
-64 modules plus the `v67/` tranche, against ~33k lines of product. Run from
+The product suite plus the `v67/` security tranche; `ledger.json` records what each module collects. Run from
 `curunir` with the product root and the kernel plane on `PYTHONPATH` (the root
 `conftest.py` does this for you when pytest is invoked from here).
 
@@ -23,6 +23,8 @@ live in `../../kernel/tests/` and the neural/capsule tests in
 | `test_workbench_*.py` | command layer, projections, reports, replay, browser E2E |
 | `test_curunir_v68.py` | the V6.8 pilot harness |
 | `v67/` | the V6.7 security tranche — see `v67/README.md` |
+| `test_ledger.py`, `ledger.json` | the executable ledger: per-module test counts, entry points, excisions (see below) |
+| `test_operational_surface_invariant.py` | no rendered surface names a record its viewer cannot see |
 | `*_support.py` | shared fixtures (`semantic_support`, `analytic_support`, `workbench_support`, `operational_support`) |
 | `fixtures/`, `js/` | text fixtures; the JS canonical-parity harness |
 
@@ -40,6 +42,23 @@ Two tests fail for environmental reasons and are not defects:
 
 Postgres-marked tests skip unless a database is up on port 5544; the entire
 `curunir_*` product runs file-backed without one.
+
+## The ledger
+
+`ledger.json` records what each test module collected when it was last
+accepted, which product modules are entry points, and what was excised (path,
+date, reason, archive tag). `test_ledger.py` fails when a module collects fewer
+tests than recorded, when a new module is not in the ledger, when a module
+skips itself at module level, when a product module has no importer and is not
+an entry point, or when an excised path returns or its tag is gone. Move the
+numbers deliberately, in the change that earns them:
+
+```bash
+.venv/bin/python tools/ledger.py --update
+```
+
+CI (`../../.github/workflows/ci.yml`) runs this suite on every push and pull
+request against the kernel fetched from the `kernel-4c173df7` GitHub release.
 
 ## House rules
 

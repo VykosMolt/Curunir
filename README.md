@@ -33,6 +33,15 @@ any campaign or reconstruction step runs. A fresh clone has no kernel: unpack
 `kernel/argus_kernel_pinned_4c173df7.tar.gz` there, or obtain the snapshot from
 the Argus repository (`~/Argus/kernel/argus`), then verify (`kernel/README.md`).
 
+## Continuous integration
+
+`.github/workflows/ci.yml` runs the product suite on every push and pull
+request: it installs the hash-locked requirements and Chromium, downloads the
+kernel tarball from the GitHub release `kernel-4c173df7`, verifies its tree
+hash with `curunir/tools/kernel_bundle.py`, and runs the suite. The release
+asset is published once by hand (`kernel/README.md`); until it exists the
+workflow fails at the download step and says so.
+
 ## History of the layout
 
 Until 2026-09-02 the product lived in the Argus repository (`/home/moloch/Argus`, called Saulot until 2026-09-02) as `argus_demo/`,
