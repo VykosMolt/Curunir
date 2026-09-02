@@ -123,3 +123,15 @@ def test_deterministic_reconstruction(tmp_path):
         return store.head()["head_hash"]
 
     assert build("a") == build("b")
+
+
+def test_refresh_sees_another_instance_s_append_without_reopening(tmp_path):
+    from operational_support import obj
+    writer = make_store(tmp_path)
+    reader = MissionDataStore(writer.root)
+    writer.append("OBJECT_VERSION_APPENDED", obj("infra-1", "INFRASTRUCTURE"), recorded_time=t(1.0), actor="w")
+    assert reader.records_of("object_version") == []
+    head = reader.refresh()
+    assert head == writer.head()["head_hash"]
+    assert [r["object_id"] for r in reader.records_of("object_version")] == ["infra-1"]
+    assert reader.refresh() == head

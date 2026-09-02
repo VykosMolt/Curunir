@@ -521,6 +521,16 @@ class MissionDataStore:
         self._load_event_bytes(tail, label=f"{self.events_path} catch-up")
         self._file_offset += len(tail)
 
+    def refresh(self) -> str:
+        """Read whatever another writer appended since this instance last looked.
+
+        A long-lived store (one per server process) calls this before serving
+        a request instead of re-reading the whole log. Returns the head hash.
+        """
+        with self._append_lock():
+            self._catch_up()
+        return self._head_hash
+
     def _locked_write(self, event: Mapping[str, Any]) -> None:
         body = (canonical_line(event) + "\n").encode("utf-8")
         flags = os.O_WRONLY | os.O_APPEND | getattr(os, "O_NOFOLLOW", 0)
