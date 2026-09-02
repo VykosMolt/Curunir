@@ -25,8 +25,8 @@ here and what does not.
 
 - The ARGUS kernel (`../kernel/argus`). Never mount or copy it in here; the
   reconstruction tool refuses tracked state that contains it.
-- `argus_neural`, `argus_capsules`, `artifacts/` — the Saulot repository.
-- The kernel's Postgres kit, corpus and inboxes — the Saulot repository.
+- `argus_neural`, `argus_capsules`, `artifacts/` — the Argus repository (formerly Saulot).
+- The kernel's Postgres kit, corpus and inboxes — the Argus repository (formerly Saulot).
   `schema.sql` alone sits in `../kernel`, untracked.
 - Campaign output roots (`*_2026MMDD/`), `p2.json`-style run dumps, contract
   scratch directories. Closed campaigns are deleted with a ledger line.

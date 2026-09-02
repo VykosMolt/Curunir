@@ -54,7 +54,7 @@ Curunir/
 
 **"What happened historically?"**
 `curunir/CURUNIR_DOCUMENTS.md` (the revision section) → `curunir/CURUNIR_COMMIT_MAP_SAULOT.txt` →
-git tag `archive/curunir-campaign-tree-v5x` → the Saulot repository
+git tag `archive/curunir-campaign-tree-v5x` → the Argus repository (formerly Saulot)
 
 ## Conventions
 

@@ -38,7 +38,7 @@ Roughly 33k lines of product against 36k lines of tests.
 ### Not here
 
 The ARGUS kernel lives in `../kernel/argus/`, untracked and hash-pinned. The
-neural and capsule research lines live in the Saulot repository, not here.
+neural and capsule research lines live in the Argus repository (`/home/moloch/Argus`, called Saulot until 2026-09-02), not here.
 
 ---
 

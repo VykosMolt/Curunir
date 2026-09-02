@@ -13,7 +13,7 @@ restore procedure.
 | `schema.sql` | no (excluded) | hash-checked by `curunir/tests/test_operational_protection.py` |
 
 Everything else the kernel plane once held (Postgres kit, review app, corpus,
-inboxes, docs, research tests) lives in the Saulot repository.
+inboxes, docs, research tests) lives in the Argus repository (`/home/moloch/Argus`, called Saulot until 2026-09-02).
 
 ## Does not belong here
 

@@ -64,7 +64,7 @@ and frozen, M2 signed but harness-`NOT_ACHIEVED`, M3 prepared and not run.
 
 ## Revision of 2026-09-02 — the repository split
 
-Curunír was carved out of the Saulot repository with `git filter-repo` on
+Curunír was carved out of the Argus repository (formerly Saulot) with `git filter-repo` on
 2026-09-02, and the frozen manifests were revised the same day. What changed
 and how it is accounted for:
 

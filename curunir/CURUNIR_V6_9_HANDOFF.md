@@ -14,7 +14,7 @@ ARGUS research lines, and Curunír became its own repository at
 `/home/moloch/Curunir` (private on GitHub as `VykosMolt/Curunir`). The product
 root is **`curunir/`** (formerly `argus_demo/`); the ARGUS kernel is an
 untracked, hash-verified tree at **`kernel/argus/`**; the neural and capsule
-lines stayed in Saulot. Commit ids in this repository differ from Saulot's:
+lines stayed in the Argus repository (formerly Saulot). Commit ids in this repository differ from Saulot's:
 `CURUNIR_COMMIT_MAP_SAULOT.txt` maps them, and the frozen manifests were
 revised accordingly (`CURUNIR_DOCUMENTS.md`, "Revision of 2026-09-02"). The
 ids and paths quoted below are the revised ones. `../README.md` and

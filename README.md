@@ -4,7 +4,7 @@ An intelligence workbench that will not let a conclusion outrun its evidence.
 
 This repository holds the product (`curunir/`) and the documentation of its one
 external dependency, the hash-pinned ARGUS kernel (`kernel/`). It was carved
-out of the `Saulot` research repository on 2026-09-02 with the product's full
+out of the `Saulot` research repository (since renamed `Argus`, at `/home/moloch/Argus`) on 2026-09-02 with the product's full
 history; `curunir/CURUNIR_COMMIT_MAP_SAULOT.txt` maps every Saulot commit id to
 its id here, so the commit hashes cited in frozen evidence can be followed.
 
@@ -35,7 +35,7 @@ Saulot, then verify (`kernel/README.md`).
 
 ## History of the layout
 
-Until 2026-09-02 the product lived in the Saulot repository as `argus_demo/`,
+Until 2026-09-02 the product lived in the Argus repository (`/home/moloch/Argus`, called Saulot until 2026-09-02) as `argus_demo/`,
 with the kernel mounted inside it. The frozen manifests were revised the same
 day to the new paths and commit ids: each carries a `revised_2026_09_02` block
 naming the byte identity it supersedes, the V6.8 qualification contract ledgers
