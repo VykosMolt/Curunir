@@ -156,6 +156,25 @@ def test_browser_signed_approval_is_genuine_and_four_eyes(browser, env):
                for v in result["verdicts"])
 
 
+def test_browser_without_ed25519_refuses_rather_than_approving_unsigned(browser, env):
+    base, root = env["base"], env["root"]
+    rid, _ = _author_report_in_review(base, env["claim_id"], "Unsignable dossier")
+    page = browser.new_page()
+    page.add_init_script(
+        "crypto.subtle.generateKey = () => Promise.reject(new Error('no ed25519'));")
+    _login(page, base, "tok-approver")
+    page.goto(f"{base}/#/reports/{rid}")
+    expect(page.locator("main h1")).to_contain_text("IN_REVIEW")
+    unsigned = []
+    page.on("request", lambda r: unsigned.append(r.url) if r.url.endswith("/approve") else None)
+    page.get_by_role("button", name="Approve (validated, human act)").click()
+    expect(page.locator("main")).to_contain_text("cannot sign approvals")
+    expect(page.locator("main h1")).to_contain_text("IN_REVIEW")
+    page.close()
+    assert unsigned == []
+    assert report_of(WorkbenchStore(root / "store"), rid)["status"] == "IN_REVIEW"
+
+
 def report_of(store, rid):
     return store.current_reports()[rid]
 

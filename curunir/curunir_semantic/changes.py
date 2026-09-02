@@ -271,7 +271,7 @@ def _claim_newest_evidence_time(ctx: IntegrationContext, claim: Mapping[str, Any
             ctx.manifestation(observation["manifestation_id"]))
         if state_time:
             times.append(state_time)
-    return max(times, default="")
+    return max(times, key=parse_time, default="")
 
 
 def _propagate(ctx: IntegrationContext, change: Mapping[str, Any]) -> None:

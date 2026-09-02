@@ -19,7 +19,7 @@ from curunir_operational.access import Marking, marking_from_record
 from curunir_operational.canonical import parse_time, sha256
 
 from .authority import authoritative_approval_state
-from .contracts import (HUMAN_ONLY_DISPOSITIONS, ReportDisposition, ReportRecord,
+from .contracts import (ReportDisposition, ReportRecord,
                         ReportSection, ReportSentence)
 from .errors import NotFound
 from .projections import MissionProjection, REDACTED

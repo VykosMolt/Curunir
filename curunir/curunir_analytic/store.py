@@ -66,8 +66,8 @@ class AnalyticStore(SemanticStore):
         self._proposal_materializations: dict[str, tuple[str, str]] = {}
         self._transition_ids: set[str] = set()
 
-    def _index(self, event: dict) -> None:
-        super()._index(event)
+    def _index_record(self, event: dict) -> None:
+        super()._index_record(event)
         record = event["record"]
         record_type = record["record_type"]
         if record_type == "analytic_transition":

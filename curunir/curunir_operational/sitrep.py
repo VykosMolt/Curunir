@@ -57,7 +57,8 @@ def build_situation_report(store: MissionDataStore, projection: Projection, cont
             # Never name an object this context cannot view, whatever the
             # assessment happens to carry.
             findings = [f for f in exposure["exposure"][record["object_id"]]
-                        if f["disruption_id"] in visible_ids]
+                        if f["disruption_id"] in visible_ids
+                        and f.get("dependency", f["disruption_id"]) in visible_ids]
             detail = "no known disruption" if not findings else \
                 f"{len(findings)} known disruption(s): " + "; ".join(
                     f"{f['disruption_id']} ({f['condition']})" for f in findings)

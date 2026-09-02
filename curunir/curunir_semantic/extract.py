@@ -16,7 +16,7 @@ from argus.source_intelligence.models import digest_id
 from . import PARSER_VERSION
 from .contracts import EvidenceAnchor, SemanticObservation
 from .normalize import load_fields, load_text
-from curunir_fabric.connectors.rss import _iso_or_none, _rfc822_to_iso
+from curunir_fabric.connectors.rss import iso_or_none, rfc822_to_iso
 
 from .provenance_capture import DerivativeMapping, NormalizedDocument, capture
 from .store import SemanticStore
@@ -292,7 +292,7 @@ def extract_feed(emitter: _Emitter, fields: dict[str, str]) -> None:
         published = entry.get("pubDate") or entry.get("updated") or entry.get("published")
         published_iso = None
         if published:
-            published_iso = _rfc822_to_iso(published[1]) or _iso_or_none(published[1])
+            published_iso = rfc822_to_iso(published[1]) or iso_or_none(published[1])
         anchors = [emitter.field_anchor(guid_path, guid)]
         if entry.get("title"):
             anchors.append(emitter.field_anchor(entry["title"][0], title))

@@ -13,7 +13,7 @@ from typing import Any
 
 from curunir_operational.store import StoreError
 
-from .projections import MissionProjection, _base_id
+from .projections import MissionProjection
 
 
 def _node(kind: str, record_id: str, label: str, record: dict | None = None,

@@ -15,7 +15,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
-from argus.source_intelligence.custody import SourceCustodyStore
 from argus.source_intelligence.models import digest_id
 from curunir_analytic.contracts import ResolutionRule
 from curunir_analytic.forecasts import (create_forecast, resolve_forecast_human,

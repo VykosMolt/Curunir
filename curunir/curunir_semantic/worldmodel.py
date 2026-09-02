@@ -12,7 +12,6 @@ The rules this module keeps:
 """
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 from typing import Any, Iterable, Mapping
 from urllib.parse import urlparse
@@ -480,7 +479,7 @@ def _integrate_claim(ctx: IntegrationContext, document: Mapping[str, Any], subje
                                      or manifestation.get("source_time") or "")
                     else:
                         times.append(manifestation["retrieval_time"])
-        return max((t for t in times if t), default="")
+        return max((t for t in times if t), key=parse_time, default="")
 
     current = versions[-1] if versions else None
     supporting = [observation["observation_id"]]

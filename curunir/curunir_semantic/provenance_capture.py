@@ -6,6 +6,10 @@ custody bytes.
 
 An observation says what the document states, never what role that implies:
 PUBLISHED_BY would be a role, and only a person may decide one.
+
+The private hash and id helpers here deliberately differ from
+curunir_operational.canonical (they hash raw UTF-8). Their values never reach
+the store, so do not replace them with the canonical ones.
 """
 from __future__ import annotations
 

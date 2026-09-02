@@ -121,10 +121,10 @@ class ModelBackend(ABC):
         return content
 
 
-# The member of each closed vocabulary that commits to least, so an offline
-# candidate stays materializable: ABSENCE would additionally demand a deadline
-# and named coverage sources, a non-VERBATIM variant relation a mechanism, and
-# LIKELY_INFLUENCES a mechanism too.
+# The member of each closed vocabulary that asks for the least, so the enum
+# choice is never what blocks materialization: ABSENCE would demand a deadline
+# and coverage sources, a non-VERBATIM variant relation and LIKELY_INFLUENCES
+# a mechanism.
 _SAFEST_ENUM_MEMBER = {
     ("narrative_variant", "relation"): "UNRESOLVED_RELATION",
     ("stakeholder_assessment", "context_kind"): "MISSION",

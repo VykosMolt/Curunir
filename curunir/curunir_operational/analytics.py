@@ -250,7 +250,8 @@ class DeterministicRuleProvider(_ProviderBase):
             if len(distinct) < 2:
                 continue
             involved = sorted(statuses)
-            marking = _joined([objects[o]["current"]["marking"] for o in involved])
+            marking = _joined([objects[o]["current"]["marking"] for o in involved]
+                              + ([objects[target]["current"]["marking"]] if target in objects else []))
             inputs = {o: objects[o]["current"] for o in involved}
             inference = self._record(input_refs=tuple(involved), inputs=inputs,
                                      output={"rule_id": rule_id, "target": target, "statuses": statuses},
@@ -360,9 +361,10 @@ class DeterministicRuleProvider(_ProviderBase):
         involved = sorted(routes)
         if not involved:
             return proposals
-        # Every disruption named in the exposure map contributes content, so the
-        # assessment inherits its marking too.
-        exposed = sorted({f["disruption_id"] for findings in exposure.values() for f in findings})
+        # Every object a finding names contributes content, so the assessment
+        # inherits its marking too.
+        exposed = sorted({value for findings in exposure.values() for f in findings
+                          for key in ("disruption_id", "dependency") if (value := f.get(key))})
         marking = _joined([routes[r]["current"]["marking"] for r in involved]
                           + [objects[d]["current"]["marking"] for d in exposed if d in objects])
         inference = self._record(input_refs=tuple(involved),

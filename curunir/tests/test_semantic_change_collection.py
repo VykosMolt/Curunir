@@ -7,7 +7,7 @@ import json
 import pytest
 
 from curunir_fabric.registry import load_registry
-from curunir_semantic.changes import interpret_change
+from curunir_semantic.changes import _claim_newest_evidence_time, interpret_change
 from curunir_semantic.collection import (assign_human_route, execute_route,
                                          plan_collection_routes, requirement_for_discriminator)
 from curunir_semantic.hypotheses import (link_claim, propose_discriminator, record_hypothesis,
@@ -394,3 +394,18 @@ def test_historical_document_reintegration_appends_nothing(tmp_path):
         pipeline.process_manifestation(live)
     assert len(store.records_of("object_version")) == count_after_first, \
         "re-integration must append no object versions"
+
+
+def test_newest_evidence_time_compares_instants_not_text():
+    from types import SimpleNamespace
+    manifestations = {
+        "m-early": {"temporal_status": "LIVE", "retrieval_time": "2020-01-05T12:00:00+02:00"},
+        "m-late": {"temporal_status": "LIVE", "retrieval_time": "2020-01-05T11:00:00+00:00"},
+    }
+    observations = {"o1": {"observation_id": "o1", "manifestation_id": "m-early"},
+                    "o2": {"observation_id": "o2", "manifestation_id": "m-late"}}
+    ctx = SimpleNamespace(store=SimpleNamespace(records_of=lambda kind: list(observations.values())),
+                          manifestation=lambda mid: manifestations.get(mid, {}))
+    # 12:00+02:00 is 10:00Z, so the +00:00 one is newer even though it sorts first as text.
+    assert _claim_newest_evidence_time(ctx, {"observation_ids": ("o1", "o2")}) \
+        == "2020-01-05T11:00:00+00:00"

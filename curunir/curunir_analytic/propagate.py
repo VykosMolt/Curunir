@@ -67,10 +67,10 @@ def _refresh_degraded_basis(ctx: AnalyticContext, kind: str, object_id: str,
     claims = store.current_claims()
     states = store.claim_states()
     degraded = sorted(
-        f"{claim_id}:{states[claim_id]['state']}"
+        f"{claim_id}:{state}"
         for claim_id in claim_ids
         if claim_id in claims
-        and states.get(claim_id, {}).get("state", "CURRENT")
+        and (state := states.get(claim_id, {}).get("state", "CURRENT"))
         in DEGRADED_CLAIM_STATES)
     if not degraded:
         return

@@ -52,6 +52,9 @@ cd curunir
 "HUMAN"|"SERVICE", "roles": [...], "compartments": [...], "releasability": [...],
 "organisation": ...}`.
 
+`pace` refuses an output directory that already exists and publishes the bundle owner-only,
+like `export`.
+
 ## Package structure
 
 | Module | Responsibility |

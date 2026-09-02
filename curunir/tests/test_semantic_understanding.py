@@ -11,7 +11,7 @@ from curunir_operational.projection import Projection
 from curunir_semantic.normalize import load_fields, load_text
 from curunir_semantic.worldmodel import world_object_id
 
-from semantic_support import (GLEIF_RECORD_V1, PAGE_V1, T0, MARK, clock,
+from semantic_support import (GLEIF_RECORD_V1, PAGE_V1, T0, MARK,
                               make_pipeline, plant_manifestation)
 
 pytestmark = pytest.mark.no_db

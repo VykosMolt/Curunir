@@ -15,7 +15,7 @@ derived from them is marking-gated.
 from __future__ import annotations
 
 import re
-from typing import Any, Iterable, Mapping
+from typing import Any, Mapping
 
 from curunir_operational.access import AccessContext, can_view
 from curunir_operational.canonical import parse_time
@@ -342,7 +342,10 @@ class MissionProjection:
     # ---- family access ----
 
     def family(self, record_type: str) -> list[dict]:
-        """All visible current records of one family, redacted, in a stable order."""
+        """All visible current records of one family, redacted, in a stable order.
+
+        The records are shared between calls on this projection; do not mutate them.
+        """
         cached = self._family_cache.get(record_type)
         if cached is None:
             if record_type in LATEST_FAMILIES:

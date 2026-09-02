@@ -165,7 +165,7 @@ def most_restrictive(markings: list[Marking]) -> Marking:
     # An unrecognised role outranks every known one, so Marking() refuses it
     # whatever order the inputs arrived in.
     unknown_rank = ROLE_RANK[MOST_RESTRICTIVE_ROLE] + 1
-    min_role = max((record.get("min_role", "OBSERVER") for record in records),
+    min_role = max((record.get("min_role") or MOST_RESTRICTIVE_ROLE for record in records),
                    key=lambda role: ROLE_RANK.get(role, unknown_rank))
     caveats: tuple[str, ...] = ()
     for record in records:

@@ -19,12 +19,9 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
-from curunir_operational.access import Marking
-
 from argus.source_intelligence.custody import SourceCustodyStore
 from argus.source_intelligence.models import digest_id
-
-from curunir_operational.access import marking_from_record
+from curunir_operational.access import Marking, marking_from_record
 
 from .catalog import seed_starter_catalog
 from .contracts import InformationNeed, WatchDefinition

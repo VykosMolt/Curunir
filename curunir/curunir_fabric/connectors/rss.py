@@ -12,7 +12,7 @@ from .base import ConnectorRequest, ConnectorResponse, NativeResult, SourceConne
 ATOM_NS = "{http://www.w3.org/2005/Atom}"
 
 
-def _rfc822_to_iso(value: str) -> str | None:
+def rfc822_to_iso(value: str) -> str | None:
     try:
         parsed = email.utils.parsedate_to_datetime(value)
     except (TypeError, ValueError):
@@ -22,7 +22,7 @@ def _rfc822_to_iso(value: str) -> str | None:
     return parsed.isoformat()
 
 
-def _iso_or_none(value: str) -> str | None:
+def iso_or_none(value: str) -> str | None:
     try:
         parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
     except ValueError:
@@ -44,7 +44,7 @@ def parse_feed_items(body: bytes) -> list[NativeResult]:
         for item in root.iter("item"):
             link = _text(item.find("link"))
             guid = _text(item.find("guid")) or link
-            published = _rfc822_to_iso(_text(item.find("pubDate")))
+            published = rfc822_to_iso(_text(item.find("pubDate")))
             if not guid:
                 continue
             items.append(NativeResult(
@@ -56,7 +56,7 @@ def parse_feed_items(body: bytes) -> list[NativeResult]:
             link_node = entry.find(f"{ATOM_NS}link")
             link = link_node.get("href", "") if link_node is not None else ""
             identity = _text(entry.find(f"{ATOM_NS}id")) or link
-            published = _iso_or_none(_text(entry.find(f"{ATOM_NS}updated"))
+            published = iso_or_none(_text(entry.find(f"{ATOM_NS}updated"))
                                      or _text(entry.find(f"{ATOM_NS}published")))
             if not identity:
                 continue

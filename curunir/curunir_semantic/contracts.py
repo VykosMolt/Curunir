@@ -6,7 +6,7 @@ current reading of X" (a claim plus its state) are separate record types.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from curunir_operational.access import Marking
 from curunir_operational.canonical import require_aware, require_aware_or_none, require_sha256

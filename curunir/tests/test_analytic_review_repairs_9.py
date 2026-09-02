@@ -17,27 +17,18 @@ from curunir_analytic.impact import build_path, create_objective
 from curunir_analytic.model_backends import DeterministicBackend
 from curunir_analytic.providers import AnalyticalAssist
 from curunir_analytic.substrate import resolve_candidate
+from curunir_analytic.store import AnalyticStore
 from curunir_analytic.themes import create_theme
+from curunir_operational.canonical import canonical_line
+from curunir_operational.store import CHAIN_GENESIS, StoreError, _entry_hash
 
-from analytic_support import (GLEIF_ACME, GLEIF_ACME_SUSPENDED, MARK, T0,
-                              make_analytic, plant_page, statement_page)
+from analytic_support import (ACME, GLEIF_ACME_SUSPENDED, MARK, T0,
+                              make_analytic, plant_page, seed_acme, statement_page)
 from semantic_support import clock, plant_manifestation
 
 pytestmark = pytest.mark.no_db
 
-ACME = "LEI:ACMELEI000000000001"
-
-
-def _seed(pipeline, ctx, body=GLEIF_ACME, retrieval_time=T0):
-    plant_manifestation(pipeline, source_id="gleif",
-                        native_id="lei/ACMELEI000000000001", body=body,
-                        media_type="application/json",
-                        retrieval_time=retrieval_time)
-    pipeline.process_new_evidence()
-    return {c["predicate"]: c["claim_id"]
-            for c in ctx.store.current_claims().values()
-            if c["subject_ref"] == ACME}
-
+T_TAMPER = "2026-08-21T12:00:00+00:00"
 
 def _accepted_theme_candidate(ctx, claim_id):
     """A model theme candidate a human has accepted: (proposal, inference id)."""
@@ -56,7 +47,7 @@ def _accepted_theme_candidate(ctx, claim_id):
 
 def test_an_analyst_creation_does_not_consume_a_model_candidate(tmp_path):
     pipeline, ctx = make_analytic(tmp_path)
-    by_predicate = _seed(pipeline, ctx)
+    by_predicate = seed_acme(pipeline, ctx)
     claim_id = by_predicate["entity_status"]
     accepted, inference_id = _accepted_theme_candidate(ctx, claim_id)
     proposal_id = accepted["proposal_id"]
@@ -97,7 +88,7 @@ def test_a_non_model_record_cannot_carry_a_proposal_id():
 
 def test_two_chains_reusing_an_edge_id_do_not_collide_silently(tmp_path):
     pipeline, ctx = make_analytic(tmp_path)
-    by_predicate = _seed(pipeline, ctx)
+    by_predicate = seed_acme(pipeline, ctx)
     objective = create_objective(ctx, mission_context="m1",
                                  statement="Keep Acme's standing visible",
                                  priority="HIGH")
@@ -121,7 +112,7 @@ def test_two_chains_reusing_an_edge_id_do_not_collide_silently(tmp_path):
 
 def test_rebuilding_the_same_chain_still_reconciles(tmp_path):
     pipeline, ctx = make_analytic(tmp_path)
-    by_predicate = _seed(pipeline, ctx)
+    by_predicate = seed_acme(pipeline, ctx)
     objective = create_objective(ctx, mission_context="m1",
                                  statement="Keep Acme's standing visible",
                                  priority="HIGH")
@@ -224,7 +215,7 @@ def test_an_offset_bearing_timestamp_orders_by_instant(tmp_path):
 
 def test_a_moved_basis_past_the_horizon_still_reaches_machine_resolution(tmp_path):
     pipeline, ctx = make_analytic(tmp_path)
-    by_predicate = _seed(pipeline, ctx)
+    by_predicate = seed_acme(pipeline, ctx)
     horizon = "2026-08-17T14:00:00+00:00"
     forecast = create_forecast(
         ctx, question=f"Will {ACME} read INACTIVE by {horizon}?",
@@ -274,3 +265,40 @@ def test_cli_reports_a_missing_argument_instead_of_crashing(tmp_path, command):
         cli_main(["--root", str(tmp_path), command])
     with pytest.raises(SystemExit):
         cli_main(["--root", str(tmp_path), command, "analytic_theme"])
+
+
+# ---- review follow-ups ------------------------------------------------------
+
+def test_a_tampered_transition_record_is_reported_not_raised(tmp_path):
+    pipeline, ctx = make_analytic(tmp_path)
+    store = ctx.store
+    event_type = next(k for k, v in AnalyticStore.EVENT_TYPES.items() if v == "analytic_transition")
+    record = {"record_type": "analytic_transition"}
+    entry_hash = _entry_hash(1, event_type, T_TAMPER, "tamper", record, CHAIN_GENESIS)
+    event = {"seq": 1, "event_id": f"evt-000001-{entry_hash[:8]}", "event_type": event_type,
+             "recorded_time": T_TAMPER, "actor": "tamper", "record": record,
+             "prev_hash": CHAIN_GENESIS, "entry_hash": entry_hash}
+    store.events_path.write_text(canonical_line(event) + "\n", encoding="utf-8")
+    result = store.verify_chain()
+    assert result["valid"] is False and "transition_id" in result["reason"]
+    with pytest.raises(StoreError):
+        AnalyticStore(store.root)
+
+
+@pytest.mark.parametrize("context_kind", ["MISSION", "ISSUE"])
+def test_a_free_label_context_is_not_a_cited_identifier(context_kind):
+    shown = frozenset({"obj-1"})
+    content = {"entity_object_id": "obj-1", "context_kind": context_kind,
+               "context_id": "OP-NORDIC"}
+    assert unresolvable_ids("stakeholder_assessment", content, shown) == ()
+    themed = {**content, "context_kind": "THEME", "context_id": "theme-x"}
+    assert unresolvable_ids("stakeholder_assessment", themed, shown) == ("context_id=theme-x",)
+
+
+def test_the_offline_backend_cites_only_shown_ids_with_claims_only_evidence():
+    backend = DeterministicBackend()
+    evidence = {"claims": [{"claim_id": "c1", "statement": "Acme is ISSUED"}]}
+    shown = available_ids(evidence)
+    for kind in proposable_kinds():
+        content = backend.infer("exercise the seam", evidence, kind)
+        assert unresolvable_ids(kind, content, shown) == (), kind

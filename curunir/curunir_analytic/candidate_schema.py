@@ -51,6 +51,8 @@ _KIND_FIELD_SHAPES: Mapping[tuple[str, str], Any] = {
 
 # Fields that name an existing record rather than carrying free text.
 _ID_FIELD = re.compile(r"(^|_)(id|ids)$")
+# Stakeholder contexts whose context_id names nothing in the store.
+FREE_LABEL_CONTEXT_KINDS = frozenset({"MISSION", "ISSUE"})
 
 
 def _is_id_key(key: str) -> bool:
@@ -131,6 +133,8 @@ def unresolvable_ids(target_kind: str, content: Mapping[str, Any],
     """Identifiers the candidate cites that it was never shown."""
     bad: list[str] = []
     for field in id_fields(target_kind):
+        if field == "context_id" and content.get("context_kind") in FREE_LABEL_CONTEXT_KINDS:
+            continue  # a mission or issue context is a label, not a record
         value = content.get(field)
         candidates = value if isinstance(value, (list, tuple)) else [value]
         for item in candidates:

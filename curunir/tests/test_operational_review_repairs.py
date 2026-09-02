@@ -9,8 +9,10 @@ import os
 import pytest
 
 from curunir_operational import association, delta, sovereignty
-from curunir_operational.access import Marking, can_view, most_restrictive
-from curunir_operational.analytics import DeterministicRuleProvider
+from curunir_operational.access import (MOST_RESTRICTIVE_ROLE, UNJOINABLE_SEAL_COMPARTMENT, Marking,
+                                        can_view, most_restrictive)
+from curunir_operational.analytics import DeterministicRuleProvider, _joined
+from curunir_operational.contracts import AnalyticalProposal
 from curunir_operational.argus_adapter import ArgusEvidenceConnector
 from curunir_operational.canonical import canonical_line, sha256
 from curunir_operational.connectors import JsonFeedConnector
@@ -434,3 +436,92 @@ def test_p2_latest_matches_a_full_scan(tmp_path):
             assert _latest(store, record_type, id_field, probe) \
                 == _scan_latest(store, record_type, id_field, probe)
     assert PRIMARY_ID_FIELDS["object_version"] == "object_id"
+
+
+# ---- review follow-ups ------------------------------------------------------
+
+def _rel(rel_id, relation_type, source, target, mark):
+    return RelationshipVersion(rel_id, 1, relation_type, source, target, t(0), None, t(0),
+                               (), "MAPPING", "UNKNOWN", "ACTIVE", mark, PROV)
+
+
+def test_route_exposure_joins_the_dependency_a_finding_names(tmp_path):
+    """A finding names the depended-on infrastructure too, so its marking joins."""
+    store = make_store(tmp_path)
+    secret = marking("C", min_role="ANALYST")
+    for record in (
+        obj("route-R1", 1, object_type="ROUTE", mark=marking()),
+        obj("infra-SECRET", 1, object_type="INFRASTRUCTURE", mark=secret),
+        obj("obs-PUBLIC", 1, object_type="OBSERVATION", mark=marking(),
+            attributes={"reported_status": "DAMAGED"}),
+    ):
+        store.append("OBJECT_VERSION_APPENDED", record, recorded_time=t(0), actor="fixture")
+    store.append("RELATIONSHIP_VERSION_APPENDED", _rel("rel-dep", "DEPENDS_ON", "route-R1", "infra-SECRET", secret),
+                 recorded_time=t(0), actor="fixture")
+    store.append("RELATIONSHIP_VERSION_APPENDED", _rel("rel-rep", "REPORTS_ON", "obs-PUBLIC", "infra-SECRET", secret),
+                 recorded_time=t(0), actor="fixture")
+    projection = Projection(store, snapshot_time=t(1))
+    DeterministicRuleProvider(store).run(projection, context("high", "C"), recorded_time=t(1))
+    assessment = next(r for r in store.records_of("analytical_proposal")
+                      if r["content"].get("kind") == "route-exposure")
+    assert "infra-SECRET" in canonical_line(assessment["content"])
+    low = context("low")
+    assert not can_view(assessment["marking"], low)
+    report = build_situation_report(store, Projection(store, snapshot_time=t(2)), low,
+                                    operational_context="corridor")
+    assert "infra-SECRET" not in canonical_line(report)
+
+
+def test_infrastructure_conflict_joins_the_reported_target(tmp_path):
+    """Every record the conflict rule writes is as restricted as the target it names."""
+    store = make_store(tmp_path)
+    secret = marking("C", min_role="ANALYST")
+    store.append("OBJECT_VERSION_APPENDED", obj("infra-SECRET", 1, object_type="INFRASTRUCTURE", mark=secret),
+                 recorded_time=t(0), actor="fixture")
+    for observer, status in (("obs-1", "DAMAGED"), ("obs-2", "OPERATIONAL")):
+        store.append("OBJECT_VERSION_APPENDED",
+                     obj(observer, 1, object_type="OBSERVATION", mark=marking(),
+                         attributes={"reported_status": status}),
+                     recorded_time=t(0), actor="fixture")
+        store.append("RELATIONSHIP_VERSION_APPENDED",
+                     _rel(f"rel-{observer}", "REPORTS_ON", observer, "infra-SECRET", secret),
+                     recorded_time=t(0), actor="fixture")
+    projection = Projection(store, snapshot_time=t(1))
+    DeterministicRuleProvider(store).run(projection, context("high", "C"), recorded_time=t(1))
+    low = context("low")
+    inference = next(r for r in store.records_of("inference")
+                     if r["output"].get("rule_id") == "rule-infrastructure-conflict")
+    assert inference["output"]["target"] == "infra-SECRET"
+    assert not can_view(inference["marking"], low)
+    proposals = [r for r in store.records_of("analytical_proposal")
+                 if r["inference_id"] == inference["inference_id"]]
+    assert proposals and not any(can_view(r["marking"], low) for r in proposals)
+
+
+def test_situation_report_guard_hides_a_named_object_on_its_own(tmp_path):
+    """Even an assessment the reader may view must not name what the reader cannot."""
+    store = _route_exposure_store(tmp_path)
+    leaky = AnalyticalProposal(
+        proposal_id="prop-leaky", inference_id="inf-leaky", proposal_type="ASSESSMENT",
+        content={"kind": "route-exposure", "exposure": {"route-R1": [
+            {"disruption_id": "hazard-SECRET", "condition": "PROXIMATE_DISRUPTION"}]}},
+        status="PROPOSED", recorded_time=t(2), marking=marking())
+    store.append("ANALYTICAL_PROPOSAL_RECORDED", leaky, recorded_time=t(2), actor="fixture")
+    observer = context("observer", roles=("OBSERVER",))
+    assert can_view(leaky.marking, observer)
+    report = build_situation_report(store, Projection(store, snapshot_time=t(3)), observer,
+                                    operational_context="corridor")
+    for rendered in (canonical_line(report), render_text(report), render_markdown(report)):
+        assert "hazard-SECRET" not in rendered
+
+
+def test_an_unrepresentable_rule_join_is_sealed_from_everyone():
+    sealed = _joined([Marking("AUTH-A", releasability=("REL",)), Marking("AUTH-A")])
+    assert UNJOINABLE_SEAL_COMPARTMENT in sealed.compartments
+    assert not can_view(sealed, context("anyone", "REL", roles=("SUPERVISOR",)))
+
+
+def test_an_absent_min_role_in_a_raw_mapping_is_the_most_restrictive_one():
+    joined = most_restrictive([{"owning_authority": AUTH, "releasability": ["R"]},
+                               {"owning_authority": AUTH, "releasability": ["R"], "min_role": "OBSERVER"}])
+    assert joined.min_role == MOST_RESTRICTIVE_ROLE

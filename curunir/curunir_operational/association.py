@@ -33,6 +33,7 @@ def _weakest_mapping_confidence(left: Mapping[str, Any], right: Mapping[str, Any
     values = [v.get("quality", {}).get("mapping_confidence", "UNKNOWN") for v in (left, right)]
     if "UNKNOWN" in values:
         return "UNKNOWN"
+    # Between a number and a label the number counts as weaker; labels compare as text.
     return min(values, key=lambda x: (isinstance(x, str), x))
 
 
