@@ -196,6 +196,19 @@ uvicorn --factory curunir_workbench.server:app --port 8100
 # open http://127.0.0.1:8100 and sign in with a token from actors.json
 ```
 
+## Serving
+
+The server opens the mission store once per process. Before every request it
+catches up on the log tail under the store lock (`MissionDataStore.refresh`),
+so an append made by another process is seen on the next request without
+re-reading the log. Projections are cached per chain head and viewer (a small
+LRU), so an unchanged store answers from memory and any append rebuilds the
+next projection. Commands run under the same lock. On a 3,000-event store an
+overview request went from ~235 ms to ~3 ms unchanged and ~25 ms with an
+append every tenth request (`tools/bench_store.py`); opening the store still
+costs about 65 µs per event, paid once per process, which is why no on-disk
+index exists: at 50k events that is a few seconds at start-up, not per request.
+
 ## Integrated live demonstration
 
 ```bash

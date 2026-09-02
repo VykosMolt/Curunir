@@ -15,6 +15,8 @@ them, quietly turning body models into query parameters.
 """
 import math
 import os
+import threading
+from collections import OrderedDict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -28,6 +30,7 @@ from pydantic import BaseModel, Field
 from curunir_analytic.model_backends import availability as model_availability
 from curunir_identity import KeyRegistry, SessionManager, SignatureRejected
 from curunir_identity.crypto import normalize_public_key
+from curunir_operational.canonical import canonical_line
 from curunir_identity.sessions import AuthError as IdentityAuthError
 from curunir_operational.access import AccessContext, Marking, marking_from_record
 from curunir_operational.missions import MissionWorkflowError
@@ -79,12 +82,21 @@ def _deep_render_safe(value):
 def create_app(mission_root: str | Path, actors_path: str | Path,
                now_fn=None) -> FastAPI:
     root = Path(mission_root)
+    # One store for the life of the process. Every request catches up on the
+    # log tail under the store lock instead of re-reading the whole log, and
+    # projections are cached by chain head and viewer, so an unchanged store
+    # answers from memory while any append, from this process or another, is
+    # seen on the next request.
     store = WorkbenchStore(root / "store")
+    store_lock = threading.RLock()
+    projections: OrderedDict[tuple, MissionProjection] = OrderedDict()
+    PROJECTION_CACHE_SIZE = 16
     registry = ActorRegistry(actors_path)
     app = FastAPI(title="Curunír analyst workbench", version="1.0.0",
                   docs_url=None, redoc_url=None, openapi_url=None)
     app.state.root = root
     app.state.store = store
+    app.state.projections = projections
     app.state.registry = registry
 
     @app.exception_handler(RequestValidationError)
@@ -106,12 +118,26 @@ def create_app(mission_root: str | Path, actors_path: str | Path,
             raise HTTPException(status_code=401, detail=str(error))
 
     def fresh_store() -> WorkbenchStore:
-        # Another process may have appended since the last request, so reopen
-        # and let the store catch up.
-        return WorkbenchStore(root / "store")
+        # Another process may have appended since the last request.
+        with store_lock:
+            store.refresh()
+        return store
+
+    def projection_for(actor_context: AccessContext) -> MissionProjection:
+        with store_lock:
+            head = store.refresh()
+            key = (head, canonical_line(actor_context.to_record()))
+            cached = projections.get(key)
+            if cached is None:
+                cached = MissionProjection(store, actor_context)
+                projections[key] = cached
+                while len(projections) > PROJECTION_CACHE_SIZE:
+                    projections.popitem(last=False)
+            projections.move_to_end(key)
+            return cached
 
     def projection(request: Request) -> MissionProjection:
-        return MissionProjection(fresh_store(), context(request))
+        return projection_for(context(request))
 
     def command_context(request: Request) -> CommandContext:
         kwargs = {"now_fn": now_fn} if now_fn is not None else {}
@@ -136,7 +162,8 @@ def create_app(mission_root: str | Path, actors_path: str | Path,
             return render_safe(error)
 
         try:
-            result = fn(*args, **kwargs)
+            with store_lock:
+                result = fn(*args, **kwargs)
         except Conflict as error:
             raise HTTPException(status_code=409, detail=detail(error))
         except NotFound as error:
@@ -148,7 +175,7 @@ def create_app(mission_root: str | Path, actors_path: str | Path,
         except ValueError as error:
             raise HTTPException(status_code=400, detail=detail(error))
         if isinstance(result, (dict, list)):
-            return MissionProjection(fresh_store(), context(request)).redact(
+            return projection(request).redact(
                 result if isinstance(result, dict) else {"items": result})
         return result
 
@@ -777,7 +804,7 @@ def create_app(mission_root: str | Path, actors_path: str | Path,
             raise HTTPException(status_code=400, detail=render_safe(error))
         actor_context = registry.context_for_actor(
             result["signed_action"]["actor_id"])
-        return MissionProjection(fresh_store(), actor_context).redact(
+        return projection_for(actor_context).redact(
             result["result"])
 
     # ---- UI ----
