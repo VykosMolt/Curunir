@@ -61,7 +61,7 @@ def test_no_command_declassifies_a_special_subject(mission):
     A = cc(CTX_A)  # holds the SPECIAL compartment
     public_claim = seeded["status_claim"]["claim_id"]
 
-    # ---- restricted subjects, made through the commands under test ----
+    # Restricted subjects, made through the commands under test
     forecast = commands.author_forecast(
         A, question="Will the compartmented counterparty default by 2027?",
         outcome_semantics="TRUE iff default recorded",
@@ -100,7 +100,7 @@ def test_no_command_declassifies_a_special_subject(mission):
     forecast_id = forecast["forecast_id"]
     hyp_id = hypothesis["hypothesis_id"]
 
-    # ---- run each command and check nothing visible was written ----
+    # Run each command and check nothing visible was written
     def run(label, fn):
         before = _head_seq(ctx.store)
         fn()

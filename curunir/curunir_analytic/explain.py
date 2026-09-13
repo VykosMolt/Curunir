@@ -1,9 +1,8 @@
 """Structured explanations for any analytical object.
 
-Every explanation answers the same eight questions: WHAT the object asserts,
-WHY, what stands AGAINST it, its SOURCE_BASIS, its TEMPORAL span, which links
-are INFERENCES, what UNCERTAINTY remains, and its MISSION_EFFECT. `render_text`
-sits on top of the structured form.
+Every explanation answers the same eight questions: WHAT, WHY, what stands
+AGAINST it, SOURCE_BASIS, TEMPORAL span, INFERENCES, UNCERTAINTY and
+MISSION_EFFECT. `render_text` sits on top of the structured form.
 """
 from __future__ import annotations
 

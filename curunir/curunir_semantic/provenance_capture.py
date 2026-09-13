@@ -1,15 +1,11 @@
-"""Read what a document says about its own origin, and where it says it.
+"""Read what a document says about its own origin, and where it says it:
+publisher lines, bylines, copyright and translation notices, official-journal
+identifiers, each pinned to an offset in the custody bytes.
 
-Publisher lines, bylines, copyright and translation notices, official-journal
-identifiers, and the head and foot of the text, each pinned to an offset in the
-custody bytes.
-
-An observation says what the document states, never what role that implies:
-PUBLISHED_BY would be a role, and only a person may decide one.
-
-The private hash and id helpers here deliberately differ from
-curunir_operational.canonical (they hash raw UTF-8). Their values never reach
-the store, so do not replace them with the canonical ones.
+An observation says what the document states, never what role that implies. The
+private hash helpers here hash raw UTF-8 and deliberately differ from
+curunir_operational.canonical; their values never reach the store, so do not
+replace them with the canonical ones.
 """
 from __future__ import annotations
 
@@ -21,7 +17,7 @@ from datetime import datetime, timezone
 from typing import Any, Iterable, Mapping, Sequence
 from urllib.parse import urlparse
 
-# ---- private hashing helpers; nothing here is persisted ------------------
+# Private hashing helpers; nothing here is persisted
 
 def _canonical_json(value: Any) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
@@ -51,7 +47,7 @@ def require_hash(value: str) -> None:
         raise ValueError("invalid SHA-256")
 
 
-# ---- the document being read ---------------------------------------------
+# The document being read
 
 class Record:
     def to_record(self) -> dict[str, Any]:
@@ -104,7 +100,7 @@ class NormalizedDocument(Record):
             raise ValueError("normalized text requires source mapping")
 
 
-# ---- raw evidence --------------------------------------------------------
+# Raw evidence
 
 class ProvenanceViolation(ValueError):
     """A boundary between evidence, observation and role was crossed."""
@@ -145,7 +141,7 @@ def raw_evidence(*, source_object_id: str, raw_text: str, locator: Mapping[str, 
         content_hash, _now_utc())
 
 
-# ---- normalized observations ---------------------------------------------
+# Normalized observations
 
 OBSERVATION_TYPES: tuple[str, ...] = (
     "EXPLICIT_AUTHOR_LINE", "EXPLICIT_EDITOR_LINE", "EXPLICIT_ISSUER_LINE",
@@ -229,7 +225,7 @@ def normalized_observation(*, raw_evidence_ids: Iterable[str],
         False, _now_utc())
 
 
-# ---- capture -------------------------------------------------------------
+# Capture
 
 _HEAD = 2500
 
@@ -337,7 +333,7 @@ def capture(document: NormalizedDocument, *, source_object_id: str,
             provenance={"document_id": document.document_id,
                         "parser": document.parser, "locator": dict(locator)}))
 
-    # --- from the text ---------------------------------------------------
+    # From the text
     for name, pattern, label in _COMPILED:
         for match in pattern.finditer(window):
             captured = match.group(1) if match.groups() else match.group(0)
@@ -347,7 +343,7 @@ def capture(document: NormalizedDocument, *, source_object_id: str,
                 match.group(0), f"whitespace-normalized {label}")
             break  # one observation per type, the first one found
 
-    # --- from the document's shape ----------------------------------------
+    # From the document's shape
     lines = [line for line in text[:_HEAD].split("\n") if line.strip()]
     if lines:
         add("HEADER_TEXT", lines[0], {"kind": "FIRST_LINE"}, lines[0],
@@ -360,7 +356,7 @@ def capture(document: NormalizedDocument, *, source_object_id: str,
         add("TITLE_PAGE_INSTITUTION", title, {"kind": "CUSTODY_TITLE"}, title,
             "title recorded at capture time", strength="STRONGLY_IMPLIED")
 
-    # --- from how it was fetched ------------------------------------------
+    # From how it was fetched
     if final_url:
         host = urlparse(final_url).netloc
         if host:

@@ -1,12 +1,9 @@
 """Durable append-only mission-data store.
 
-The trusted core is small on purpose: strict regular-file reads that refuse
-links and special files, atomic replacement that publishes whole files, one
-lock that serializes every mutation, one validator for load, append, delta and
-recovery, and one staged installer for restoration.
-
-The raw log is authoritative. Projections filter it for readers; they never
-decide what may be committed.
+The trusted core is small on purpose: strict regular-file reads, atomic
+replacement, one lock serializing every mutation, one validator, one staged
+installer. The raw log is authoritative; projections filter it for readers and
+never decide what may be committed.
 """
 from __future__ import annotations
 

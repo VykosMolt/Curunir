@@ -37,7 +37,7 @@ pytestmark = pytest.mark.no_db
 ACME_OBJECT = world_object_id("LEI:ACMELEI000000000001")
 
 
-# ---- a claim nobody has is not evidence ------------------------------------
+# A claim nobody has is not evidence
 
 
 def test_f1_phantom_claims_cannot_found_an_object(tmp_path):
@@ -64,7 +64,7 @@ def test_f1_zero_basis_is_loudest_uncertainty(tmp_path):
     assert any("no known claim" in u for u in explanation["UNCERTAINTY"])
 
 
-# ---- model output becomes state only through a person ----------------------
+# Model output becomes state only through a person
 
 
 def test_f2_f3_model_state_requires_accepted_candidate(tmp_path):
@@ -109,7 +109,7 @@ def test_f2_f3_model_state_requires_accepted_candidate(tmp_path):
                      proposal_id=rejected["proposal_id"])
 
 
-# ---- a denial contradicts, it does not corroborate -------------------------
+# A denial contradicts, it does not corroborate
 
 
 def test_f4_counter_variant_contradicts_instead_of_supporting(tmp_path):
@@ -147,7 +147,7 @@ def test_f4_counter_variant_contradicts_instead_of_supporting(tmp_path):
     assert all(e["relation"] != "LIKELY_DERIVATIVE" for e in edges)
 
 
-# ---- revising an adoption keeps the earlier reading ------------------------
+# Revising an adoption keeps the earlier reading
 
 
 def test_f5_human_adoption_revision_is_versioned(tmp_path):
@@ -180,7 +180,7 @@ def test_f5_human_adoption_revision_is_versioned(tmp_path):
     assert "REVISED" in kinds
 
 
-# ---- an interrupted marking pass finishes on the next run ------------------
+# An interrupted marking pass finishes on the next run
 
 
 def _impact_state(pipeline, ctx):
@@ -273,7 +273,7 @@ def test_f7_interrupted_stale_refresh_completes_on_rerun(tmp_path):
         == "EXPOSED"
 
 
-# ---- an orphaned variant is adopted, not left behind -----------------------
+# An orphaned variant is adopted, not left behind
 
 
 def test_f8_orphaned_variant_reconciles_on_rerun(tmp_path):
@@ -323,7 +323,7 @@ def test_f8_orphaned_variant_reconciles_on_rerun(tmp_path):
     assert "VARIANT_ADDED" in kinds
 
 
-# ---- running a decision twice decides it once ------------------------------
+# Running a decision twice decides it once
 
 
 def test_f9_merge_resolve_supersede_review_rerun_safe(tmp_path):
@@ -380,7 +380,7 @@ def test_f9_merge_resolve_supersede_review_rerun_safe(tmp_path):
                                actor_id="jan", actor_kind="HUMAN", note="undo")
 
 
-# ---- a second writer on a stale view is refused ----------------------------
+# A second writer on a stale view is refused
 
 
 def test_f10_concurrent_version_write_raises(tmp_path):
@@ -405,7 +405,7 @@ def test_f10_concurrent_version_write_raises(tmp_path):
                           caused_by="w2", rationale="writer 2 folds a different claim")
 
 
-# ---- the dependency index reaches everything that depends ------------------
+# The dependency index reaches everything that depends
 
 
 def test_f11_assumption_objective_links_reach_objectives(tmp_path):
@@ -466,7 +466,7 @@ def test_f11_claim_dependencies_and_options_and_episodes_indexed(tmp_path):
                          depends_on=(("mystery", "x"),))
 
 
-# ---- identity doubt raised later still reaches the assessment --------------
+# Identity doubt raised later still reaches the assessment
 
 
 def test_f12_late_identity_ambiguity_surfaces(tmp_path):
@@ -501,7 +501,7 @@ def test_f12_late_identity_ambiguity_surfaces(tmp_path):
     assert any("identity ambiguity" in u for u in explanation["UNCERTAINTY"])
 
 
-# ---- when we fetched a page is not when it became true ---------------------
+# When we fetched a page is not when it became true
 
 
 def test_f13_retrieval_time_does_not_become_valid_time(tmp_path):
@@ -521,7 +521,7 @@ def test_f13_retrieval_time_does_not_become_valid_time(tmp_path):
     assert theme["basis"]["earliest_time"]  # when we learned it is still known
 
 
-# ---- a backlog of changes is named in full ---------------------------------
+# A backlog of changes is named in full
 
 
 def test_f14_backlog_changes_all_named(tmp_path):
@@ -570,7 +570,7 @@ def test_f14_backlog_changes_all_named(tmp_path):
         "every pending change is named; none is silently absorbed by the first"
 
 
-# ---- an inferred interest cannot be relabelled as a stated position --------
+# An inferred interest cannot be relabelled as a stated position
 
 
 def test_f15_interest_cannot_become_public_position(tmp_path):
@@ -600,7 +600,7 @@ def test_f15_interest_cannot_become_public_position(tmp_path):
         add_position(ctx, assessment["assessment_id"], relabel, caused_by="t")
 
 
-# ---- asserting something again keeps the earlier history -------------------
+# Asserting something again keeps the earlier history
 
 
 def test_f16_reassert_influence_keeps_history(tmp_path):
@@ -626,7 +626,7 @@ def test_f16_reassert_influence_keeps_history(tmp_path):
         "the reassertion is its own recorded transition"
 
 
-# ---- every exposed path records its own reason -----------------------------
+# Every exposed path records its own reason
 
 
 def test_f18_multiple_paths_each_record_exposure_cause(tmp_path):
@@ -654,7 +654,7 @@ def test_f18_multiple_paths_each_record_exposure_cause(tmp_path):
     assert len(exposures) >= 2, "each dependent path's exposure reason is recorded"
 
 
-# ---- edges the contract refuses to build -----------------------------------
+# Edges the contract refuses to build
 
 
 def test_f19_f21_edge_typing_and_empty_authority():

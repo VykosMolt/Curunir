@@ -1,12 +1,9 @@
-"""Strategic warning: a projection of one forecast onto one objective, never
-an independent classifier.
+"""Strategic warning: a projection of one forecast onto one objective, never an
+independent classifier.
 
-Each component comes from typed state it names in its basis — the forecast's
-probability, the objective's priority, the distance to the horizon, and the
-independent origin families behind the basis. The tier comes from a named rule:
-a probability-by-consequence table plus two recorded adjustments (imminence
-bumps one tier, weak evidence caps at PRIORITY). Re-projecting unchanged inputs
-appends nothing.
+Each component comes from typed state it names in its basis, and the tier comes
+from a named rule: a probability-by-consequence table plus two recorded
+adjustments. Re-projecting unchanged inputs appends nothing.
 """
 from __future__ import annotations
 

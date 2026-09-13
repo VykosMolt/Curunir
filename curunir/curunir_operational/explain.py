@@ -1,9 +1,8 @@
 """What a record is, where it came from, what supports or contradicts it, who
 touched it, and what stays unknown.
 
-A hidden record gives the same answer as a missing one, so an explanation
-cannot be used to probe for what the reader may not see. Provenance walks
-carry a visited set, so a cycle cannot recurse forever.
+A hidden record answers exactly as a missing one, so an explanation cannot probe
+for what the reader may not see. Provenance walks carry a visited set.
 """
 from __future__ import annotations
 

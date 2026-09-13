@@ -74,7 +74,7 @@ export function annotationsSection(annotations, targetKind, targetId, refresh) {
     annotateBox(targetKind, targetId, refresh)];
 }
 
-// ---- overview ---------------------------------------------------------------
+// overview
 
 export async function overviewView(main) {
   await render(main, async () => {
@@ -163,7 +163,7 @@ export async function overviewView(main) {
   });
 }
 
-// ---- search -----------------------------------------------------------------
+// search
 
 export async function searchView(main, params) {
   const q = params.get("q") || "";
@@ -190,7 +190,7 @@ export async function searchView(main, params) {
   });
 }
 
-// ---- activity ---------------------------------------------------------------
+// activity
 
 export async function activityView(main) {
   await render(main, async () => {
@@ -212,7 +212,7 @@ export async function activityView(main) {
   });
 }
 
-// ---- entities ---------------------------------------------------------------
+// entities
 
 export async function entitiesView(main) {
   await render(main, async () => {
@@ -323,7 +323,7 @@ export async function entityView(main, params, id) {
   });
 }
 
-// ---- events -----------------------------------------------------------------
+// events
 
 export async function eventsView(main) {
   await render(main, async () => {
@@ -376,7 +376,7 @@ export async function eventView(main, params, id) {
   });
 }
 
-// ---- timeline ---------------------------------------------------------------
+// timeline
 
 const TIMELINE_KINDS = ["object_version", "event", "manifestation", "semantic_change",
   "claim", "forecast", "indicator", "warning", "collection", "watch_run",
@@ -431,7 +431,7 @@ export async function timelineView(main, params) {
   });
 }
 
-// ---- graph ------------------------------------------------------------------
+// graph
 
 export async function graphView(main, params) {
   const focus = params.get("focus") || "";
@@ -472,7 +472,7 @@ export async function graphView(main, params) {
   });
 }
 
-// ---- map --------------------------------------------------------------------
+// map
 
 export async function mapViewPage(main) {
   await render(main, async () => {
@@ -488,7 +488,7 @@ export async function mapViewPage(main) {
   });
 }
 
-// ---- evidence ---------------------------------------------------------------
+// evidence
 
 export async function evidenceListView(main) {
   await render(main, async () => {
@@ -607,7 +607,7 @@ export async function evidenceView(main, params, id) {
   });
 }
 
-// ---- sources ----------------------------------------------------------------
+// sources
 
 export async function sourcesView(main) {
   await render(main, async () => {
@@ -661,7 +661,7 @@ export async function sourceView(main, params, id) {
   });
 }
 
-// ---- claims -----------------------------------------------------------------
+// claims
 
 export async function claimView(main, params, id) {
   const refresh = () => claimView(main, params, id);
@@ -709,7 +709,7 @@ export async function claimView(main, params, id) {
   });
 }
 
-// ---- generic record inspector ------------------------------------------------
+// generic record inspector
 
 export async function recordView(main, params, kind, id) {
   const refresh = () => recordView(main, params, kind, id);
@@ -740,7 +740,7 @@ export async function recordView(main, params, kind, id) {
   });
 }
 
-// ---- claims: the reading surface -------------------------------------------
+// claims: the reading surface
 // Claims grouped by subject, with the value as the headline.
 
 function _humanPredicate(p) {

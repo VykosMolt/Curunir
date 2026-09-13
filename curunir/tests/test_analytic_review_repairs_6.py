@@ -74,7 +74,7 @@ def _flip_to_suspended(pipeline, ctx):
     pipeline.process_new_evidence()
 
 
-# ---- a firing is spent, whatever the number now reads ----------------------
+# A firing is spent, whatever the number now reads
 
 
 def test_stale_firing_cannot_overwrite_later_human_judgment(tmp_path):
@@ -110,7 +110,7 @@ def test_stale_firing_cannot_overwrite_later_human_judgment(tmp_path):
         "the analyst's later judgment stands"
 
 
-# ---- coverage must be about this question ----------------------------------
+# Coverage must be about this question
 
 
 def test_declared_source_searched_about_someone_else_is_not_coverage(tmp_path):
@@ -146,7 +146,7 @@ def test_unattributable_executions_fail_safe(tmp_path):
         "an execution attributable to no subject does not count for one"
 
 
-# ---- an indicator that moves a number must name its subject ----------------
+# An indicator that moves a number must name its subject
 
 
 def test_attribute_only_pattern_cannot_execute_a_number_move(tmp_path):
@@ -175,7 +175,7 @@ def test_attribute_only_pattern_cannot_execute_a_number_move(tmp_path):
     assert armed["status"] == "ARMED"
 
 
-# ---- a change after the horizon is not an outcome by the horizon -----------
+# A change after the horizon is not an outcome by the horizon
 
 
 def test_claim_flipping_after_the_horizon_does_not_resolve_true(tmp_path):
@@ -201,7 +201,7 @@ def test_claim_flipping_after_the_horizon_does_not_resolve_true(tmp_path):
     assert not scored_forecasts(ctx.store), "nothing corrupted the scoreboard"
 
 
-# ---- a move made after the horizon is not the probability that stood -------
+# A move made after the horizon is not the probability that stood
 
 
 def test_post_horizon_update_is_not_scored_as_standing():
@@ -221,7 +221,7 @@ def test_post_horizon_update_is_not_scored_as_standing():
         "and the chase is surfaced, not hidden"
 
 
-# ---- an absence indicator sees the whole window ----------------------------
+# An absence indicator sees the whole window
 
 
 def test_pre_deadline_search_cannot_cover_the_window_it_did_not_see(tmp_path):
@@ -280,7 +280,7 @@ def test_absence_is_defeated_by_state_that_already_held_at_arming(tmp_path):
         "'we never saw it' cannot be asserted about a state that held all along"
 
 
-# ---- interrupted writes complete, and status stays honest ------------------
+# Interrupted writes complete, and status stays honest
 
 
 def test_crash_recovered_firing_still_closes_the_coverage_gap(tmp_path):
@@ -390,7 +390,7 @@ def test_update_does_not_unpass_a_passed_horizon(tmp_path):
         "the horizon is a fact about the clock, not a review flag"
 
 
-# ---- an indicator on a settled question expires ----------------------------
+# An indicator on a settled question expires
 
 
 def test_indicator_on_settled_questions_expires_and_stops_driving_collection(

@@ -7,7 +7,7 @@ import { busy,
 import { annotationsSection, nav, render } from "./views.js";
 import { session } from "./session.js";
 
-// ---- generic analytical family browser --------------------------------------
+// generic analytical family browser
 
 function familyBrowser({ title, family, idField, columns, note }) {
   return async function view(main) {
@@ -125,7 +125,7 @@ export async function narrativeView(main, params, id) {
   });
 }
 
-// ---- stakeholders -----------------------------------------------------------
+// stakeholders
 
 export async function stakeholdersView(main) {
   await render(main, async () => {
@@ -176,7 +176,7 @@ export async function stakeholderView(main, params, id) {
   });
 }
 
-// ---- impact -----------------------------------------------------------------
+// impact
 
 export async function impactView(main) {
   await render(main, async () => {
@@ -262,7 +262,7 @@ async function objectiveView(main, params, id) {
   });
 }
 
-// ---- hypotheses -------------------------------------------------------------
+// hypotheses
 
 export async function hypothesesView(main) {
   await render(main, async () => {
@@ -369,7 +369,7 @@ export async function hypothesisView(main, params, id) {
   });
 }
 
-// ---- forecasts --------------------------------------------------------------
+// forecasts
 
 export async function forecastsView(main) {
   await render(main, async () => {
@@ -391,8 +391,8 @@ export async function forecastsView(main) {
   });
 }
 
-// The kinds the analytic contract allows. Only HUMAN_JUDGMENT resolves without
-// a typed, machine-checkable rule, so the others ask for that rule.
+// The kinds the contract allows. Only HUMAN_JUDGMENT resolves without a typed
+// rule, so the others ask for one.
 const RESOLUTION_KINDS = ["HUMAN_JUDGMENT", "CLAIM_PREDICATE", "EVENT_OCCURRED"];
 
 function forecastAuthoringCard(claims) {
@@ -551,8 +551,8 @@ export async function forecastView(main, params, id) {
         h("h3", {}, "Project warning onto an objective (tier comes from the named rule)"),
         (() => {
           const visible = objectives.records || [];
-          // Choose a visible objective; the free-text field stays for an id
-          // this context can act on but does not list.
+          // Pick a visible objective; the free-text field stays for an id this
+          // context can act on but does not list.
           const objectiveSelect = h("select", { "aria-label": "objective" },
             visible.map((o) => h("option", { value: o.objective_id },
               pickerLabel(o.statement, o.objective_id))));
@@ -574,7 +574,7 @@ export async function forecastView(main, params, id) {
   });
 }
 
-// ---- indicators -------------------------------------------------------------
+// indicators
 
 export async function indicatorsView(main) {
   await render(main, async () => {
@@ -593,7 +593,7 @@ export async function indicatorsView(main) {
   });
 }
 
-// ---- warnings ---------------------------------------------------------------
+// warnings
 
 export async function warningsView(main) {
   await render(main, async () => {
@@ -652,7 +652,7 @@ export async function warningView(main, params, id) {
   });
 }
 
-// ---- collection -------------------------------------------------------------
+// collection
 
 export async function collectionView(main) {
   const refresh = () => collectionView(main);
@@ -733,7 +733,7 @@ export async function collectionView(main) {
   });
 }
 
-// ---- watches ----------------------------------------------------------------
+// watches
 
 export async function watchesView(main) {
   const refresh = () => watchesView(main);
@@ -766,7 +766,7 @@ export async function watchesView(main) {
   });
 }
 
-// ---- tasks ------------------------------------------------------------------
+// tasks
 
 export async function tasksView(main) {
   const refresh = () => tasksView(main);
@@ -813,14 +813,14 @@ export async function tasksView(main) {
   });
 }
 
-// ---- review -----------------------------------------------------------------
+// review
 
 export async function reviewView(main) {
   const refresh = () => reviewView(main);
   await render(main, async () => {
     const queue = await get("/api/review");
-    // The note is entered inline, next to the item it disposes of, and is
-    // still required: a disposition without a reason is not a disposition.
+    // The note is inline and still required: a disposition without a reason is
+    // not a disposition.
     const itemCard = (item) => {
       const note = h("input", { size: 46, placeholder: "note (kept in history)…",
         "aria-label": "disposition note" });
@@ -873,7 +873,7 @@ export async function reviewView(main) {
   });
 }
 
-// ---- annotations (global) ---------------------------------------------------
+// annotations (global)
 
 export async function annotationsView(main) {
   await render(main, async () => {
@@ -890,7 +890,7 @@ export async function annotationsView(main) {
   });
 }
 
-// ---- investigation ----------------------------------------------------------
+// investigation
 
 export async function investigationView(main) {
   const refresh = () => investigationView(main);

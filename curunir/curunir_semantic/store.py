@@ -42,7 +42,7 @@ class SemanticStore(FabricStore):
         known = self.latest_by_id(record_type, id_field).get(record_id)
         return (known.get("version", 1) + 1) if known else 1
 
-    # ---- replayed views ---------------------------------------------
+    # Replayed views
 
     def current_claims(self) -> dict[str, dict]:
         """Latest version per claim; every prior version stays in the log."""

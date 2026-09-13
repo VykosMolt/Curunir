@@ -1,10 +1,9 @@
 """Operational workshops and the common operating picture.
 
-A workshop definition is validated data: object types, tables, map layers,
-timeline sources, allowed actions and access requirements. The renderer works
-only from an access-filtered projection, and the picture is a self-contained
-HTML document with an inline SVG map and no external assets. Epistemic state
-always shows as symbol shape and text, never colour alone.
+A workshop definition is validated data. The renderer works only from an
+access-filtered projection, and the picture is a self-contained HTML document
+with no external assets. Epistemic state always shows as symbol shape and text,
+never colour alone.
 """
 from __future__ import annotations
 
@@ -235,7 +234,7 @@ class WorkbenchRenderer:
                 "details": details, "counts": counts}
 
 
-# ---- common operating picture ----
+# Common operating picture
 
 _SYMBOL_SVG = {
     "circle": '<circle cx="{x}" cy="{y}" r="6" class="sym"/>',

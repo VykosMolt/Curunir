@@ -22,8 +22,8 @@ export async function reportsView(main) {
     const res = await get("/api/family/workbench_report");
     const title = h("input", { placeholder: "report title…", size: 40 });
     const question = h("input", { placeholder: "mission question…", size: 50 });
-    // A dossier is created at the floor it will need: a public draft cannot be
-    // raised later by citing restricted basis.
+    // Created at the floor it will need: a public draft cannot be raised later
+    // by citing restricted basis.
     const compartments = multiSelect(session.compartments || [],
       { label: "compartments" });
     const held = Math.max(0, ...(session.roles || []).map((r) => ROLE_ORDER.indexOf(r)));
@@ -59,8 +59,7 @@ export async function reportsView(main) {
   });
 }
 
-// Append an id to a comma-separated ref field, without disturbing what the
-// operator typed there by hand.
+// Append an id to a comma-separated ref field, leaving hand-typed text alone.
 function appendRef(input, id) {
   const parts = input.value.split(",").map((v) => v.trim()).filter(Boolean);
   if (!parts.includes(id)) parts.push(id);
@@ -221,8 +220,8 @@ export async function reportView(main, params, id) {
           }) }, `Save as v${r.version + 1}`))];
     }
 
-    // Approval disposition controls: the note and the dissent acknowledgement
-    // are fields on the page, not modal dialogs.
+    // The note and the dissent acknowledgement are fields on the page, not
+    // modal dialogs.
     const dissent = validation.open_dissent || [];
     const acknowledgeEl = h("input", { type: "checkbox",
       "aria-label": "approve with open dissent" });

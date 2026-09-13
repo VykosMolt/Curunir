@@ -1,6 +1,5 @@
-// The V6.8 pilot panel: session control and the frozen mission brief.
-// Only reachable when the server carries the /v68/pilot/* routes; the plain
-// workbench has none and shows nothing.
+// The V6.8 pilot panel: session control and the frozen mission brief. Only
+// reachable when the server carries the /v68/pilot/* routes.
 import { clearToken, get, post } from "./api.js";
 import { busy,
   badge, clip, emptyBox, errorBox, field, fmtTime, h, refLink, table,
@@ -35,9 +34,8 @@ export async function pilotView(main) {
         return;
       }
       if (path.endsWith("/end")) {
-        // Nothing can be read after the end: the token goes and the page
-        // returns to the sign-in form, so a stray click or reload falls
-        // outside no session.
+        // Nothing is readable after the end: the token goes and the page
+        // returns to sign-in, so no stray click falls outside a session.
         clearToken();
         location.reload();
         return;

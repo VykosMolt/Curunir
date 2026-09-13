@@ -1,11 +1,9 @@
-"""JSON Schemas for model-proposed analytical candidates.
+"""The shape a provider is constrained to emit, generated from the shape the human
+review path enforces, so the two cannot drift apart.
 
-The shape a provider is constrained to emit is generated from the shape the
-human review path enforces — `substrate.CANDIDATE_BINDING_KEYS` and the closed
-vocabularies in `contracts` — so the two cannot drift apart. `unresolvable_ids`
-additionally checks that a candidate cites only identifiers the request showed
-it. Kinds whose binding fields are machine-computed are refused here rather
-than misrepresented; see `NOT_MODEL_PROPOSABLE`.
+`unresolvable_ids` also checks that a candidate cites only identifiers the
+request showed it. Kinds whose binding fields are machine-computed are refused
+here rather than misrepresented; see `NOT_MODEL_PROPOSABLE`.
 """
 from __future__ import annotations
 
@@ -102,13 +100,9 @@ def id_fields(target_kind: str) -> tuple[str, ...]:
 
 
 def available_ids(payload: Any, *, _depth: int = 0) -> frozenset[str]:
-    """Every identifier-shaped string reachable in a request payload.
-
-    This is what the provider was shown, and therefore the only thing it is
-    allowed to cite back. A string only counts when it sits under an
-    identifier-shaped key, directly or as an element of that key's list; free
-    text the payload happened to carry is not an identifier the provider may
-    cite. The search is structural, so a record nested anywhere still counts.
+    """Every identifier-shaped string reachable in a request payload: what the
+    provider was shown, and so the only thing it may cite back. A string counts
+    only under an identifier-shaped key, never from free text.
     """
     if _depth > 64:
         return frozenset()

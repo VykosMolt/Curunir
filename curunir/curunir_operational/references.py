@@ -1,8 +1,8 @@
 """Typed references between records.
 
-A record declares which of its fields name other records by annotating them,
-for example ``claim_ids: Refs("semantic_claim")``. The information-flow policy
-is derived from those annotations, so a field that names a record cannot be
+A record declares which of its fields name other records by annotating them, for
+example ``claim_ids: Refs("semantic_claim")``. The information-flow policy is
+derived from those annotations, so a field that names a record cannot be
 forgotten by a table somewhere else.
 """
 from __future__ import annotations
@@ -17,10 +17,9 @@ from typing import Annotated, Any
 class RefTo:
     """Marks a field that names other records.
 
-    ``kind`` is the record type, or "*" when the id may belong to any type.
-    ``kind_from`` names a sibling field that carries the kind at runtime.
-    ``pairs`` means the field holds (kind, id) pairs; with ``slot`` set, the
-    pairs carry the id at that position and ``kind`` is fixed.
+    ``kind`` is the record type, or "*" for any. ``kind_from`` names a sibling
+    field carrying the kind at runtime. ``pairs`` means (kind, id) pairs; with
+    ``slot``, the id sits at that position and ``kind`` is fixed.
     """
     kind: str = "*"
     kind_from: str = ""

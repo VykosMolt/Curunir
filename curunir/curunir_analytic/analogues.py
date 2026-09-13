@@ -1,11 +1,9 @@
 """Historical analogues: structural comparison, never a forecast.
 
-An episode is evidence-bound structured history — actors, ordered events,
-setting, mechanism, constraints and outcome, each carried by claims. Retrieval
-compares a situation to episodes on explicit structural dimensions rather than
-on text similarity, and every analogue exposes what matched, what did not, and
-its transfer risks. The record has no forecast field, so similar structure
-cannot become expected outcome.
+An episode is evidence-bound structured history. Retrieval compares a situation
+to episodes on explicit structural dimensions rather than text similarity, and
+the record has no forecast field, so similar structure cannot become expected
+outcome.
 """
 from __future__ import annotations
 

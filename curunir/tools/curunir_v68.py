@@ -958,7 +958,7 @@ def prepare_mission(mission_id: str, root: Path) -> dict[str, Any]:
         raise
 
 
-# ---- privacy-bounded pilot instrumentation ---------------------------------
+# Privacy-bounded pilot instrumentation
 
 PILOT_LOG = "pilot_events.jsonl"
 # The header value the shipped workbench UI sends on every request.
@@ -1291,7 +1291,7 @@ def create_instrumented_app(root: Path):
     return app
 
 
-# ---- evidence, measurement, and replay -------------------------------------
+# Evidence, measurement, and replay
 
 def _pilot_events(path: Path) -> list[dict[str, Any]]:
     verification = verify_pilot_log(path)

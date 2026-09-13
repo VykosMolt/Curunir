@@ -1,9 +1,8 @@
 """Alert, analyst review, recommendation, human decision.
 
 A service actor can propose and the workflow can materialize, but only a human
-with sufficient role can record a decision, and never the provider that made
-the recommendation. A decision binds to a frozen evidence snapshot hash that
-can be recomputed. Nothing here executes an external action.
+with sufficient role can record a decision, and never the provider that made the
+recommendation. A decision binds to a frozen evidence snapshot hash.
 """
 from __future__ import annotations
 
@@ -63,7 +62,7 @@ class WorkflowEngine:
     def __init__(self, store: MissionDataStore):
         self.store = store
 
-    # ---- alerts ----
+    # Alerts
 
     def _alert_status(self, alert_id: str) -> str | None:
         status = None
@@ -137,7 +136,7 @@ class WorkflowEngine:
             recorded_time=recorded_time, actor=context.actor_id, condition=_still_at)
         return event["record"]
 
-    # ---- proposal materialization ----
+    # Proposal materialization
 
     def materialize(self, proposal: Mapping[str, Any], *, actor_id: str, recorded_time: str) -> dict[str, Any]:
         inference = next((r for r in self.store.records_of("inference")
@@ -196,7 +195,7 @@ class WorkflowEngine:
             result.update(materialized=False)
         return result
 
-    # ---- recommendations and decisions ----
+    # Recommendations and decisions
 
     def recommend(self, content: Mapping[str, Any], *, provider_id: str, marking: Marking,
                   recorded_time: str, actor: str, alert_ids: tuple[str, ...] = ()) -> dict[str, Any]:

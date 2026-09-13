@@ -1,12 +1,11 @@
 """Pack, unpack and verify the pinned ARGUS kernel tarball.
 
-The kernel tree is identified by one hash (CURUNIR_V6_7_RECONSTRUCTION.json).
-CI downloads the tarball from a GitHub release and unpacks it with this tool,
-which refuses any tree whose hash differs from the pinned one.
+The kernel tree is identified by one hash (CURUNIR_V6_7_RECONSTRUCTION.json), and
+this refuses any tree whose hash differs.
 
     python tools/kernel_bundle.py verify ../kernel/argus
-    python tools/kernel_bundle.py pack ../kernel/argus --out ../kernel/argus_kernel_pinned_4c173df7.tar.gz
-    python tools/kernel_bundle.py unpack ../kernel/argus_kernel_pinned_4c173df7.tar.gz --into ../kernel
+    python tools/kernel_bundle.py pack ../kernel/argus --out TARBALL
+    python tools/kernel_bundle.py unpack TARBALL --into ../kernel
 """
 from __future__ import annotations
 

@@ -53,7 +53,7 @@ def _flip(pipeline, ctx, body=GLEIF_ACME_SUSPENDED):
     pipeline.process_new_evidence()
 
 
-# ---- was the answer already on the record when it was written? -------------
+# Was the answer already on the record when it was written?
 
 
 def test_forecast_resolved_by_prior_evidence_feeds_no_aggregate(tmp_path):
@@ -92,7 +92,7 @@ def test_genuinely_forward_resolution_still_scores(tmp_path):
         "a question settled by evidence that arrived later is real calibration"
 
 
-# ---- a pending human decision blocks every machine verdict -----------------
+# A pending human decision blocks every machine verdict
 
 
 def test_machine_false_cannot_settle_over_an_open_latematch_item(tmp_path):
@@ -115,7 +115,7 @@ def test_machine_false_cannot_settle_over_an_open_latematch_item(tmp_path):
         "and the human question survives"
 
 
-# ---- re-arming never quietly changes what was authorized -------------------
+# Re-arming never quietly changes what was authorized
 
 
 def test_rearming_with_a_different_effect_is_refused(tmp_path):
@@ -147,7 +147,7 @@ def test_rearming_with_a_different_effect_is_refused(tmp_path):
     assert again["indicator_id"] == armed["indicator_id"]
 
 
-# ---- a name inside a longer word is a different name -----------------------
+# A name inside a longer word is a different name
 
 
 def test_url_binding_treats_non_ascii_letters_as_token_characters():
@@ -161,7 +161,7 @@ def test_url_binding_treats_non_ascii_letters_as_token_characters():
     assert _execution_touches_subject(exact, values, {})
 
 
-# ---- "never looked" and "looked but could not attribute" are different -----
+# "never looked" and "looked but could not attribute" are different
 
 
 def test_coverage_diagnostic_names_the_real_gap(tmp_path):
@@ -191,7 +191,7 @@ def test_coverage_diagnostic_names_the_real_gap(tmp_path):
         "'never looked' is stated as such"
 
 
-# ---- what the flag covers, and what it must not ----------------------------
+# What the flag covers, and what it must not
 
 
 def test_citing_the_prior_observation_does_not_evade_the_flag(tmp_path):
@@ -284,7 +284,7 @@ def test_rearm_cannot_silently_retarget_the_watch(tmp_path):
         "the watch fires on what the human aimed it at, nothing else"
 
 
-# ---- the flag describes the resolution, and never changes ------------------
+# The flag describes the resolution, and never changes
 
 
 def test_flag_does_not_drift_when_the_claim_later_moves_on(tmp_path):

@@ -1,9 +1,9 @@
-"""Mission pipelines: connector, validation, mapping, then objects,
-relationships and transformation lineage.
+"""Mission pipelines: connector, validation, mapping, then objects, relationships
+and transformation lineage.
 
-A pipeline definition is strict data — unknown keys are rejected and no code
-comes from configuration. The executor is generic, so a new feed means a new
-schema, mapping and pipeline rather than an edit here.
+A pipeline definition is strict data — unknown keys are rejected and no code comes
+from configuration. The executor is generic, so a new feed means a new schema,
+mapping and pipeline rather than an edit here.
 """
 from __future__ import annotations
 

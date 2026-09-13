@@ -1,10 +1,8 @@
 """The last mile of signed identity, in a real browser.
 
-Chromium approves a report, and the attribution is an Ed25519 signature made by
-a device key that cannot leave the browser, bound to that exact report and
-version. Signature semantics themselves are covered in test_identity_crypto.py;
-here the point is that the real browser path is accepted and that the server
-still refuses browser-signed attacks against the binding.
+Chromium approves a report with a device key that cannot leave the browser, bound
+to that exact report and version. Signature semantics are covered in
+test_identity_crypto.py; here the point is the real browser path.
 """
 from __future__ import annotations
 
@@ -110,7 +108,7 @@ def _login(page, base, tok):
     page.wait_for_selector("#shell:not(.hidden)")
 
 
-# ---- the operator path: a signed approval, recorded for replay ----
+# The operator path: a signed approval, recorded for replay
 
 def test_browser_signed_approval_is_genuine_and_four_eyes(browser, env):
     base, root = env["base"], env["root"]
@@ -179,7 +177,7 @@ def report_of(store, rid):
     return store.current_reports()[rid]
 
 
-# ---- the server enforces the binding against browser-signed attacks ----
+# The server enforces the binding against browser-signed attacks
 
 # A signer that runs in the page with the real device key and the shipped
 # canonical serializer, with each field overridable.
@@ -245,7 +243,7 @@ def test_wire_rejects_browser_signed_attacks(browser, env, case, overrides, tamp
     assert not [r for r in store.records_of("signed_action") if r["target_id"] == rid]
 
 
-# ---- enrolment binds to the authenticated actor ----
+# Enrolment binds to the authenticated actor
 
 def test_enrollment_binds_to_bearer_actor_not_client_claim(browser, env):
     base = env["base"]
@@ -266,7 +264,7 @@ def test_enrollment_binds_to_bearer_actor_not_client_claim(browser, env):
     page.close()
 
 
-# ---- a revoked key stops the signed-action path ----
+# A revoked key stops the signed-action path
 
 def test_revoked_key_blocks_signed_action(browser, env):
     base, root = env["base"], env["root"]

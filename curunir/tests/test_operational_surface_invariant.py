@@ -1,18 +1,9 @@
 """No operational surface names a record the viewer cannot see.
 
-Two scenes: the Vessia scenario, and a small scene in which the rules read a
-compartmented observation alongside open ones. For every access context the
-test computes the record ids that context can never see and scans every
-rendered surface (projection, changes, sitrep in all three forms, explain for
-every visible record, the PACE bundle, the COP view and HTML, and the
-proposals) for any of them. Markings are joined structurally at append time and
-derived from inputs in the rule provider; this is the end-to-end check that
-both hold. The structural join at append time is the load-bearing control:
-the compartmented scene carries an analyst action that names the restricted
-observation under an open marking, which only admission keeps hidden. The
-provider-derived marking is a second, independent floor; on its own it is
-never the last line, because every proposal also inherits through its
-inference record and the inference through its input refs.
+For every access context the test computes the ids that context can never see and
+scans every rendered surface for any of them. The structural join at append time
+is the load-bearing control; the provider-derived marking is a second,
+independent floor.
 """
 from __future__ import annotations
 

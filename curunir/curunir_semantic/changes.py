@@ -1,9 +1,8 @@
 """Work out what a change between two manifestations of a target means.
 
-The watch layer answers "did the bytes change". This module diffs the two
-manifestations' observations, classifies each difference, names the claims it
-touches and queues review items, deleting nothing. Diffing observations rather
-than raw text keeps page furniture out.
+The watch layer answers "did the bytes change"; this diffs their observations,
+classifies each difference, names the claims it touches and queues review
+items, deleting nothing. Diffing observations keeps page furniture out.
 """
 from __future__ import annotations
 
@@ -18,7 +17,7 @@ from .contracts import ClaimStateRecord, ReviewItem, SemanticChangeRecord
 from .store import SemanticStore
 from .worldmodel import IntegrationContext, world_object_id
 
-# Correction and retraction wording in several languages. A match only steers
+# Correction and retraction wording, several languages. A match only steers
 # the classification; it never resolves anything on its own.
 _CORRECTION_CUES = re.compile(
     r"\b(correction|corrected|corrigendum|erratum|berichtigung|korrigiert|"
@@ -60,7 +59,7 @@ def classify_pairwise(prior: list[Mapping[str, Any]],
         if retraction:
             change_class = "SOURCE_RETRACTION"
         elif correction and change_class == "REMOVED_PROPOSITION":
-            # a correction replaces a statement, removing the old one
+            # A correction replaces a statement, removing the old one.
             change_class = "SOURCE_CORRECTION"
         differences.append({"change_class": change_class, "key": key,
                             "prior": observation, "current": None})
@@ -127,8 +126,7 @@ def interpret_change(ctx: IntegrationContext, prior_manifestation_id: str,
     """Interpret the difference between two manifestations of one target.
 
     Both must already be normalized and extracted. Records the differences,
-    updates claim standing where the change warrants it, and opens review items.
-    Safe to re-run.
+    updates claim standing where warranted, opens review items. Safe to re-run.
     """
     store = ctx.store
     prior_observations = store.observations_for_manifestation(prior_manifestation_id) \
@@ -150,9 +148,8 @@ def interpret_change(ctx: IntegrationContext, prior_manifestation_id: str,
                                         current_text)
         if _current_read_truncated(store, current_manifestation,
                                    current_manifestation_id):
-            # A truncated read cannot show that earlier content was removed or
-            # changed. Additions still count: truncation can hide content but
-            # cannot invent it.
+            # A truncated read cannot show a removal, but additions still
+            # count: truncation hides content, it cannot invent it.
             for difference in differences:
                 if (difference["change_class"] in _STATE_FOR_CLASS
                         and difference.get("prior") is not None):
@@ -164,8 +161,8 @@ def interpret_change(ctx: IntegrationContext, prior_manifestation_id: str,
     emitted: list[dict[str, Any]] = []
     truncated = differences[max_records:]
     if truncated:
-        # Never drop differences silently: record the remainder as one
-        # unresolved change naming what was not interpreted.
+        # Never drop a difference silently: record the remainder as one
+        # unresolved change.
         differences = differences[:max_records] + [{
             "change_class": "UNRESOLVED_CHANGE", "key": None, "prior": None, "current": None,
             "truncated_count": len(truncated),
@@ -180,9 +177,8 @@ def interpret_change(ctx: IntegrationContext, prior_manifestation_id: str,
                               (current_obs or {}).get("observation_id", ""),
                               (prior_obs or {}).get("observation_id", ""))
         if change_id in existing_change_ids:
-            # The change is recorded, but the claim standing and review item
-            # that follow it may have been lost to an interruption. Finish
-            # them; _propagate is safe to re-run.
+            # The change is recorded but its standing and review item may have
+            # been lost to an interruption; _propagate is safe to re-run.
             _propagate(ctx, existing_changes[change_id])
             continue
         affected_objects, affected_claims = _affected(store, (prior_obs, current_obs))
@@ -275,15 +271,11 @@ def _claim_newest_evidence_time(ctx: IntegrationContext, claim: Mapping[str, Any
 
 
 def _propagate(ctx: IntegrationContext, change: Mapping[str, Any]) -> None:
-    """Carry a classified change onto the claims it touches.
+    """Carry a classified change onto the claims it touches, updating standing
+    where warranted and opening a review item. Prior versions stay in the log.
 
-    Each affected claim gets a standing update where the change warrants one,
-    plus a review item. Prior versions and states stay in the log.
-
-    Safe to re-run, but a re-run only fills gaps: a change's verdict about a
-    claim holds only while it is the newest information about that claim. A
-    later change or claim version wins, so an old change cannot mark correct
-    current state stale.
+    A re-run only fills gaps: a later change or claim version wins, so an old
+    change cannot mark correct current state stale.
     """
     store = ctx.store
     mapping = _STATE_FOR_CLASS.get(change["change_class"])
@@ -295,8 +287,7 @@ def _propagate(ctx: IntegrationContext, change: Mapping[str, Any]) -> None:
     change_position = next((i for i, c in enumerate(all_changes)
                             if c["change_id"] == change["change_id"]),
                            len(all_changes))
-    # Read once for the whole loop: every affected claim is visited once, and
-    # the appends below only touch the claim being visited.
+    # Read once: each claim is visited once and the appends only touch it.
     current_claims = store.current_claims()
     claim_states = store.claim_states()
     all_observations = {o["observation_id"]: o
@@ -313,9 +304,8 @@ def _propagate(ctx: IntegrationContext, change: Mapping[str, Any]) -> None:
             for later in all_changes[change_position + 1:])
         superseded_by_later_version = parse_time(current["recorded_time"]) \
             > parse_time(change["recorded_time"])
-        # Compare the evidence, not just record order: a backlog interpreted
-        # after the claim already moved on looks newer by record order while
-        # resting on older source state.
+        # Compare the evidence, not record order: a backlog interpreted late
+        # looks newer while resting on older source state.
         superseded_by_newer_evidence = False
         claim_time = _claim_newest_evidence_time(ctx, current, all_observations)
         if change_time and claim_time \
@@ -324,16 +314,15 @@ def _propagate(ctx: IntegrationContext, change: Mapping[str, Any]) -> None:
         lifecycle_applicable = not superseded_by_later_change \
             and not superseded_by_later_version \
             and not superseded_by_newer_evidence
-        # If the claim already carries the changed value, the version bump has
-        # expressed the change and its standing is CURRENT; a stale marker would
-        # misdescribe it. The review item opens either way.
+        # If the claim already carries the value the bump expressed the change
+        # and it stays CURRENT; the review item opens either way.
         if claim_state and lifecycle_applicable \
                 and current["object_or_value"] != change["current_value"]:
             state_record = claim_states.get(claim_id)
             standing = state_record["state"] if state_record else "CURRENT"
-            # The machine may only move a claim out of its own bookkeeping
-            # states. RETRACTED, CORRECTED, DISPUTED and SOURCE_WITHDRAWN are
-            # human judgments and a re-run must never stamp over them.
+            # The machine only moves a claim out of its own bookkeeping states;
+            # RETRACTED, CORRECTED, DISPUTED and SOURCE_WITHDRAWN are human
+            # judgments and a re-run must never stamp over them.
             if standing in ("CURRENT", "STALE", "SUPERSEDED") \
                     and standing != claim_state:
                 state = ClaimStateRecord(

@@ -1,13 +1,10 @@
-"""Conservative, reversible operational object association.
+"""Conservative, reversible operational object association: nothing is ever
+destructively merged.
 
-Follows the identity-hardening pattern of the process-graph research
-(feature-mapped hypothesis → review-gated merge → reversal), re-implemented for
-operational objects: nothing is ever destructively merged. AUTO_ASSOCIATE
-requires an exact cross-system identifier match with no contradictions;
-everything ambiguous stays a proposal for review; negative evidence rejects.
-Accepted associations become SAME_AS relationship versions whose status can be
-reversed later, and projections derive clusters from the surviving versions,
-so every merge, split and reversal keeps full lineage.
+AUTO_ASSOCIATE needs an exact cross-system identifier match with no
+contradictions; anything ambiguous stays a proposal for review. Accepted
+associations become SAME_AS versions that can be reversed later, so every merge,
+split and reversal keeps full lineage.
 """
 from __future__ import annotations
 

@@ -1,9 +1,8 @@
 """Competing hypotheses, and the observations that would tell them apart.
 
 A hypothesis is never born supported, its assessment history accumulates, and
-evidence from the same publisher is never counted twice. Linking a claim to a
-hypothesis is a recorded act; refreshing re-derives the status from the linked
-claims without deleting any earlier assessment.
+evidence from the same publisher is never counted twice. Refreshing re-derives
+the status without deleting any earlier assessment.
 """
 from __future__ import annotations
 
@@ -234,10 +233,9 @@ def propose_discriminator(store: SemanticStore, *, question: str,
                           now: str, actor: str, marking: Marking) -> dict[str, Any]:
     """Ask for the observation that would best distinguish the alternatives.
 
-    Identified by question, subject and attribute. Calling again folds in new
-    links and hints rather than dropping them, and an independence requirement
-    can only be raised, never lowered — lowering it would let same-publisher
-    evidence answer a question it cannot answer.
+    Calling again folds in new links and hints. An independence requirement can
+    only be raised: lowering it would let same-publisher evidence answer a
+    question it cannot.
     """
     discriminator_id = digest_id("disc", question, desired_subject_ref, desired_attribute)
     existing = store.latest_by_id("discriminator", "discriminator_id").get(discriminator_id)

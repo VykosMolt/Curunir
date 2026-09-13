@@ -1,10 +1,8 @@
 """Mission data connectors: JSON, CSV and GeoJSON feeds.
 
-Discipline: the raw payload is persisted content-addressed BEFORE parsing or
-classification; every receipt — valid, malformed, duplicate, unsupported or
-late — leaves an ingestion record. Malformed and schema-invalid payloads are
-quarantined, never dropped. Duplicates are detected by idempotency key and
-recorded as DUPLICATE referencing the original ingestion.
+The raw payload is persisted content-addressed before parsing, and every receipt
+leaves an ingestion record. Malformed and schema-invalid payloads are
+quarantined, never dropped; duplicates are recorded as DUPLICATE.
 """
 from __future__ import annotations
 

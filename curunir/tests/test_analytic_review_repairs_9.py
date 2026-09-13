@@ -43,7 +43,7 @@ def _accepted_theme_candidate(ctx, claim_id):
     return accepted, result["inference_id"]
 
 
-# ---- B1: a human act spends no candidate ----------------------------------
+# B1: a human act spends no candidate
 
 def test_an_analyst_creation_does_not_consume_a_model_candidate(tmp_path):
     pipeline, ctx = make_analytic(tmp_path)
@@ -84,7 +84,7 @@ def test_a_non_model_record_cannot_carry_a_proposal_id():
             history=(), recorded_time=T0, marking=MARK)
 
 
-# ---- B2: a different chain is not the same path ---------------------------
+# B2: a different chain is not the same path
 
 def test_two_chains_reusing_an_edge_id_do_not_collide_silently(tmp_path):
     pipeline, ctx = make_analytic(tmp_path)
@@ -130,7 +130,7 @@ def test_rebuilding_the_same_chain_still_reconciles(tmp_path):
     assert again["version"] == first["version"]
 
 
-# ---- B3: only identifier-shaped strings are "shown" ------------------------
+# B3: only identifier-shaped strings are "shown"
 
 def test_a_claim_statement_is_not_an_available_identifier():
     payload = {"task": "propose",
@@ -146,7 +146,7 @@ def test_a_claim_statement_is_not_an_available_identifier():
         shown) == ("supporting_claim_ids=Acme is ISSUED",)
 
 
-# ---- B4: the offline backend can fill every proposable kind ---------------
+# B4: the offline backend can fill every proposable kind
 
 _EVIDENCE = {
     "claims": ["claim-1"],
@@ -184,7 +184,7 @@ def test_the_offline_backend_picks_the_safest_enum_member():
     assert indicator["forecast_ids"] == ["forecast-1"]
 
 
-# ---- B5: timestamps compare as instants, not as text ----------------------
+# B5: timestamps compare as instants, not as text
 
 def test_an_offset_bearing_timestamp_orders_by_instant(tmp_path):
     pipeline, ctx = make_analytic(tmp_path)
@@ -211,7 +211,7 @@ def test_an_offset_bearing_timestamp_orders_by_instant(tmp_path):
     assert basis.latest_time == "2020-01-05T11:00:00+00:00"
 
 
-# ---- B6: a passed horizon resolves on the pass that notices it ------------
+# B6: a passed horizon resolves on the pass that notices it
 
 def test_a_moved_basis_past_the_horizon_still_reaches_machine_resolution(tmp_path):
     pipeline, ctx = make_analytic(tmp_path)
@@ -247,7 +247,7 @@ def test_a_moved_basis_past_the_horizon_still_reaches_machine_resolution(tmp_pat
     assert settled["status"] == "RESOLVED_TRUE"
 
 
-# ---- B7: the emitted bound is the enforced bound --------------------------
+# B7: the emitted bound is the enforced bound
 
 def test_the_probability_schema_excludes_the_endpoints_the_contract_rejects():
     shape = candidate_schema("analytic_forecast")["properties"]["probability"]
@@ -256,7 +256,7 @@ def test_the_probability_schema_excludes_the_endpoints_the_contract_rejects():
     assert "minimum" not in shape and "maximum" not in shape
 
 
-# ---- B8: the CLI refuses a missing argument -------------------------------
+# B8: the CLI refuses a missing argument
 
 @pytest.mark.parametrize("command", ["explain", "history"])
 def test_cli_reports_a_missing_argument_instead_of_crashing(tmp_path, command):
@@ -267,7 +267,7 @@ def test_cli_reports_a_missing_argument_instead_of_crashing(tmp_path, command):
         cli_main(["--root", str(tmp_path), command, "analytic_theme"])
 
 
-# ---- review follow-ups ------------------------------------------------------
+# Review follow-ups
 
 def test_a_tampered_transition_record_is_reported_not_raised(tmp_path):
     pipeline, ctx = make_analytic(tmp_path)

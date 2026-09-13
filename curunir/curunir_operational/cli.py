@@ -1,8 +1,8 @@
 """Command-line front end for the operational plane.
 
-A thin argparse layer over the library modules: no logic of its own, no
-network, no destructive defaults, and an explicit store path and access
-context on every command.
+A thin argparse layer over the library modules: no logic of its own, no network,
+no destructive defaults, and an explicit store path and access context on every
+command.
 
     python -m curunir_operational.cli <command> --store PATH ...
 """

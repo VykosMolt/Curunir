@@ -60,7 +60,7 @@ def _flip_to_suspended(pipeline, ctx):
     pipeline.process_new_evidence()
 
 
-# ---- contract law ----------------------------------------------------------
+# Contract law
 
 
 def test_pre_authorized_effect_requires_a_human():
@@ -102,7 +102,7 @@ def test_arming_requires_a_live_forecast(tmp_path):
                       kind="PRESENCE", direction="SUPPORTS")
 
 
-# ---- firing ---------------------------------------------------------------
+# Firing
 
 
 def test_presence_never_fires_on_pre_arming_evidence(tmp_path):
@@ -206,7 +206,7 @@ def test_firing_is_one_shot(tmp_path):
     assert ctx.store.current_forecasts()[forecast["forecast_id"]] == moved
 
 
-# ---- absence --------------------------------------------------------------
+# Absence
 
 
 def _arm_absence(ctx, forecast, deadline="2026-08-17T12:20:00+00:00"):

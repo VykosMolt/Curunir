@@ -1,8 +1,7 @@
 """Measure what a workbench request costs as the event log grows.
 
-Builds a synthetic mission store of N object versions, then times a store
-open, a mission projection, and the overview through the real HTTP app,
-with and without an append between requests.
+Builds a synthetic store of N object versions, then times a store open, a mission
+projection and the overview through the real HTTP app.
 
     python tools/bench_store.py --events 5000 --requests 50
 """

@@ -1,9 +1,8 @@
 """Read observations out of a normalized document, without any model.
 
-Each source shape gets the right instrument: field paths for structured
-registry and API records, element paths for feeds, and the text capture in
-`provenance_capture` for prose and HTML. Every observation lands on a field or
-text-span anchor in its manifestation, and re-running appends nothing new.
+Field paths for structured records, element paths for feeds, text capture for
+prose. Every observation lands on an anchor in its manifestation, and
+re-running appends nothing new.
 """
 from __future__ import annotations
 
@@ -24,7 +23,7 @@ from .store import SemanticStore
 FIELD_MAPPING = "EXACT_FIELD_PATH"
 TEXT_MAPPING = "NORMALIZED_EXACT_ORIGINAL_APPROXIMATE"
 
-# the Wikidata properties that carry an external identifier
+# Wikidata properties that carry an external identifier.
 _WIKIDATA_IDENTIFIERS = {
     "P1278": "LEI", "P5531": "SEC_CIK", "P1320": "OPENCORPORATES",
     "P946": "ISIN", "P249": "TICKER", "P6782": "ROR", "P2427": "GRID",
@@ -33,8 +32,8 @@ _WIKIDATA_IDENTIFIERS = {
 
 def _observation_identity(document_id: str, observation_type: str, subject: str,
                           attribute: str, value: str, object_ref: str) -> str:
-    # Hash exactly the value the record stores, so two observations that differ
-    # only past the stored prefix cannot collide.
+    # Hash the stored value, so two observations differing only past the
+    # stored prefix cannot collide.
     return digest_id("semobs", document_id, observation_type, subject, attribute,
                      value[:2000], object_ref)
 
@@ -55,8 +54,7 @@ class _Emitter:
         self.emitted: list[dict] = []
 
     def field_anchor(self, field_path: str, value: str) -> EvidenceAnchor:
-        # Name the field table the path addresses, so the anchor alone says
-        # which payload a replay must read.
+        # Name the field table, so the anchor alone says which payload to read.
         return EvidenceAnchor(
             manifestation_id=self.document["manifestation_id"],
             source_id=self.document["source_id"],
@@ -112,8 +110,8 @@ class _Emitter:
 def _iso_day(value: str | None) -> str | None:
     """Parse a source-stated date or timestamp to an ISO string with a zone.
 
-    A bare date is taken as UTC at day precision. A bare timestamp returns None
-    rather than being stamped with a zone the source never gave.
+    A bare date is UTC at day precision; a bare timestamp returns None rather
+    than take a zone the source never gave.
     """
     if not value:
         return None
@@ -129,7 +127,7 @@ def _iso_day(value: str | None) -> str | None:
     return parsed.isoformat()
 
 
-# ---- GLEIF ---------------------------------------------------------------
+# GLEIF
 
 
 def _record_prefixes(fields: Mapping[str, str], container: str) -> list[str]:
@@ -187,7 +185,7 @@ def extract_gleif(emitter: _Emitter, fields: dict[str, str]) -> None:
                          object_ref=f"LEI:{successor}", source_time=last_update)
 
 
-# ---- Wikidata ------------------------------------------------------------
+# Wikidata
 
 
 def extract_wikidata(emitter: _Emitter, fields: dict[str, str]) -> None:
@@ -224,7 +222,7 @@ def extract_wikidata(emitter: _Emitter, fields: dict[str, str]) -> None:
                                  object_ref=f"URL:{value}")
 
 
-# ---- SEC EDGAR full-text search -----------------------------------------
+# SEC EDGAR full-text search
 
 
 def extract_edgar_search(emitter: _Emitter, fields: dict[str, str]) -> None:
@@ -257,7 +255,7 @@ def extract_edgar_search(emitter: _Emitter, fields: dict[str, str]) -> None:
                      valid_from=file_date, source_time=file_date, time_precision="DAY")
 
 
-# ---- Feeds ---------------------------------------------------------------
+# Feeds
 
 
 def _strip_ns(path: str) -> str:
@@ -265,9 +263,8 @@ def _strip_ns(path: str) -> str:
 
 
 def extract_feed(emitter: _Emitter, fields: dict[str, str]) -> None:
-    # In an element path the counter that tells sibling items apart sits on the
-    # segment before the tag, so an item is identified by its whole stem up to
-    # and including "/item" or "/entry".
+    # The counter separating sibling items sits on the segment before the tag,
+    # so an item is its whole stem up to and including "/item" or "/entry".
     items: dict[str, dict[str, tuple[str, str]]] = {}
     channel_title = ""
     title_path = ""
@@ -302,7 +299,7 @@ def extract_feed(emitter: _Emitter, fields: dict[str, str]) -> None:
                      time_precision="MINUTE" if published_iso else "UNKNOWN")
 
 
-# ---- Prose / HTML --------------------------------------------------------
+# Prose and HTML
 
 
 def extract_text_signals(emitter: _Emitter, text: str) -> None:
@@ -329,13 +326,12 @@ def extract_text_signals(emitter: _Emitter, text: str) -> None:
     raws, observations = capture(
         shim, source_object_id=document["manifestation_id"],
         content_hash=document["content_sha256"], title=document.get("title") or None)
-    # The anchoring below pairs each raw with its observation by position. If
-    # that ever stops holding, fail loudly rather than mis-pair.
+    # The anchoring pairs raw with observation by position; fail loudly rather
+    # than mis-pair.
     if len(raws) != len(observations):
         raise ValueError("capture returned unpaired raws/observations; "
                          "anchor pairing would be wrong")
-    # A page's statements are about where the page came from, so an archived
-    # copy speaks for the site it archived, not for the archive.
+    # An archived copy speaks for the site it archived, not for the archive.
     native = document.get("native_id") or document["manifestation_id"]
     if document["source_id"] == "wayback" and "/" in native:
         subject = f"URL:{native.partition('/')[2]}"
@@ -343,7 +339,7 @@ def extract_text_signals(emitter: _Emitter, text: str) -> None:
         subject = f"URL:{native}"
     else:
         subject = native
-    # Labeled lines like "Managing Director: Kari Nordmann." — the label
+    # Labeled lines like "Managing Director: Kari Nordmann."; the label
     # becomes the attribute.
     offset = 0
     for line in text.split("\n")[:200]:
@@ -358,8 +354,8 @@ def extract_text_signals(emitter: _Emitter, text: str) -> None:
         offset += len(line) + 1
 
     for raw, item in zip(raws, observations):
-        # Anchor on the matched text, then narrow to the value inside it. If
-        # the value cannot be located, say so rather than invent a span.
+        # Anchor on the matched text, then narrow to the value; say so rather
+        # than invent a span.
         needle = item.observed_value
         raw_text = raw.raw_text or ""
         raw_position = text.find(raw_text) if raw_text else -1
@@ -388,7 +384,7 @@ def extract_text_signals(emitter: _Emitter, text: str) -> None:
             subject, item.observation_type, item.observed_value, (anchor,))
 
 
-# ---- dispatch ------------------------------------------------------------
+# Dispatch
 
 _EXTRACTORS = {
     "gleif": ("gleif-record-parser", extract_gleif),
@@ -418,6 +414,6 @@ def extract_observations(store: SemanticStore, document_record: dict, *,
                            now=now, actor=actor, marking=marking)
         extract_text_signals(emitter, load_text(store, document_record))
         return emitter.emitted
-    # A source no extractor understands yields nothing; nothing is invented
-    # from a schema the parser cannot read.
+    # An unknown source yields nothing; nothing is invented from a schema the
+    # parser cannot read.
     return []

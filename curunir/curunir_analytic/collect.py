@@ -1,13 +1,9 @@
-"""Analytical uncertainty turned into collection, through the existing active-
-collection machinery rather than a parallel planner.
+"""Analytical uncertainty turned into collection, through the existing
+active-collection machinery rather than a parallel planner.
 
-The patterns recognized here: a single-origin theme wants an independent source
-family; an unresolved narrative origin wants earlier manifestations; an inferred
-interest without a public stand wants a primary statement; a weak impact edge
-wants discriminating evidence; a coverage-blocked or single-family forecast
-wants the declared sources searched; an absence indicator wants coverage where
-the thing would appear. Each becomes a discriminator plus a mission information
-requirement, which the existing planner ranks.
+Each recognized pattern — a single-origin theme, an unresolved narrative origin,
+a weak impact edge, a coverage-blocked forecast — becomes a discriminator plus a
+mission information requirement, which the existing planner ranks.
 """
 from __future__ import annotations
 

@@ -34,7 +34,7 @@ def _latest_claim_states(projection: MissionProjection) -> dict[str, dict]:
     return latest
 
 
-# ---- entity / event dossiers ----
+# Entity / event dossiers
 
 def entity_list(projection: MissionProjection) -> list[dict]:
     rows = []
@@ -145,7 +145,7 @@ def event_dossier(projection: MissionProjection, activity_id: str) -> dict | Non
     }
 
 
-# ---- timeline ----
+# Timeline
 
 def timeline(projection: MissionProjection, *, axis: str = "valid",
              kinds: tuple[str, ...] = (), t_from: str | None = None,
@@ -269,7 +269,7 @@ def timeline(projection: MissionProjection, *, axis: str = "valid",
     return {"axis": axis, "entries": entries}
 
 
-# ---- relationship graph ----
+# Relationship graph
 
 def graph(projection: MissionProjection, *, focus: str | None = None,
           depth: int = 2, relation_types: tuple[str, ...] = (),
@@ -337,7 +337,7 @@ def graph(projection: MissionProjection, *, focus: str | None = None,
             "association_proposals": proposals, "focus": focus}
 
 
-# ---- map ----
+# Map
 
 def map_view(projection: MissionProjection) -> dict[str, Any]:
     """Only geography that is in the records: an object without coordinates is
@@ -366,7 +366,7 @@ def map_view(projection: MissionProjection) -> dict[str, Any]:
             "unlocated": unlocated}
 
 
-# ---- source independence ----
+# Source independence
 
 def source_independence(projection: MissionProjection, *, claim_ids: tuple[str, ...]) -> dict[str, Any]:
     """How much independent support a set of claims really has: documents,
@@ -404,7 +404,7 @@ def source_independence(projection: MissionProjection, *, claim_ids: tuple[str, 
     }
 
 
-# ---- hypothesis comparison / evidence matrix ----
+# Hypothesis comparison / evidence matrix
 
 def hypothesis_matrix(projection: MissionProjection, *,
                       hypothesis_ids: tuple[str, ...] = ()) -> dict[str, Any]:
@@ -451,7 +451,7 @@ def hypothesis_matrix(projection: MissionProjection, *,
     }
 
 
-# ---- coverage matrix ----
+# Coverage matrix
 
 def coverage_matrix(projection: MissionProjection, *,
                     need_id: str | None = None) -> dict[str, Any]:
@@ -482,7 +482,7 @@ def coverage_matrix(projection: MissionProjection, *,
     return {"rows": rows}
 
 
-# ---- unified review queue ----
+# Unified review queue
 
 def review_queue(projection: MissionProjection) -> dict[str, Any]:
     """Everything waiting on a person: review items, model proposals, identity

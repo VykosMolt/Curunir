@@ -1,10 +1,9 @@
 """The V6.8 pilot protocol, driven through the shipped UI and nothing else.
 
 Each journey is one mission of `CURUNIR_V6_8_PILOT_PROTOCOL.md` performed by
-Chromium against a real instrumented server: session control, the mission
-brief, the analytical work, the dossier, and the signed approval all happen in
-the browser. No action here goes through urllib or a store function; the store
-and the pilot log are read only to check what the browser caused.
+Chromium against a real instrumented server. No action here goes through urllib
+or a store function; the store and pilot log are read only to check what the
+browser caused.
 """
 from __future__ import annotations
 
@@ -39,7 +38,7 @@ pytestmark = [pytest.mark.no_db,
 HUMAN_ACTORS = set(v68.ROLE_ACTORS.values())
 
 
-# ---- mission roots and servers ----------------------------------------------
+# Mission roots and servers
 
 def _prepare_root(mission_id: str, root: Path) -> dict:
     """Build a deterministic mission root in process.
@@ -90,7 +89,7 @@ def _projection(root: Path, actor_id: str) -> MissionProjection:
                              ActorRegistry(root / "actors.json").context_for_actor(actor_id))
 
 
-# ---- browser helpers ---------------------------------------------------------
+# Browser helpers
 
 def _login(page, base, token, role="", note=""):
     """Sign in through the form; on a pilot server, with a role, the session
@@ -195,7 +194,7 @@ def browser():
         instance.close()
 
 
-# ---- M2: regulatory correction ----------------------------------------------
+# M2: regulatory correction
 
 @pytest.fixture(scope="module")
 def m2(tmp_path_factory):
@@ -333,7 +332,7 @@ def test_m2_journey_through_the_ui(browser, m2):
     _end_session(approver, base, "APPROVER", "approval recorded")
     approver_ctx.close()
 
-    # ---- what the harness can see afterwards ----
+    # What the harness can see afterwards
     events = _pilot_log(root)
     pairs = {(item["event_kind"], item.get("actor_id"), item.get("participant_role"))
              for item in events}
@@ -353,7 +352,7 @@ def test_m2_journey_through_the_ui(browser, m2):
     assert replay["all_genuine"], replay
 
 
-# ---- M3: relief collaboration and access control ----------------------------
+# M3: relief collaboration and access control
 
 @pytest.fixture(scope="module")
 def m3(tmp_path_factory):
@@ -524,7 +523,7 @@ def test_m3_journey_through_the_ui(browser, m3):
     _end_session(observer, base, "PUBLIC_ACCESS_CHECK", "public access check complete")
     public_ctx.close()
 
-    # ---- what the harness can see afterwards ----
+    # What the harness can see afterwards
     events = _pilot_log(root)
     pairs = {(item["event_kind"], item.get("actor_id"), item.get("participant_role"))
              for item in events}
@@ -548,10 +547,9 @@ def test_m3_journey_through_the_ui(browser, m3):
 def test_measurement_counts_mutations_by_client(tmp_path):
     """The package summary counts mutations by the client each request claimed.
 
-    Asserted on a hand-built log so the counts are exact; the journeys assert
-    the same field on their own logs. A log written before the header existed
-    carries no such key, so an already-frozen package still re-derives to its
-    packaged bytes.
+    Asserted on a hand-built log so the counts are exact. A log written before
+    the header existed carries no such key, so a frozen package still
+    re-derives.
     """
     root = tmp_path / "measured"
     WorkbenchStore.create(root / "store", "measurement-test", "2026-08-21T12:00:00+00:00")
@@ -609,7 +607,7 @@ def test_measurement_counts_mutations_by_client(tmp_path):
     assert "mutating_requests_by_client" not in older_measurement["interpretation"]
 
 
-# ---- M1 analogue: the plain workbench, no pilot routes ----------------------
+# M1 analogue: the plain workbench, no pilot routes
 
 @pytest.fixture(scope="module")
 def demo(tmp_path_factory):

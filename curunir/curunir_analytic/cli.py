@@ -2,24 +2,9 @@
 
     python -m curunir_analytic.cli --root STORE_ROOT COMMAND [args]
 
-Commands:
-    themes                      current themes with status/basis
-    narratives                  current narratives (reach vs independence)
-    stakeholders [--entity ID]  current assessments
-    influence                   current influence assertions
-    objectives                  mission objectives with status
-    paths [--objective ID]      impact paths
-    assumptions                 assumptions with status
-    analogues                   retrieved historical analogues
-    forecasts                   current forecasts with probability history depth
-    indicators                  armed/fired/blocked indicators
-    warnings                    standing warnings with tier and components
-    calibration                 scoreboard: proper scores, buckets, coverage
-    needs                       current analytical collection needs
-    explain KIND ID             structured explanation of one object
-    history KIND ID             versions + transitions of one object
-    dependents --claim ID       analytical objects resting on a claim
-    stale                       analytical objects in degraded states
+Commands: themes, narratives, stakeholders, influence, objectives, paths,
+assumptions, analogues, forecasts, indicators, warnings, calibration, needs,
+explain KIND ID, history KIND ID, dependents --claim ID, stale.
 """
 from __future__ import annotations
 

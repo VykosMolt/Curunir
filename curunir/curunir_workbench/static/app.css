@@ -1,11 +1,9 @@
-/* Curunír workbench stylesheet.
- *
- * Three rules: the value is the largest thing on screen; status is shown as a
- * word, with colour only reinforcing it; identifiers and hashes appear only in
- * auditor mode. No webfonts, so the page makes no outbound requests.
+/* Curunír workbench stylesheet. The value is the largest thing on screen,
+ * status is a word with colour only reinforcing it, and identifiers show only
+ * in auditor mode. No webfonts, so the page makes no outbound requests.
  */
 
-/* ---- palette: "Archive" -------------------------------------------------- */
+/* palette: "Archive" */
 :root {
   --ground:      #FAF9F5;   /* warm paper, not clinical white */
   --surface:     #FFFFFF;
@@ -69,14 +67,14 @@ body {
   -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility;
 }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
-/* the reading surface takes focus for keyboard scrolling; that is not
+/* The reading surface takes focus for keyboard scrolling; that is not
    an interaction, so it must not draw a focus ring */
 #main:focus, #main:focus-visible { outline: none; }
 .hidden { display: none !important; }
 a { color: var(--accent); text-underline-offset: 2px; }
 
 
-/* ---- shell --------------------------------------------------------------- */
+/* shell */
 .shell { display: grid; grid-template-columns: var(--rail) minmax(0,1fr); height: 100vh; }
 .shell.with-aside { grid-template-columns: var(--rail) minmax(0,1fr) var(--aside); }
 .nav {
@@ -104,7 +102,7 @@ a { color: var(--accent); text-underline-offset: 2px; }
 #main:focus, #main:focus-visible { outline: none; }
 .main > * { max-width: 1080px; }
 
-/* ---- headings and text --------------------------------------------------- */
+/* headings and text */
 h1 { font: 400 30px/1.22 var(--serif); letter-spacing: -.01em; margin: 0 0 6px; color: var(--ink); }
 h2 { font: 500 11px/1 var(--sans); letter-spacing: .13em; text-transform: uppercase;
   color: var(--muted); margin: calc(var(--step)*9) 0 calc(var(--step)*3);
@@ -112,15 +110,15 @@ h2 { font: 500 11px/1 var(--sans); letter-spacing: .13em; text-transform: upperc
 h3 { font: 550 14px/1.3 var(--sans); margin: 0 0 8px; color: var(--ink); }
 .muted, .sub { color: var(--muted); }
 .faint { color: var(--faint); }
-/* identifiers are not the operator's vocabulary */
+/* Identifiers are not the operator's vocabulary. */
 .mono { font: 12px/1.5 var(--mono); color: var(--faint); word-break: break-all; }
-/* a run of counts, each its own item, so they never collide */
+/* A run of counts, each its own item, so they never collide. */
 .statline { color: var(--muted); font-size: 13.5px; margin: 0 0 calc(var(--step)*5);
   display: flex; flex-wrap: wrap; gap: 5px calc(var(--step)*4); align-items: baseline; }
 .statline > a, .statline > span { white-space: nowrap; }
 .statline b { color: var(--ink); font-weight: 600; font-variant-numeric: tabular-nums; }
 
-/* ---- cards and the COP --------------------------------------------------- */
+/* cards and the COP */
 .card { background: var(--surface); border: 1px solid var(--rule); border-radius: 7px;
   padding: calc(var(--step)*4) calc(var(--step)*5); margin-bottom: calc(var(--step)*3);
   box-shadow: var(--shadow); }
@@ -131,14 +129,14 @@ h3 { font: 550 14px/1.3 var(--sans); margin: 0 0 8px; color: var(--ink); }
 .cop h2 { margin-top: 0; border: 0; padding: 0; }
 .cop .card { margin: 0; }
 
-/* ---- key/value ----------------------------------------------------------- */
+/* key/value */
 .kv { display: grid; grid-template-columns: minmax(140px, max-content) 1fr;
   gap: 7px calc(var(--step)*4); margin: 0; }
 .kv dt { font: 500 11px/1.5 var(--sans); letter-spacing: .09em; text-transform: uppercase;
   color: var(--muted); }
 .kv dd { margin: 0; color: var(--ink); overflow-wrap: anywhere; }
 
-/* ---- tables -------------------------------------------------------------- */
+/* tables */
 table { width: 100%; border-collapse: collapse; font-size: 14px; }
 th { text-align: left; font: 500 10.5px/1 var(--sans); letter-spacing: .1em;
   text-transform: uppercase; color: var(--muted); padding: 0 calc(var(--step)*3) 10px;
@@ -149,7 +147,7 @@ td .sub { display: block; font-size: 12px; color: var(--faint); margin-top: 3px;
 tr.row { cursor: pointer; transition: background 110ms ease; }
 tr.row:hover, tr.selected { background: var(--surface); }
 
-/* ---- status: a WORD, colour only reinforcing ----------------------------- */
+/* status: a WORD, colour only reinforcing */
 .badge { font: 500 10.5px/1 var(--sans); letter-spacing: .07em; text-transform: uppercase;
   color: var(--muted); border: 1px solid var(--rule-strong); border-radius: 3px;
   padding: 3px 6px; white-space: nowrap; }
@@ -159,7 +157,7 @@ tr.row:hover, tr.selected { background: var(--surface); }
 .badge.unknown { color: var(--faint); }
 .badge.tier { color: var(--accent); border-color: currentColor; }
 
-/* ---- notices ------------------------------------------------------------- */
+/* notices */
 .notice { border: 1px solid var(--rule-strong); border-radius: 6px;
   padding: calc(var(--step)*3) calc(var(--step)*4); margin: calc(var(--step)*3) 0;
   background: var(--surface); font-size: 14px; }
@@ -168,7 +166,7 @@ tr.row:hover, tr.selected { background: var(--surface); }
 .error { color: var(--tension); font-size: 13px; }
 .empty, .loading { color: var(--faint); font-style: italic; padding: calc(var(--step)*5) 0; }
 
-/* ---- provenance chain ---------------------------------------------------- */
+/* provenance chain */
 .chain { display: flex; flex-direction: column; gap: 0; }
 .chain-node { position: relative; padding: 0 0 calc(var(--step)*5) calc(var(--step)*6); }
 .chain-node::before { content: ""; position: absolute; left: 5px; top: 6px;
@@ -187,12 +185,12 @@ pre.payload { background: var(--sunken); border: 1px solid var(--rule); border-r
   font: 12px/1.65 var(--mono); white-space: pre-wrap; word-break: break-word;
   color: var(--ink-soft); }
 
-/* ---- matrix -------------------------------------------------------------- */
+/* matrix */
 .matrix td.cell-supports { color: var(--settled); font-weight: 600; text-align: center; }
 .matrix td.cell-contradicts { color: var(--tension); font-weight: 600; text-align: center; }
 .matrix td.cell-unresolved { color: var(--unresolved); text-align: center; }
 
-/* ---- dossier sentences --------------------------------------------------- */
+/* dossier sentences */
 .sentence { border-left: 2px solid var(--rule-strong); padding: calc(var(--step)*2) calc(var(--step)*4);
   margin-bottom: calc(var(--step)*2); font: 400 17px/1.55 var(--serif); }
 .sentence .meta { font: 400 12px/1.5 var(--sans); color: var(--faint); margin-top: 6px; }
@@ -200,7 +198,7 @@ pre.payload { background: var(--sunken); border: 1px solid var(--rule); border-r
 .sentence.s-explicitly_inferential { border-left-color: var(--accent); }
 .sentence.s-unresolved { border-left-color: var(--unresolved); }
 
-/* ---- controls ------------------------------------------------------------ */
+/* controls */
 .toolbar { display: flex; align-items: center; gap: calc(var(--step)*2);
   flex-wrap: wrap; margin-bottom: calc(var(--step)*4); }
 .toolbar .spacer { flex: 1; }
@@ -226,7 +224,7 @@ label { display: block; font: 500 11px/1 var(--sans); letter-spacing: .09em;
   flex-wrap: wrap; }
 .picker select { max-width: 420px; }
 
-/* ---- svg panels ---------------------------------------------------------- */
+/* svg panels */
 .svg-panel { background: var(--surface); border: 1px solid var(--rule);
   border-radius: 7px; padding: calc(var(--step)*3); overflow: auto; }
 .svg-panel text { fill: var(--ink); font: 11px var(--sans); }
@@ -241,20 +239,20 @@ label { display: block; font: 500 11px/1 var(--sans); letter-spacing: .09em;
 .svg-panel .probline { stroke: var(--accent); fill: none; stroke-width: 1.6; }
 .svg-panel .probpoint { fill: var(--accent); }
 
-/* ---- inspector ----------------------------------------------------------- */
+/* inspector */
 .inspector { border-left: 1px solid var(--rule); background: var(--surface);
   overflow-y: auto; padding: calc(var(--step)*5) calc(var(--step)*6); }
 .inspector .close { float: right; background: none; border: 0; color: var(--muted);
   font-size: 18px; cursor: pointer; }
 
-/* ---- login --------------------------------------------------------------- */
+/* login */
 .login { min-height: 100vh; display: grid; place-items: center; padding: 24px; }
 .login-box { width: 100%; max-width: 350px; }
 .login-box h1 { font: 400 30px/1.2 var(--serif); margin: 0 0 6px; }
 .login-box input { width: 100%; }
 .login-box button { width: 100%; margin-top: 14px; }
 
-/* ---- auditor mode: the ONLY place raw identifiers are shown -------------- */
+/* Auditor mode: the only place raw identifiers are shown. */
 .ident { display: none; font: 11.5px/1.4 var(--mono); color: var(--faint);
   word-break: break-all; }
 :root[data-auditor="on"] .ident { display: inline-block; }
@@ -264,7 +262,7 @@ label { display: block; font: 500 11px/1 var(--sans); letter-spacing: .09em;
   border-radius: 999px; padding: 6px 11px; }
 :root[data-auditor="on"] .auditor-flag { display: block; }
 
-/* ---- the claim: margin rule, label, value, whisper ----------------------- */
+/* the claim: margin rule, label, value, whisper */
 .claim { display: block; width: 100%; text-align: left; background: none; border: 0;
   border-left: 2px solid var(--rule-strong); border-radius: 0 5px 5px 0;
   font: inherit; color: inherit; cursor: pointer;

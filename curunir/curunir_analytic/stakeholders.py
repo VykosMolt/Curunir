@@ -1,11 +1,8 @@
 """Stakeholders and influence: contextual, temporal, evidence-bound.
 
-An assessment is always relative to a context and a period, never a permanent
-label. Positions change by supersession with both states retained, and open
-identity ambiguity travels with the assessment instead of being collapsed.
-Discovery derives only what the world model states — formal roles and
-ownership from ACTIVE typed relations; inferred influence and interests enter
-as judgments with their author on record.
+An assessment is relative to a context and a period, never a permanent label.
+Positions change by supersession with both states kept, and discovery derives
+only what the world model states; judgments enter with their author on record.
 """
 from __future__ import annotations
 
@@ -20,7 +17,7 @@ from .substrate import (AnalyticContext, append_version, creation_authority,
                         ensure_transition, open_identity_caveats,
                         record_transition, require_accepted_candidate)
 
-# relation type -> how the derived role reads
+# Relation type -> how the derived role reads.
 _ROLE_RELATIONS = {
     "HOLDS_ROLE": "holds a stated role at",
     "OWNS": "owns",
@@ -71,16 +68,15 @@ def create_assessment(ctx: AnalyticContext, *, entity_object_id: str,
                                  f"in {context_kind}:{context_id[:24]}",
                           caused_by=caused_by or assessment_id,
                           to_status=existing["status"])
-        # model provenance may only complete the materialization the human
-        # accepted, never modify an object under another or absent proposal
+        # A model may only complete the materialization the human accepted.
         if provenance_kind == "MODEL" and (not proposal_id or proposal_id
                                        != existing.get("proposal_id")):
             raise ValueError(
                 "an existing assessment cannot be modified under model "
                 "provenance with a different proposal: propose and accept a "
                 "new candidate")
-        # an ambiguity opened since creation must not stay invisible, and the
-        # caller's evidence and positions are folded in rather than discarded
+        # An ambiguity opened since creation must not stay invisible, so fold
+        # the caller's evidence and positions in rather than discard them.
         refreshed = refresh_assessment(ctx, assessment_id,
                                        caused_by=caused_by or assessment_id)
         known_position_ids = {_position_record(p)["position_id"]
@@ -135,9 +131,8 @@ def create_assessment(ctx: AnalyticContext, *, entity_object_id: str,
                       "context_id": context_id,
                       "role_in_context": role_in_context,
                       "claims": tuple(supporting_claim_ids)})
-    # Creation runs the same evidence guard as add_position, and each position
-    # is checked against all the others, so ordering cannot slip a position
-    # past a check that the reverse order refuses.
+    # Each position is checked against all the others, so ordering cannot slip
+    # one past a check the reverse order would refuse.
     for index, position in enumerate(positions):
         others = positions[:index] + positions[index + 1:]
         _check_public_position_evidence(
@@ -206,8 +201,7 @@ def _position_record(position: Mapping[str, Any] | StakeholderPosition) -> Mappi
     return position.to_record() if isinstance(position, StakeholderPosition) else position
 
 
-# relation types that convey publication control, and which end must be the
-# entity for it to count
+# Relation types conveying publication control, and which end must be the entity.
 _ATTRIBUTION_RELATIONS = {
     "OPERATES": "source",       # entity OPERATES the site/channel
     "OWNS": "source",           # entity OWNS the outlet
@@ -219,10 +213,9 @@ def _attribution_linked(store: AnalyticStore, entity: str
                         ) -> tuple[set[str], set[str]]:
     """(linked object ids, linked hosts) the entity has publication control over.
 
-    Only the latest ACTIVE version of a publication-control relation counts, and
-    only in the controlling direction. A host counts only through a site-root
-    reference: one deep page on a shared host does not make every utterance
-    there the entity's own.
+    Only the latest ACTIVE relation counts, in the controlling direction, and a
+    host only through a site-root reference: one deep page on a shared host does
+    not make every utterance there the entity's own.
     """
     from curunir_semantic.worldmodel import normalize_url_key
     linked: set[str] = {entity}
@@ -254,13 +247,10 @@ def _attribution_linked(store: AnalyticStore, entity: str
 def _check_public_position_evidence(store: AnalyticStore,
                                     assessment: Mapping[str, Any],
                                     position: StakeholderPosition) -> None:
-    """Check a position's evidence.
-
-    An OBSERVED public position needs a statement attributable to the entity,
-    and no position may be minted by relabelling an inferred interest's claims.
+    """An OBSERVED public position needs a statement attributable to the entity,
+    and none may be minted by relabelling an inferred interest's claims.
     """
-    # every cited id must resolve in the log, or "requires evidence" would be
-    # satisfied with nothing behind it
+    # Every cited id must resolve, or "requires evidence" means nothing.
     claims = store.current_claims()
     known_relationships = {r["relationship_id"]
                            for r in store.records_of("relationship_version")}
@@ -296,8 +286,8 @@ def _check_public_position_evidence(store: AnalyticStore,
                 return normalize_url_key(value).split("/")[0] in linked_hosts
             return False
 
-        # at least one attributable claim outside every inferred interest's
-        # basis, so filler cannot mint an observed public position
+        # At least one attributable claim outside every inferred interest's
+        # basis, so filler cannot mint an observed position.
         if not any(_attributable(claim)
                    and claim["claim_id"] not in interest_claims
                    for claim in resolved):
@@ -349,10 +339,8 @@ def add_position(ctx: AnalyticContext, assessment_id: str,
 def supersede_position(ctx: AnalyticContext, assessment_id: str, position_id: str,
                        replacement: StakeholderPosition, *, caused_by: str,
                        rationale: str) -> dict[str, Any]:
-    """Replace a position: the old one is closed and the new one appended.
-
-    "A supported X" is never overwritten by "A opposes X" — both remain,
-    bounded in time.
+    """Replace a position: the old is closed, the new appended. "A supported X"
+    is never overwritten by "A opposes X" — both remain, bounded in time.
     """
     store = ctx.store
     assessment = store.current_stakeholder_assessments().get(assessment_id)
@@ -442,7 +430,7 @@ def link_influence(ctx: AnalyticContext, assessment_id: str, influence_id: str,
                      history_note=f"INFLUENCE:{influence_id[:18]}")
 
 
-# ---- influence ------------------------------------------------------------
+# Influence
 
 
 def assert_influence(ctx: AnalyticContext, *, source_object_id: str,
@@ -457,8 +445,8 @@ def assert_influence(ctx: AnalyticContext, *, source_object_id: str,
     influence_id = digest_id("infl", source_object_id, target_object_id, kind)
     existing = store.current_influence_assertions().get(influence_id)
     if existing is not None and existing["status"] == "ACTIVE":
-        # a MODEL re-call may only complete its own accepted materialization;
-        # the gate is not re-entered, or recovery would be impossible
+        # A re-call completes its own accepted materialization; re-entering
+        # the gate would make recovery impossible.
         if provenance_kind == "MODEL" and (not proposal_id or proposal_id
                                            != existing.get("proposal_id")):
             raise ValueError(
@@ -499,8 +487,7 @@ def assert_influence(ctx: AnalyticContext, *, source_object_id: str,
                           evidence_refs=claim_ids[:5] or relationship_ids[:5],
                           to_status="ACTIVE")
     else:
-        # a re-assertion after supersession is its own transition, not deduped
-        # against the original
+        # A re-assertion after supersession is its own transition.
         record_transition(ctx, subject_kind="influence_assertion",
                           subject_id=influence_id, transition_type="ASSERTED",
                           detail=f"reasserted at v{version}: {kind} ({authority}): "
@@ -520,7 +507,7 @@ def supersede_influence(ctx: AnalyticContext, influence_id: str, *, reason: str,
     if existing is None:
         raise ValueError(f"unknown influence assertion: {influence_id}")
     if existing["status"] != "ACTIVE":
-        # already closed: complete a missing transition, append nothing
+        # Already closed: complete a missing transition, append nothing.
         record_transition(ctx, subject_kind="influence_assertion",
                           subject_id=influence_id, transition_type="SUPERSEDED",
                           detail=reason[:300], caused_by=caused_by,
@@ -573,7 +560,7 @@ def refresh_identity_caveats(ctx: AnalyticContext, *, caused_by: str
     return refreshed
 
 
-# ---- deterministic discovery ----------------------------------------------
+# Deterministic discovery
 
 
 def discover_stakeholders(ctx: AnalyticContext, *, context_kind: str, context_id: str,
@@ -662,8 +649,7 @@ def explain_assessment(store: AnalyticStore, assessment_id: str) -> dict[str, An
             {"kind": influences[i]["kind"], "mechanism": influences[i]["mechanism"],
              "authority": influences[i]["authority"], "status": influences[i]["status"]}
             for i in assessment["influence_ids"] if i in influences],
-        # live from the review queue, so an ambiguity opened after the last
-        # version still shows
+        # Live from the review queue, so a later ambiguity still shows.
         "identity_caveats": list(open_identity_caveats(
             store, assessment["entity_object_id"])),
         "source_basis": {

@@ -1,11 +1,9 @@
 """Forecasts: authored probabilities over exact propositions, with an
 append-only update history and typed resolution.
 
-Every number is authored — by an analyst or an accepted model candidate — and
-moving one is a new version carrying its reason. Silence never resolves FALSE:
-that needs evidence newer than the horizon, or the rule's declared coverage
-actually achieved; otherwise the forecast waits, visibly. Machine resolution
-exists only for typed rules; everything else is a human judgment.
+Moving a number is a new version carrying its reason. Silence never resolves
+FALSE: that needs evidence newer than the horizon, or the declared coverage
+actually achieved. Otherwise the forecast waits, visibly.
 """
 from __future__ import annotations
 
@@ -46,10 +44,9 @@ def create_forecast(ctx: AnalyticContext, *, question: str, outcome_semantics: s
                     indicator_ids: tuple[str, ...] = (),
                     provenance_kind: str = "ANALYST", inference_id: str = "",
                     proposal_id: str = "", caused_by: str = "") -> dict[str, Any]:
-    """Create a forecast, idempotent by question and horizon.
-
-    A re-call folds new evidence; one carrying a different probability is
-    refused, because moving a number is an explicit update.
+    """Create a forecast, idempotent by question and horizon. A re-call folds new
+    evidence; one carrying a different probability is refused, because moving a
+    number is an explicit update.
     """
     store = ctx.store
     forecast_id = forecast_id_for(question, horizon_time)
@@ -64,8 +61,7 @@ def create_forecast(ctx: AnalyticContext, *, question: str, outcome_semantics: s
                           to_status=existing["status"])
         from .contracts import FORECAST_TERMINAL_STATUSES
         if existing["status"] in FORECAST_TERMINAL_STATUSES:
-            # a settled forecast is history: its basis is not rewritten after
-            # the fact, so re-creation folds nothing
+            # A settled forecast is history; its basis is not rewritten.
             return existing
         if provenance_kind == "MODEL" and (not proposal_id or proposal_id
                                            != existing.get("proposal_id")):
@@ -149,7 +145,7 @@ def _reappend(ctx: AnalyticContext, forecast: Mapping[str, Any],
     merged["change_reason"] = change_reason
     merged["history"] = tuple(forecast["history"]) + (history_note,)
     merged["recorded_time"] = ctx.now_fn()
-    # a re-append never re-classifies: the forecast keeps its own marking
+    # A re-append never re-classifies: the forecast keeps its marking.
     merged["marking"] = marking_from_record(forecast["marking"]) \
         if isinstance(forecast.get("marking"), dict) else forecast["marking"]
     for key in ("assumption_ids", "indicator_ids", "resolution_evidence_refs",
@@ -183,11 +179,9 @@ def update_probability(ctx: AnalyticContext, forecast_id: str, *,
                        provenance_kind: str = "ANALYST",
                        inference_id: str = "",
                        proposal_id: str = "") -> dict[str, Any]:
-    """Move a forecast's probability as a new version stating why.
-
-    Three movers, all on record: a human act, a fired indicator executing a
-    human's pre-authorized conditional update, or an accepted model candidate.
-    A service actor without such an indicator cannot move a number.
+    """Move a forecast's probability as a new version stating why. Only three things
+    may: a human act, a fired indicator executing a pre-authorized update, or an
+    accepted model candidate.
     """
     store = ctx.store
     forecast = store.current_forecasts().get(forecast_id)
@@ -197,16 +191,16 @@ def update_probability(ctx: AnalyticContext, forecast_id: str, *,
     if not reason:
         raise ValueError("a probability update states its reason")
     if indicator_id and (actor_kind == "HUMAN" or provenance_kind == "MODEL"):
-        # elsewhere an indicator id would skip every indicator check and still
-        # burn the firing's marker, defeating the analyst's own pre-authorization
+        # Elsewhere the id would skip every check and still burn the firing's
+        # marker, defeating the analyst's pre-authorization.
         raise ValueError("an indicator id accompanies only the SERVICE "
                          "execution of its pre-authorization: a human or "
                          "model update stands on its own authority")
     if provenance_kind == "MODEL" and proposal_id \
             and forecast.get("proposal_id") == proposal_id \
             and abs(forecast["probability"] - probability) <= 1e-9:
-        # this update's version already landed, so a fresh spend would be
-        # refused; complete its possibly-missing transition instead
+        # This version already landed, so a fresh spend would be refused;
+        # complete the possibly-missing transition instead.
         record_transition(ctx, subject_kind="analytic_forecast",
                           subject_id=forecast_id,
                           transition_type="PROBABILITY_UPDATED",
@@ -242,9 +236,8 @@ def update_probability(ctx: AnalyticContext, forecast_id: str, *,
                 or abs(effect["target_probability"] - probability) > 1e-9:
             raise ValueError("the applied probability must be exactly what the "
                              "human pre-authorized on the indicator")
-        # A firing is one act, marked by the INDICATOR_FIRED transition rather
-        # than by the current number: checking the value would let a stale
-        # firing overwrite every later human judgment.
+        # A firing is marked by its transition, not by the current number:
+        # checking the value would let a stale firing overwrite human judgment.
         marker = digest_id("fire", indicator_id, forecast_id)
         if any(t["transition_type"] == "INDICATOR_FIRED"
                and t["caused_by"] == marker
@@ -253,14 +246,13 @@ def update_probability(ctx: AnalyticContext, forecast_id: str, *,
                 f"indicator {indicator_id[:24]}'s firing was already executed "
                 f"on forecast {forecast_id[:24]}: a pre-authorization is one "
                 "act, not a standing power over the forecast")
-        # The target number is the public effect. The indicator's rationale and
-        # the firing evidence may be more restricted, so cite them by id and
-        # never copy their prose into this version.
+        # Only the number is public; the rationale and firing evidence may be
+        # more restricted, so cite them by id and never copy their prose.
         reason = (f"pre-authorized by {effect['authorized_by']} via indicator "
                   f"{indicator_id} firing")
         evidence_refs = tuple(dict.fromkeys((indicator_id, *evidence_refs)))
         if abs(forecast["probability"] - probability) <= 1e-9:
-            # already at the target: consume the firing without a new version
+            # Already at the target: consume the firing, no new version.
             record_transition(ctx, subject_kind="analytic_forecast",
                               subject_id=forecast_id,
                               transition_type="INDICATOR_FIRED",
@@ -276,8 +268,8 @@ def update_probability(ctx: AnalyticContext, forecast_id: str, *,
         raise ValueError("a forecast probability lies strictly inside (0,1)")
     old = forecast["probability"]
     # A pre-authorization moves the number, not the review standing:
-    # UPDATE_REQUIRED was raised for a human and only a human clears it. And
-    # HORIZON_PASSED is a fact about the clock, which no update un-passes.
+    # UPDATE_REQUIRED is cleared only by a human, and no update un-passes
+    # HORIZON_PASSED.
     if indicator_id and actor_kind != "HUMAN" and provenance_kind != "MODEL":
         new_status = forecast["status"]
     elif forecast["status"] == "UPDATE_REQUIRED":
@@ -290,8 +282,8 @@ def update_probability(ctx: AnalyticContext, forecast_id: str, *,
                          "authority": authority,
                          "provenance_kind": provenance_kind
                          if provenance_kind == "MODEL" else "ANALYST",
-                         # a non-MODEL version wears no model trail; the
-                         # acceptance it consumed stays consumed
+                         # A non-MODEL version wears no model trail, but the
+                         # acceptance stays consumed.
                          "inference_id": inference_id
                          if provenance_kind == "MODEL" else "",
                          "proposal_id": proposal_id
@@ -310,8 +302,7 @@ def update_probability(ctx: AnalyticContext, forecast_id: str, *,
                       evidence_refs=evidence_refs[:5],
                       from_status=forecast["status"], to_status=new_status)
     if indicator_id:
-        # consume the firing as soon as its effect lands, so it cannot be
-        # redeemed twice
+        # Consume as soon as the effect lands, so it cannot be redeemed twice.
         record_transition(ctx, subject_kind="analytic_forecast",
                           subject_id=forecast_id,
                           transition_type="INDICATOR_FIRED",
@@ -324,10 +315,9 @@ def update_probability(ctx: AnalyticContext, forecast_id: str, *,
 
 def refresh_forecast(ctx: AnalyticContext, forecast_id: str, *,
                      caused_by: str) -> dict[str, Any]:
-    """Re-derive a forecast's standing from live state.
-
-    A degraded basis marks it UPDATE_REQUIRED, visibly stale — the machine never
-    moves the number. A passed horizon attempts typed resolution, or waits.
+    """Re-derive a forecast's standing from live state. A degraded basis marks it
+    UPDATE_REQUIRED rather than moving the number; a passed horizon attempts
+    typed resolution, or waits.
     """
     store = ctx.store
     forecast = store.current_forecasts().get(forecast_id)
@@ -380,8 +370,7 @@ def refresh_forecast(ctx: AnalyticContext, forecast_id: str, *,
                           caused_by=digest_id("horizon", forecast_id),
                           from_status=forecast["status"], to_status="HORIZON_PASSED")
         return try_machine_resolution(ctx, forecast_id)
-    # a basis that moved past an already-passed horizon can settle the
-    # question now; deferring costs a propagation pass
+    # A basis past the horizon can settle the question now.
     return try_machine_resolution(ctx, forecast_id) if horizon_passed else updated
 
 
@@ -398,11 +387,8 @@ def _subject_match_values(subject_refs: tuple[str, ...]) -> set[str]:
 def _execution_touches_subject(execution: Mapping[str, Any],
                                subject_values: set[str],
                                query_values: Mapping[str, str]) -> bool:
-    """Was this execution about the subject?
-
-    A successful search of the right source about a different entity is noise,
-    so an execution attributable to neither the planned query value nor the
-    request URL does not count. The URL check is delimited and length-gated,
+    """Was this execution about the subject? A search of the right source about a
+    different entity is noise. The URL check is delimited and length-gated,
     because this gate stands between silence and RESOLVED_FALSE.
     """
     query_value = query_values.get(execution.get("query_id", ""), "")
@@ -414,8 +400,8 @@ def _execution_touches_subject(execution: Mapping[str, Any],
     for value in subject_values:
         if not value or len(value) < 6:
             continue
-        # \w lookarounds, not an ASCII class: a non-ASCII letter is part of a
-        # token, so 'oslobank' must not match 'oslobankø'
+        # \w lookarounds, not an ASCII class, so 'oslobank' does not match
+        # 'oslobankø'.
         if re.search(rf"(?<!\w){re.escape(value)}(?!\w)", url):
             return True
     return False
@@ -425,10 +411,9 @@ def _absence_coverage_satisfied(store: AnalyticStore, rule: Mapping[str, Any],
                                 since: str,
                                 subject_refs: tuple[str, ...] = ()
                                 ) -> tuple[bool, tuple[str, ...], str]:
-    """Was the declared coverage achieved since `since`?
-
-    Counts successful executions of the required sources that were about the
-    subject. Returns (satisfied, evidence execution ids, explanation).
+    """Was the declared coverage achieved since `since`? Counts successful
+    executions of the required sources about the subject, returning
+    (satisfied, evidence execution ids, explanation).
     """
     subject_values = _subject_match_values(subject_refs)
     query_values: dict[str, str] = {}
@@ -453,14 +438,13 @@ def _absence_coverage_satisfied(store: AnalyticStore, rule: Mapping[str, Any],
             execution["execution_id"])
     required = tuple(rule.get("absence_required_source_ids", ()))
     if not required:
-        # a rule naming no sources makes coverage unfalsifiable, so silence
-        # stays silence
+        # No named sources means coverage is unfalsifiable: silence stays silence.
         return False, (), ("no declared coverage sources: absence cannot be "
                            "established without naming where to look")
     missing_required = [s for s in required if s not in successes]
     if missing_required:
         # "never looked" and "looked but could not attribute" need different
-        # remedies, so say which holds
+        # remedies, so say which holds.
         parts = []
         for source_id in missing_required:
             filtered = unattributed.get(source_id, 0)
@@ -471,7 +455,7 @@ def _absence_coverage_satisfied(store: AnalyticStore, rule: Mapping[str, Any],
                 parts.append(f"{source_id} never successfully searched")
         return False, (), (f"coverage unmet since {since[:19]}: "
                            + "; ".join(parts))
-    # only declared sources count: a search of an unrelated source is noise
+    # Only declared sources count; an unrelated search is noise.
     covered = [s for s in required if s in successes]
     minimum = rule.get("absence_min_successful_sources", 1)
     if len(covered) < minimum:
@@ -484,12 +468,9 @@ def _absence_coverage_satisfied(store: AnalyticStore, rule: Mapping[str, Any],
 
 
 def try_machine_resolution(ctx: AnalyticContext, forecast_id: str) -> dict[str, Any]:
-    """Attempt typed machine resolution.
-
-    TRUE may settle early on matching evidence. FALSE only after the horizon,
-    and only when the evidence is newer than the horizon or the declared
-    coverage was achieved; otherwise the forecast waits with a coverage gap on
-    record.
+    """Attempt typed machine resolution. TRUE may settle early on matching evidence;
+    FALSE only after the horizon, and only with newer evidence or the declared
+    coverage. Otherwise it waits with a coverage gap on record.
     """
     store = ctx.store
     forecast = store.current_forecasts().get(forecast_id)
@@ -503,8 +484,8 @@ def try_machine_resolution(ctx: AnalyticContext, forecast_id: str) -> dict[str, 
         return forecast
     if any(r["item_id"] == digest_id("review-latematch", forecast_id)
            for r in store.open_review_items()):
-        # the question was handed to a human as machine-undecidable, so while
-        # that item is open no machine verdict may settle it
+        # Handed to a human as undecidable, so no machine verdict settles it
+        # while the item is open.
         return forecast
     horizon_passed = parse_time(ctx.now_fn()) > parse_time(forecast["horizon_time"])
 
@@ -522,7 +503,7 @@ def try_machine_resolution(ctx: AnalyticContext, forecast_id: str) -> dict[str, 
                             f"{rule['expected_value']!r} (machine, per rule)")
         if matches and horizon_passed:
             # "by the horizon" is part of the question, so a late flip proves
-            # TRUE only if the evidence state predates the horizon
+            # TRUE only if the evidence predates it.
             if evidence_time and parse_time(evidence_time) \
                     <= parse_time(forecast["horizon_time"]):
                 return _resolve(ctx, forecast, "TRUE", (claim_id,),
@@ -531,8 +512,8 @@ def try_machine_resolution(ctx: AnalyticContext, forecast_id: str) -> dict[str, 
                                 f"{rule['expected_value']!r} with evidence "
                                 f"state {evidence_time[:19]} at or before the "
                                 f"horizon (machine, per rule)")
-            # the value stands now but its evidence is newer than the horizon,
-            # so whether it held then is not machine-decidable: ask a human
+            # The value stands, but its evidence is newer than the horizon, so
+            # whether it held then needs a human.
             item_id = digest_id("review-latematch", forecast["forecast_id"])
             if not any(r["item_id"] == item_id
                        for r in store.records_of("review_item")):
@@ -609,7 +590,7 @@ def _false_by_absence_or_wait(ctx: AnalyticContext, forecast: Mapping[str, Any],
         return _resolve(ctx, forecast, "FALSE", evidence,
                         f"nothing satisfying the rule was observed by the "
                         f"horizon, and coverage was achieved: {explanation}")
-    # silence is not FALSE: record the gap as durable state
+    # Silence is not FALSE: record the gap as durable state.
     item_id = digest_id("review-coverage", "forecast", forecast["forecast_id"])
     if not any(r["item_id"] == item_id for r in store.records_of("review_item")):
         item = ReviewItem(
@@ -642,7 +623,7 @@ def _close_review_item(ctx: AnalyticContext, item_id: str, note: str) -> None:
         status="RESOLVED", resolution_note=note[:280],
         version=store.next_family_version("review_item", "item_id", item_id),
         recorded_time=ctx.now_fn(),
-        # a re-append never re-classifies: the item keeps its marking
+        # A re-append never re-classifies: the item keeps its marking.
         marking=marking_from_record(open_item["marking"])
         if isinstance(open_item.get("marking"), dict) else open_item["marking"])
     store.append("REVIEW_ITEM_RECORDED", resolved,
@@ -654,7 +635,7 @@ def _close_coverage_gap(ctx: AnalyticContext, subject_label: str,
     _close_review_item(
         ctx, digest_id("review-coverage", subject_label, subject_id), note)
     if subject_label == "forecast":
-        # the same acts that settle the forecast settle the late-match item
+        # The acts that settle the forecast settle the late-match item.
         _close_review_item(
             ctx, digest_id("review-latematch", subject_id), note)
 

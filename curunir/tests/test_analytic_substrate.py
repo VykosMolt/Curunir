@@ -21,7 +21,7 @@ pytestmark = pytest.mark.no_db
 NOW = "2026-08-17T12:00:00+00:00"
 
 
-# ---- what the contracts refuse to build -----------------------------------
+# What the contracts refuse to build
 
 
 def _basis(supporting=("c1",), families=("f1",), manifestations=1):
@@ -139,7 +139,7 @@ def test_analogue_requires_transfer_risks_and_is_never_observed():
             recorded_time=NOW, marking=MARK)
 
 
-# ---- basis arithmetic over store state ------------------------------------
+# Basis arithmetic over store state
 
 
 def test_basis_counts_derivatives_as_one_family(tmp_path):
@@ -177,7 +177,7 @@ def test_descent_reaches_anchor_and_source(tmp_path):
     assert step["origin_family"]
 
 
-# ---- transitions and candidates ------------------------------------------
+# Transitions and candidates
 
 
 def test_transitions_are_idempotent_per_cause(tmp_path):
@@ -217,7 +217,7 @@ def test_candidate_requires_inference_identity(tmp_path):
                          inference_id="")
 
 
-# ---- dependency index -----------------------------------------------------
+# Dependency index
 
 
 def test_dependency_index_finds_dependents(tmp_path):

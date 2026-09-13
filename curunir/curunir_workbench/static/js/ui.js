@@ -48,10 +48,9 @@ export function table({ columns, rows, onRow, empty = "nothing visible in this c
   return h("table", {}, h("thead", {}, head), h("tbody", {}, body));
 }
 
-// ---- form primitives --------------------------------------------------------
+// form primitives
 
-// A labelled control. The label is the field name, never the value, and it
-// is wired to the control so assistive technology reads it.
+// A labelled control, wired to the field so assistive technology reads it.
 let fieldCount = 0;
 export function field(label, control, hint) {
   if (!control.id) control.id = `field-${++fieldCount}`;
@@ -59,9 +58,8 @@ export function field(label, control, hint) {
     hint ? h("div", { class: "faint" }, hint) : null);
 }
 
-// A click handler that cannot run twice at once: the button is disabled
-// until the work finishes, so a double-click never writes twice into an
-// append-only store.
+// A click handler that cannot run twice at once, so a double-click never
+// writes twice into an append-only store.
 export function busy(fn) {
   return async (event) => {
     const el = event && event.currentTarget;
@@ -71,8 +69,7 @@ export function busy(fn) {
   };
 }
 
-// A multi-select over fixed values; values() reads what the operator chose.
-// Each option is a string or {value, label}.
+// A multi-select over fixed values; each option is a string or {value, label}.
 export function multiSelect(options, { selected = [], label = "" } = {}) {
   const el = h("select", { multiple: true, "aria-label": label,
     size: String(Math.min(6, Math.max(2, options.length || 2))) },
@@ -85,8 +82,8 @@ export function multiSelect(options, { selected = [], label = "" } = {}) {
   return el;
 }
 
-// "Cite this record": pick a visible record, press the button, the caller
-// receives its id. The raw field it writes into stays editable.
+// "Cite this record": pick a visible record and the caller gets its id. The
+// field it writes into stays editable.
 export function idPicker(options, buttonLabel, onPick, { label = "" } = {}) {
   if (!options.length) return h("span", { class: "faint" }, "nothing visible to cite");
   const select = h("select", { "aria-label": label },
@@ -95,8 +92,7 @@ export function idPicker(options, buttonLabel, onPick, { label = "" } = {}) {
     h("button", { type: "button", onclick: () => onPick(select.value) }, buttonLabel));
 }
 
-// The label a picker shows for a record: the statement, with the id kept
-// visible for the auditor.
+// The label a picker shows: the statement, with the id kept for the auditor.
 export function pickerLabel(statement, id) {
   return `${clip(statement, 70)} — ${String(id).slice(0, 12)}`;
 }
@@ -168,7 +164,7 @@ export function refLink(kind, id, label) {
   return h("span", {}, link, " ", ident(id));
 }
 
-// ---- provenance chain -------------------------------------------------------
+// provenance chain
 
 export function chainNode(node) {
   const inaccessible = node.inaccessible;
@@ -208,7 +204,7 @@ export function claimDescentView(descent) {
   return h("div", { class: "chain" }, parts);
 }
 
-// ---- SVG surfaces -----------------------------------------------------------
+// SVG surfaces
 
 const SVG = "http://www.w3.org/2000/svg";
 export function svg(tag, attrs = {}, ...children) {
@@ -337,7 +333,7 @@ export function mapSvg(featureCollection, { width = 860, height = 460, onFeature
   return root;
 }
 
-// ---- annotations panel ------------------------------------------------------
+// annotations panel
 
 export function annotationList(annotations, { onResolve } = {}) {
   if (!annotations.length) return emptyBox("no annotations");

@@ -24,7 +24,7 @@ from analytic_support import make_analytic, seed_acme
 pytestmark = pytest.mark.no_db
 
 
-# ---- the schema follows the binding table ----------------------------------
+# The schema follows the binding table
 
 def test_every_proposable_kind_has_a_schema_over_exactly_its_binding_keys():
     for kind in proposable_kinds():
@@ -65,7 +65,7 @@ def test_a_machine_computed_binding_is_refused_not_invited():
         DeterministicBackend().infer("t", {}, "impact_path")
 
 
-# ---- a provider may only cite what it was shown ----------------------------
+# A provider may only cite what it was shown
 
 def test_available_ids_finds_identifiers_nested_anywhere():
     shown = available_ids({"a": {"b": [{"claim_id": "claim-1"},
@@ -118,7 +118,7 @@ def test_a_non_json_response_is_an_error_not_content():
         _NotJson().infer("t", {}, "analytic_theme")
 
 
-# ---- availability degrades honestly ---------------------------------------
+# Availability degrades honestly
 
 def test_missing_sdks_are_reported_not_faked():
     report = availability()["providers"]
@@ -149,7 +149,7 @@ def test_an_uninstalled_sdk_raises_backend_unavailable_not_import_error():
             build_backend(ProviderSpec(provider="anthropic"))
 
 
-# ---- the whole seam, over real state ---------------------------------------
+# The whole seam, over real state
 
 def _seed(tmp_path):
     pipeline, ctx = make_analytic(tmp_path)
@@ -257,7 +257,7 @@ def test_egress_refusal_still_precedes_any_provider_call(tmp_path):
     assert result["status"] == "EGRESS_REFUSED"
 
 
-# ---- the command layer cannot read around the lattice ----------------------
+# The command layer cannot read around the lattice
 
 def _command_context(ctx, root, context):
     from curunir_workbench.commands import CommandContext
@@ -361,7 +361,7 @@ def test_a_request_must_cite_evidence(tmp_path, monkeypatch):
             target_kind="analytic_theme", input_refs=())
 
 
-# ---- the HTTP boundary -----------------------------------------------------
+# The HTTP boundary
 
 def _http(tmp_path, monkeypatch):
     from fastapi.testclient import TestClient
@@ -417,7 +417,7 @@ def test_proposal_endpoint_reports_an_unseeable_ref_as_unknown(tmp_path, monkeyp
     assert response.status_code == 404
 
 
-# ---- every proposable kind works offline, end to end -----------------------
+# Every proposable kind works offline, end to end
 
 def _kind_inputs(ctx, seeded):
     """Real ids for every binding field, taken from the seeded mission."""

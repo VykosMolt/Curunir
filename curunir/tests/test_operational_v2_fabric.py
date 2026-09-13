@@ -38,7 +38,7 @@ def seed_store(tmp_path):
     return store
 
 
-# ---- information requirements and analyst tasks ----
+# Information requirements and analyst tasks
 
 def test_requirement_lifecycle_and_human_only_closure(tmp_path):
     store = seed_store(tmp_path)
@@ -89,7 +89,7 @@ def test_task_completion_requires_assigned_actor(tmp_path):
     assert overdue_view["analyst_tasks"][0]["status"] == "DONE"
 
 
-# ---- delta synchronization ----
+# Delta synchronization
 
 def build_two_phase_store(tmp_path):
     store = seed_store(tmp_path)
@@ -145,7 +145,7 @@ def test_full_bundle_round_trips(tmp_path):
     assert fresh.head()["head_hash"] == store.head()["head_hash"]
 
 
-# ---- schema evolution ----
+# Schema evolution
 
 BASE_SCHEMA = {"schema_id": "s", "version": "1.0", "media_type": "application/json", "payload_kind": "document",
                "fields": {"id": {"type": "string", "required": True},
@@ -180,7 +180,7 @@ def test_schema_evolution_paths(tmp_path):
     assert {d["version"] for d in export["schemas"]} == {"1.0", "1.1", "2.0"}
 
 
-# ---- stress ----
+# Stress
 
 def test_stress_bounded_deterministic(tmp_path):
     result = run_stress(tmp_path / "stress", n=1200, families=6)

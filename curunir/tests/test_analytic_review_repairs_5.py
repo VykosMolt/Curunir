@@ -93,7 +93,7 @@ def _accepted_reforecast(ctx, forecast, probability):
                              accept=True, actor_id="jan", actor_kind="HUMAN")
 
 
-# ---- a firing authorizes its own forecasts, once ---------------------------
+# A firing authorizes its own forecasts, once
 
 
 def test_fired_indicator_is_not_a_bearer_token_for_other_forecasts(tmp_path):
@@ -142,7 +142,7 @@ def test_fired_indicator_is_one_shot_not_forever_redeemable(tmp_path):
     assert sum(1 for v in versions if v["probability"] == 0.62) == 1
 
 
-# ---- absence must name where it looked, and only that counts ---------------
+# Absence must name where it looked, and only that counts
 
 
 def test_machine_resolvable_rule_must_name_its_coverage_sources():
@@ -212,7 +212,7 @@ def test_unconstrained_presence_indicator_is_unconstructible(tmp_path):
                       effect=IndicatorEffect(mode="REVIEW_ONLY"))
 
 
-# ---- an acceptance is spent once, across every version ---------------------
+# An acceptance is spent once, across every version
 
 
 def test_acceptance_cannot_be_respent_after_a_later_version_frees_it(tmp_path):
@@ -264,7 +264,7 @@ def test_analyst_version_does_not_wear_a_model_trail(tmp_path):
     assert model_version["inference_id"], "the model version keeps its trail"
 
 
-# ---- a settled forecast is history -----------------------------------------
+# A settled forecast is history
 
 
 def test_recreation_folds_nothing_into_a_settled_forecast(tmp_path):
@@ -291,7 +291,7 @@ def test_recreation_folds_nothing_into_a_settled_forecast(tmp_path):
         "the evidentiary basis of a settled judgment is never rewritten"
 
 
-# ---- an old page arriving late is not the event happening ------------------
+# An old page arriving late is not the event happening
 
 
 def test_presence_does_not_fire_on_archival_backfill(tmp_path):
@@ -315,7 +315,7 @@ def test_presence_does_not_fire_on_archival_backfill(tmp_path):
         forecast["forecast_id"]]["probability"] == 0.30
 
 
-# ---- a machine act never clears a flag raised for a person -----------------
+# A machine act never clears a flag raised for a person
 
 
 def test_indicator_firing_preserves_update_required(tmp_path):
@@ -340,7 +340,7 @@ def test_indicator_firing_preserves_update_required(tmp_path):
         "the flag was raised for a human; only a human clears it"
 
 
-# ---- coverage arriving closes the gap on the next ordinary pass ------------
+# Coverage arriving closes the gap on the next ordinary pass
 
 
 def test_coverage_arriving_resolves_the_blocked_forecast_via_propagation(tmp_path):
@@ -375,7 +375,7 @@ def test_coverage_arriving_resolves_the_blocked_forecast_via_propagation(tmp_pat
     assert ctx.store.head()["event_count"] == before
 
 
-# ---- an interrupted firing finishes on the next pass -----------------------
+# An interrupted firing finishes on the next pass
 
 
 def test_interrupted_firing_completes_on_the_next_pass(tmp_path):
@@ -432,7 +432,7 @@ def test_completed_firing_never_restomps_a_later_human_move(tmp_path):
         "a recovery pass never re-stomps a human's later judgment"
 
 
-# ---- scoring reads version order, not timestamps ---------------------------
+# Scoring reads version order, not timestamps
 
 
 def test_hindsight_check_uses_versions_not_timestamps():
@@ -447,7 +447,7 @@ def test_hindsight_check_uses_versions_not_timestamps():
         standing_probability(versions)
 
 
-# ---- a tier the named rule does not yield cannot be built ------------------
+# A tier the named rule does not yield cannot be built
 
 
 def test_tier_must_be_what_the_named_rule_yields():
@@ -467,7 +467,7 @@ def test_tier_must_be_what_the_named_rule_yields():
     assert WarningRecord(**{**base, "tier": "ROUTINE"}).tier == "ROUTINE"
 
 
-# ---- a blocked absence indicator fires when coverage finally arrives -------
+# A blocked absence indicator fires when coverage finally arrives
 
 
 def test_blocked_absence_indicator_fires_once_coverage_arrives(tmp_path):

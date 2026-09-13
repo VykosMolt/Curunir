@@ -1,9 +1,8 @@
 """Analytics plane: a deterministic rule provider and a replaceable mock model.
 
-Providers read an access-filtered slice of the projection, record every
-invocation as an InferenceRecord, and emit proposals. Nothing a provider emits
-becomes operational state until the workflow materializes it, and no provider
-can record a human decision.
+Providers read an access-filtered slice, record every invocation as an
+InferenceRecord, and emit proposals. Nothing a provider emits becomes state until
+the workflow materializes it, and no provider can record a human decision.
 """
 from __future__ import annotations
 
@@ -80,10 +79,8 @@ class Inference:
 class _ProviderBase:
     """Writes inference records and proposals.
 
-    A rule hands `_record` the records it read, keyed by object id. The
-    inference and every proposal made from it inherit the join of those
-    records' markings, and neither may name a projection object the rule did
-    not read: that would put an id in front of a viewer who may not see it.
+    The inference and every proposal inherit the join of the markings of the
+    records the rule read, and neither may name an object it did not read.
     """
 
     def __init__(self, store: MissionDataStore, package: ModelPackage, provider_actor: str):

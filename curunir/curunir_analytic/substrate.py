@@ -1,11 +1,8 @@
 """Machinery every analytical engine shares: the context, typed transitions,
 reverse dependencies, and the model-proposal acceptance boundary.
 
-`record_transition` gives any object idempotent typed history. `DependencyIndex`
-maps semantic state back to the analytical objects resting on it, so a change
-updates only what it touches. `record_candidate` / `resolve_candidate` are the
-one path from model output to analytical state: a candidate stays PROPOSED
-until a recorded human act accepts it.
+`record_candidate` / `resolve_candidate` are the one path from model output to
+analytical state: a candidate stays PROPOSED until a human act accepts it.
 """
 from __future__ import annotations
 
@@ -33,10 +30,8 @@ def record_transition(ctx: AnalyticContext, *, subject_kind: str, subject_id: st
                       transition_type: str, detail: str, caused_by: str,
                       evidence_refs: tuple[str, ...] = (),
                       from_status: str = "", to_status: str = "") -> dict[str, Any] | None:
-    """Append one typed transition, once per cause.
-
-    Re-running propagation after a crash completes history instead of
-    duplicating it.
+    """Append one typed transition, once per cause, so re-running propagation
+    after a crash completes history instead of duplicating it.
     """
     transition_id = digest_id("antrans", subject_kind, subject_id,
                               transition_type, caused_by)
@@ -59,10 +54,8 @@ def ensure_transition(ctx: AnalyticContext, *, subject_kind: str, subject_id: st
                       to_status: str = "") -> dict[str, Any] | None:
     """Record a transition only if the subject has none of this type yet.
 
-    An object version and its CREATED transition are separate log events, so a
-    crash between them leaves a gap. Creating functions call this on their
-    already-exists path too, and re-running fills the gap without letting an
-    unrelated later call add a second creation transition.
+    A version and its CREATED transition are separate log events, so a crash
+    between them leaves a gap this fills without adding a second one.
     """
     if any(t["transition_type"] == transition_type
            for t in ctx.store.transitions_for(subject_id)):
@@ -81,15 +74,12 @@ def append_version(ctx: AnalyticContext, record) -> dict[str, Any]:
     return event["record"]
 
 
-# ---- reverse dependencies -------------------------------------------------
+# Reverse dependencies
 
 
 class DependencyIndex:
-    """Which analytical objects depend on which semantic state.
-
-    Keys are semantic identities (claims, objects, relations, activities,
-    assumptions); values are (kind, id) analytical references. Built by
-    replaying the current analytical records.
+    """Which analytical objects depend on which semantic state: semantic identity
+    -> (kind, id), built by replaying the current analytical records.
     """
 
     def __init__(self, store: AnalyticStore):
@@ -156,7 +146,7 @@ class DependencyIndex:
                           ("mission_objective", assessment["context_id"]), ref)
             elif assessment["context_kind"] == "EVENT":
                 self._add(self.by_activity, assessment["context_id"], ref)
-            # MISSION and ISSUE contexts are free labels, not addressable state
+            # MISSION and ISSUE contexts are free labels, not addressable state.
         for influence in store.current_influence_assertions().values():
             ref = ("influence_assertion", influence["influence_id"])
             for claim_id in influence["claim_ids"]:
@@ -170,8 +160,7 @@ class DependencyIndex:
             for claim_id in tuple(assumption["supporting_claim_ids"]) \
                     + tuple(assumption["contradicting_claim_ids"]):
                 self._add(self.by_claim, claim_id, ref)
-            # the assumption names the objectives resting on it, so the edge
-            # points at the objective
+            # The assumption names the objectives resting on it.
             for objective_id in assumption["objective_ids"]:
                 self._add(self.by_assumption, assumption["assumption_id"],
                           ("mission_objective", objective_id))
@@ -179,8 +168,8 @@ class DependencyIndex:
             ref = ("impact_path", path["path_id"])
             for edge in path["edges"]:
                 for basis_id in edge["basis_ids"]:
-                    # a basis id may be a claim, relationship or activity, and
-                    # lookups are by exact id, so indexing all three is free
+                    # A basis id may be a claim, relationship or activity;
+                    # lookups are exact, so index all three.
                     self._add(self.by_claim, basis_id, ref)
                     self._add(self.by_relationship, basis_id, ref)
                     self._add(self.by_activity, basis_id, ref)
@@ -214,8 +203,7 @@ class DependencyIndex:
                 elif kind in ANALYTIC_ID_FIELDS:
                     self._add(self.by_analytic, (kind, dep), ref)
                 else:
-                    # an unindexable dependency would be invisible to
-                    # propagation, which is worse than raising
+                    # Invisible to propagation is worse than raising.
                     raise ValueError(f"objective {objective['objective_id'][:24]} "
                                      f"declares a dependency of unknown kind "
                                      f"{kind!r}; it cannot be tracked")
@@ -269,8 +257,7 @@ class DependencyIndex:
                 self._add(self.by_analytic,
                           ("forecast_indicator", indicator_id), ref)
         for indicator in store.current_analytics("forecast_indicator").values():
-            # the indicator's own list may name a forecast before the forecast
-            # names the indicator, so take the link from this side too
+            # The indicator may name the forecast first, so link from here too.
             for forecast_id in indicator["forecast_ids"]:
                 self._add(self.by_analytic,
                           ("forecast_indicator", indicator["indicator_id"]),
@@ -310,7 +297,7 @@ class DependencyIndex:
         return affected
 
 
-# ---- model-proposal boundary ---------------------------------------------
+# Model-proposal boundary
 
 
 def _normalized_value(value: Any) -> Any:
@@ -323,11 +310,9 @@ def require_accepted_candidate(store: AnalyticStore, *, inference_id: str,
                                proposal_id: str, target_kind: str | None = None,
                                materialized: Mapping[str, Any] | None = None
                                ) -> Mapping[str, Any]:
-    """Check that this materialization is the one a human accepted, and return
-    the proposal.
-
-    The proposal's target kind must match, every shared field must be equal,
-    and the acceptance must not already have been spent.
+    """Check that this materialization is the one a human accepted, and return the
+    proposal: the target kind must match, shared fields must be equal, and the
+    acceptance must not already be spent.
     """
     if not inference_id or not proposal_id:
         raise ValueError("model-provenance analytical state requires both the "
@@ -344,7 +329,7 @@ def require_accepted_candidate(store: AnalyticStore, *, inference_id: str,
                          "only a human-accepted candidate can become analytical state")
     if proposal["inference_id"] != inference_id:
         raise ValueError("the candidate proposal does not carry this inference record")
-    # an acceptance recorded for an operational proposal authorizes nothing here
+    # An acceptance for an operational proposal authorizes nothing here.
     if proposal.get("proposal_type") != "ANALYTICAL_OBJECT_CANDIDATE":
         raise ValueError(f"proposal {proposal_id[:24]} is a "
                          f"{proposal.get('proposal_type')!r}, not an analytical "
@@ -356,15 +341,15 @@ def require_accepted_candidate(store: AnalyticStore, *, inference_id: str,
         raise ValueError(f"the accepted candidate targets "
                          f"{content.get('target_kind')!r}, not {target_kind!r}: "
                          "an acceptance is not transferable across kinds")
-    # bind over the kind's declared fields, never only over whatever keys the
-    # model chose to emit, plus any further shared keys
+    # Bind over the kind's declared fields plus any shared keys, never over
+    # whatever the model chose to emit.
     binding_keys = CANDIDATE_BINDING_KEYS.get(target_kind, ())
     materialized = dict(materialized or {})
     for key in binding_keys:
         if key not in materialized:
             raise ValueError(f"materialization of {target_kind} must bind {key!r}")
         if key not in content:
-            # only reachable past record_candidate; fail typed, not with KeyError
+            # Only reachable past record_candidate; fail typed, not KeyError.
             raise ValueError(f"accepted candidate is malformed: it lacks its "
                              f"kind's binding field {key!r}")
         if _normalized_value(content[key]) != _normalized_value(materialized[key]):
@@ -377,8 +362,8 @@ def require_accepted_candidate(store: AnalyticStore, *, inference_id: str,
             raise ValueError(
                 f"materialized {key!r} differs from what the human accepted: "
                 "the acceptance covers the candidate's content, nothing else")
-    # consumption is a fact about the log: a spend that landed on a version
-    # stays spent even once a later version drops the proposal id
+    # Consumption is a fact about the log: a spend stays spent even once a
+    # later version drops the proposal id.
     spent = store.materialization_of(proposal_id)
     if spent is not None:
         kind, object_id = spent
@@ -393,10 +378,8 @@ def creation_authority(store: AnalyticStore, *, provenance_kind: str,
                        inference_id: str = "", proposal_id: str = "",
                        target_kind: str | None = None,
                        materialized: Mapping[str, Any] | None = None) -> str:
-    """The authority this provenance may stamp at creation.
-
-    Model output enters only through an accepted candidate bound to this
-    materialization, and lands as SUPPORTED_INFERENCE.
+    """The authority this provenance may stamp at creation. Model output enters
+    only through an accepted candidate and lands as SUPPORTED_INFERENCE.
     """
     if provenance_kind == "ANALYST":
         return "ANALYST_ASSESSMENT"
@@ -408,9 +391,8 @@ def creation_authority(store: AnalyticStore, *, provenance_kind: str,
     return "SUPPORTED_INFERENCE"
 
 
-# The fields an accepted candidate must declare and a materialization must
-# match, per kind. A candidate missing them is refused at proposal time, so
-# model-chosen key names cannot defeat the binding.
+# Per kind, the fields a candidate must declare and a materialization must
+# match, so model-chosen key names cannot defeat the binding.
 CANDIDATE_BINDING_KEYS = {
     "analytic_theme": ("title", "supporting_claim_ids"),
     "analytic_narrative": ("statement", "supporting_claim_ids"),
@@ -420,23 +402,22 @@ CANDIDATE_BINDING_KEYS = {
     "stakeholder_assessment": ("entity_object_id", "context_kind", "context_id",
                                "role_in_context", "claims"),
     "influence_assertion": ("source_object_id", "target_object_id", "kind"),
-    # edge_chain is a digest of each edge's content in order; binding by
-    # caller-chosen edge ids would commit the acceptance to labels
+    # edge_chain digests each edge's content in order; binding by edge id
+    # would commit the acceptance to labels.
     "impact_path": ("objective_id", "summary", "edge_chain"),
     "response_option": ("objective_id", "path_id", "description"),
     "historical_analogue": ("query_id", "episode_id"),
     "analytic_forecast": ("question", "probability", "horizon_time"),
     "forecast_indicator": ("description", "kind", "forecast_ids"),
-    # strategic_warning is a machine projection and is never model-proposed
+    # strategic_warning is a machine projection, never model-proposed.
 }
 
 
 def record_candidate(ctx: AnalyticContext, *, target_kind: str,
                      content: Mapping[str, Any], inference_id: str) -> dict[str, Any]:
-    """Record a model-proposed candidate as a PROPOSED proposal, not as state.
-
-    A candidate missing its kind's binding fields is refused, so the human can
-    see exactly what would be materialized before accepting.
+    """Record a model-proposed candidate as a PROPOSED proposal, not as state. One
+    missing its binding fields is refused, so the human sees exactly what would
+    be materialized.
     """
     if target_kind not in ANALYTIC_ID_FIELDS:
         raise ValueError(f"unknown analytical kind: {target_kind}")
@@ -455,8 +436,8 @@ def record_candidate(ctx: AnalyticContext, *, target_kind: str,
         proposal_id=digest_id("anprop", target_kind, inference_id,
                               str(sorted(content.items()))[:2000]),
         inference_id=inference_id, proposal_type="ANALYTICAL_OBJECT_CANDIDATE",
-        # the engine-declared kind wins, so a provider emitting its own
-        # "target_kind" cannot re-aim the candidate
+        # The engine-declared kind wins, so a provider's own "target_kind"
+        # cannot re-aim the candidate.
         content={**content, "target_kind": target_kind},
         status="PROPOSED", recorded_time=now, marking=ctx.marking)
     event = ctx.store.append("ANALYTICAL_PROPOSAL_RECORDED", proposal,
@@ -467,10 +448,8 @@ def record_candidate(ctx: AnalyticContext, *, target_kind: str,
 def resolve_candidate(ctx: AnalyticContext, proposal_id: str, *, accept: bool,
                       actor_id: str, actor_kind: str, actor_roles: tuple[str, ...] = ("ANALYST",),
                       note: str = "") -> dict[str, Any]:
-    """Accept or reject a model candidate; only a human can accept.
-
-    The resolution is a recorded analyst action plus a new proposal version.
-    Acceptance returns the content for the engine to materialize.
+    """Accept or reject a model candidate; only a human can accept. Acceptance is a
+    recorded action plus a new version, and returns the content to materialize.
     """
     latest = ctx.store.latest_by_id("analytical_proposal", "proposal_id").get(proposal_id)
     if latest is None:
@@ -480,8 +459,8 @@ def resolve_candidate(ctx: AnalyticContext, proposal_id: str, *, accept: bool,
     if accept and actor_kind != "HUMAN":
         raise ValueError("only a human can accept a model-proposed analytical object")
     now = ctx.now_fn()
-    # an act about a hidden record is itself hidden, and a re-append never
-    # re-classifies, so both inherit the proposal's marking
+    # An act about a hidden record is hidden, and a re-append never
+    # re-classifies, so both take the proposal's marking.
     proposal_marking = marking_from_record(latest["marking"]) \
         if isinstance(latest.get("marking"), dict) else latest["marking"]
     action = AnalystAction(

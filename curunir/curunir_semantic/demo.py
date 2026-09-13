@@ -2,9 +2,9 @@
 
     python -m curunir_semantic.demo --root DIR --phase 1|2|3 [--evidence FABRIC_ROOT]
 
-Phase 1 understands evidence already in the store, phase 2 forms a hypothesis
-and collects against it, phase 3 exports and replays. Each phase runs in its own
-process, and every phase-2 retrieval is a real network request.
+Phase 1 understands evidence already in the store, phase 2 forms a hypothesis and
+collects against it, phase 3 exports and replays. Every phase-2 retrieval is a
+real network request.
 """
 from __future__ import annotations
 

@@ -1,9 +1,8 @@
 """The executable repository ledger: measure what the suite collects and record it.
 
-`tests/ledger.json` records, per test module, the number of tests it collected
-when last accepted, plus the product modules that are entry points and the
-paths that were excised. `tests/test_ledger.py` checks the working tree
-against it. Update the ledger deliberately, after review:
+`tests/ledger.json` records, per test module, the number of tests collected when
+last accepted, plus the entry-point modules and the excised paths. Update it
+deliberately, after review:
 
     python tools/ledger.py --update
 """

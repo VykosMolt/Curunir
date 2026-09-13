@@ -1,11 +1,8 @@
 """The repository ledger, checked rather than read.
 
-tests/ledger.json says what the suite collected when it was last accepted,
-which product modules are entry points, and what was excised and where it is
-archived. These tests hold the tree to it: a test module cannot shrink, vanish
-or skip itself away unnoticed; a product module cannot survive with nothing
-importing it; an excised path cannot come back and its archive tag cannot go
-missing. Update the ledger on purpose with `python tools/ledger.py --update`.
+tests/ledger.json says what the suite collected when last accepted, which product
+modules are entry points, and what was excised. These tests hold the tree to it.
+Update it on purpose with `python tools/ledger.py --update`.
 """
 from __future__ import annotations
 

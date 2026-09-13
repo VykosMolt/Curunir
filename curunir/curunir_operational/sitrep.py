@@ -1,9 +1,9 @@
 """Situation reports in JSON, Markdown and plain text.
 
 A report is built from a frozen access-filtered view and carries an integrity
-hash over its content. It always says whether an item is observed, reported,
-extracted, inferred, disputed or unknown, and reports dependent publications
-as one shared basis rather than as corroboration.
+hash. It always says whether an item is observed, reported, extracted, inferred,
+disputed or unknown, and reports dependent publications as one shared basis
+rather than as corroboration.
 """
 from __future__ import annotations
 

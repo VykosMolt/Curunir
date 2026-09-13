@@ -1,9 +1,7 @@
 """Normalize a manifestation into addressable text and, if structured, fields.
 
-JSON becomes a table of field paths rather than prose, and HTML becomes
-block-level regions rather than one document-sized span. The original bytes stay
-authoritative in custody; the text and field table are content-addressed in the
-store, so every anchor is recoverable by replay.
+JSON becomes a table of field paths, HTML becomes block-level regions. The
+original bytes stay authoritative in custody, so every anchor is recoverable.
 """
 from __future__ import annotations
 
@@ -30,9 +28,8 @@ from . import PARSER_VERSION
 from .contracts import NormalizedDocumentRecord
 from .store import SemanticStore
 
-# Bound a runaway payload without truncating real records: the largest
-# Wikidata organisation flattens to about 24k rows, so 50k leaves room while
-# still firing FIELDS_TRUNCATED_AT_* on a genuine outlier.
+# Bound a runaway payload without truncating real records: the largest Wikidata
+# organisation flattens to about 24k rows, so 50k leaves room.
 MAX_FIELDS = 50_000
 MAX_FIELD_VALUE = 2000
 MAX_REGIONS = 400
@@ -59,15 +56,13 @@ def load_manifestation_bytes(custody_root: str | Path, manifestation: dict) -> b
     return data
 
 
-# ---- JSON structured records --------------------------------------------
+# JSON structured records
 
 
 def _json_fields(payload: Any, *, prefix: str = "$"
                  ) -> tuple[list[tuple[str, str]], bool, bool]:
-    """Flatten a JSON payload into (field path, value) rows.
-
-    The paths are stable JSONPath-style addresses, so the structure stays
-    addressable instead of being collapsed into prose.
+    """Flatten a JSON payload into (field path, value) rows. The paths are stable
+    JSONPath-style addresses, so the structure stays addressable.
     """
     rows: list[tuple[str, str]] = []
     field_cap_reached = False
@@ -98,7 +93,7 @@ def json_fields(payload: Any, *, prefix: str = "$") -> list[tuple[str, str]]:
     return _json_fields(payload, prefix=prefix)[0]
 
 
-# ---- HTML block normalization -------------------------------------------
+# HTML block normalization
 
 
 class _BlockCollector(HTMLParser):
@@ -178,10 +173,9 @@ def decode_html(data: bytes) -> tuple[str, list[str]]:
 
 
 def html_blocks(data: bytes) -> tuple[str, list[tuple[str, int, int]], str, list[str], str]:
-    """Normalize HTML into newline-joined blocks with a region per block.
-
-    Offsets are exact within the emitted text. The mapping back to the original
-    bytes is approximate, and is declared as such.
+    """Normalize HTML into newline-joined blocks with a region per block. Offsets are
+    exact within the emitted text; the mapping back to the original bytes is
+    approximate and declared as such.
     """
     raw, decode_warnings = decode_html(data)
     content_class = classify_html(raw)
@@ -210,7 +204,7 @@ def html_blocks(data: bytes) -> tuple[str, list[tuple[str, int, int]], str, list
     return "\n".join(parts), regions, title, warnings, content_class
 
 
-# ---- main entry ----------------------------------------------------------
+# Main entry
 
 
 def _detect(manifestation: dict, data: bytes) -> str:
@@ -234,10 +228,8 @@ def normalize_manifestation(store: SemanticStore, manifestation: dict,
                             custody_root: str | Path, *,
                             now: str, actor: str, marking,
                             language_hint: str = "") -> dict:
-    """Normalize one manifestation into the semantic plane.
-
-    Re-normalizing under the same parser version returns the existing record
-    rather than appending a duplicate.
+    """Normalize one manifestation into the semantic plane. Re-normalizing under the
+    same parser version returns the existing record rather than duplicating.
     """
     document_id = normalized_document_id(manifestation["manifestation_id"])
     for existing in store.records_of("semantic_document"):

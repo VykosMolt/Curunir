@@ -1,9 +1,8 @@
 """Record contracts for the mission-data fabric.
 
-Records are frozen dataclasses that validate on construction, serialize once
-through ``to_record()``, and are read back as plain dicts. Unknown stays a
-valid value: quality, times and confidences may be "UNKNOWN" or None, never
-silently defaulted to certainty.
+Frozen dataclasses that validate on construction and are read back as plain
+dicts. Unknown stays a valid value: quality, times and confidences may be
+"UNKNOWN" or None, never silently defaulted to certainty.
 """
 from __future__ import annotations
 

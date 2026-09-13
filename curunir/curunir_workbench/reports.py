@@ -1,12 +1,9 @@
 """Writing, checking, approving and exporting reports.
 
 A report is a versioned structure over the analytical record, not generated
-prose. Validation refuses a sentence that presents inference as observation,
-stale or contested support as settled, historical state as current, a forecast
-probability the forecast never carried, or independence a single source cannot
-give. Approving is a human act on one fixed version, open dissent either
-resolved or carried visibly, and a revision is a new version that leaves the
-approved one in the log as it was.
+prose. Validation refuses a sentence presenting inference as observation, stale
+support as settled, a probability the forecast never carried, or independence a
+single source cannot give.
 """
 from __future__ import annotations
 
@@ -26,8 +23,8 @@ from .projections import MissionProjection, REDACTED
 from .provenance import claim_descent
 from .store import WorkbenchStore
 
-# The families a SUPPORTED sentence may rest on. Anything else is inference
-# wearing a supported label.
+# What a SUPPORTED sentence may rest on; anything else is inference wearing
+# a supported label.
 _OBSERVATIONAL_BASIS = ("semantic_claim", "semantic_observation",
                         "fabric_manifestation")
 _INFERENTIAL_STATES = ("INFERRED", "PREDICTED", "PLANNED")
@@ -123,12 +120,12 @@ def _next_version(store: WorkbenchStore, current: Mapping[str, Any], *,
         title=title if title is not None else current["title"],
         question=question if question is not None else current["question"],
         # An edit makes the editor the author; a status change keeps the
-        # original one. Either way the event log names who acted.
+        # original. The event log names who acted either way.
         author=content_author if content_author is not None else current["author"],
         sections=kept_sections, status=status,
         based_on_state_token=state_token or current["based_on_state_token"],
         recorded_time=now,
-        # A re-append never re-classifies; the record keeps its own marking.
+        # A re-append never re-classifies: the record keeps its marking.
         marking=marking_from_record(current["marking"]),
         change_note=change_note)
     try:
@@ -152,7 +149,7 @@ def edit_report(store: WorkbenchStore, report_id: str, *, actor: str,
     was_approved = current["status"] in ("APPROVED", "APPROVED_WITH_DISSENT")
     if was_approved:
         # Editing an approved report opens a new draft; the approved version
-        # stays in the log and its supersession is recorded.
+        # stays in the log.
         change_note = change_note or f"revision of approved v{current['version']}"
     elif current["status"] in ("REJECTED", "WITHDRAWN"):
         change_note = (change_note + " " if change_note else "") + \
@@ -174,7 +171,7 @@ def edit_report(store: WorkbenchStore, report_id: str, *, actor: str,
     return record
 
 
-# ---- validation ----
+# Validation
 
 def validate_report(projection: MissionProjection, report: Mapping[str, Any]) -> dict:
     """Check a report against the approver's own view; support they cannot see
@@ -247,9 +244,8 @@ def validate_report(projection: MissionProjection, report: Mapping[str, Any]) ->
                         finding("CONTESTED_AS_SETTLED", sentence,
                                 f"claim {claim_id} is contested/under review; "
                                 "the sentence renders it settled")
-                # Historical support presented as current. This is read from
-                # the support itself, so leaving temporal_scope empty is not a
-                # way out of the check.
+                # Historical support presented as current, read from the
+                # support itself so an empty temporal_scope is no way out.
                 if sentence.get("temporal_scope") != "HISTORICAL":
                     claims = [r for f, r in resolved if f == "semantic_claim"]
                     expired = [c for c in claims if c.get("valid_to")
@@ -278,9 +274,7 @@ def validate_report(projection: MissionProjection, report: Mapping[str, Any]) ->
                                 f"independent basis count is {best}; the sentence "
                                 "asserts independent corroboration")
             # Every number a sentence quotes must match some authored version
-            # of a forecast it references, taken together so that an honest
-            # comparison passes. Probabilities written out in words are not
-            # checked.
+            # of a forecast it references. Words are not checked.
             sentence_forecasts = [r for f, r in resolved if f == "analytic_forecast"]
             if len(sentence_forecasts) > 1:
                 finding("MULTI_FORECAST_NUMERIC_AMBIGUITY", sentence,
@@ -329,7 +323,7 @@ def validate_report(projection: MissionProjection, report: Mapping[str, Any]) ->
             "ok": not any(f["blocking"] for f in findings)}
 
 
-# ---- workflow ----
+# Workflow
 
 def _disposition(store: WorkbenchStore, report: Mapping[str, Any], *,
                  disposition: str, actor: str, actor_kind: str, now: str,
@@ -386,7 +380,7 @@ def approve_report(store: WorkbenchStore, projection: MissionProjection,
                    note: str = "", acknowledge_dissent: tuple[str, ...] = ()) -> dict:
     """Approve a report: human only, after validation, with dissent accounted for.
 
-    The projection must be the approver's own view, so support they cannot see
+    The projection is the approver's own view, so support they cannot see
     blocks the approval rather than quietly counting towards it."""
     if actor_kind != "HUMAN":
         raise PermissionError("report approval is a human act")
@@ -471,7 +465,7 @@ def reject_report(store: WorkbenchStore, report_id: str, *, actor: str,
     return record
 
 
-# ---- role projections ----
+# Role projections
 
 _EXECUTIVE_KINDS = ("executive_summary", "key_judgments", "warnings", "forecasts",
                     "decision_options", "unresolved_risks", "information_gaps",
@@ -538,7 +532,7 @@ def _uncertainty_note(report: Mapping[str, Any]) -> dict[str, int]:
     return counts
 
 
-# ---- export ----
+# Export
 
 def export_package(projection: MissionProjection, store: WorkbenchStore,
                    report_id: str) -> dict[str, Any] | None:

@@ -55,11 +55,9 @@ def _basis_closure(
 ) -> tuple[tuple[dict, ...], tuple[str, ...]]:
     """Follow every reference from the report until nothing new turns up.
 
-    Two of the steps run backwards: citing an observation or a manifestation
-    also pulls in the claims drawn from it, and citing an objective pulls in the
-    assumptions and impact paths that name it. Both belong to what a report
-    rests on, so the approval gate follows them even though the marking registry
-    records the dependency the other way round.
+    Two steps run backwards: an observation or manifestation also pulls in the
+    claims drawn from it, and an objective pulls in the assumptions and paths
+    that name it. Both belong to what the report rests on.
     """
     queue = [MaterialReference("*", ref) for ref in direct_refs]
     records: list[dict] = []
@@ -73,9 +71,8 @@ def _basis_closure(
             continue
         seen_refs.add(reference)
         resolved = resolve_reference_records(store, (reference,))
-        # Only a direct basis ref that resolves under no kind is unresolved. A
-        # transitive reference to the same id under a kind it is not (a
-        # manifestation id written into an ingestion field) is a typing gap in
+        # Only a direct basis ref resolving under no kind is unresolved. The
+        # same id reached transitively under the wrong kind is a typing gap in
         # the citing record, not a hole in what the report rests on.
         if not resolved and reference.kind == "*" and reference.record_id in direct:
             unresolved.add(reference.record_id)
@@ -145,9 +142,8 @@ def _submission_actors(store: WorkbenchStore, report_id: str) -> set[str]:
         for disposition in store.report_dispositions(report_id)
         if disposition["disposition"] == "SUBMITTED"
     }
-    # Submitting writes the IN_REVIEW version first. If the disposition after
-    # it is lost, that event's actor still names the submitter, so they still
-    # cannot approve their own report.
+    # Submitting writes the IN_REVIEW version first, so even if the disposition
+    # after it is lost, that event still names the submitter.
     actors.update(
         event["actor"]
         for event in store.events()

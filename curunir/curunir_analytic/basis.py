@@ -1,10 +1,8 @@
 """What actually supports an analytical object: claims resolved to their
 observations, manifestations, sources and origin families.
 
-Fifty derivative manifestations of one origin count as reach, never as
-independence, and a degraded claim stays visible in the basis instead of
-counting as clean support. `describe_descent` walks the same lineage one claim
-at a time.
+Fifty derivatives of one origin count as reach, never independence, and a
+degraded claim stays visible instead of counting as clean support.
 """
 from __future__ import annotations
 

@@ -56,7 +56,7 @@ def _seed_claim(pipeline):
                 if c["predicate"] == "registration_status")
 
 
-# ---- a writer on an old view is refused, not silently applied --------------
+# A writer on an old view is refused, not silently applied
 
 
 def test_c1_1_concurrent_hypothesis_link_cannot_clobber(tmp_path):
@@ -171,7 +171,7 @@ def test_c1_5_route_task_binding_cannot_be_lost(tmp_path):
         route["route_id"]]["task_id"]
 
 
-# ---- an interrupted sequence of writes finishes on the next run ------------
+# An interrupted sequence of writes finishes on the next run
 
 
 def _crash_once_on(store, event_type, predicate=None):
@@ -320,7 +320,7 @@ def test_c2_4_identity_ambiguity_queueing_completes(tmp_path):
         "every recorded equivalence proposal must be queued for a human"
 
 
-# ---- a repeat call folds what the caller brought, never drops it -----------
+# A repeat call folds what the caller brought, never drops it
 
 
 def test_c3_1_independence_requirement_cannot_be_downgraded_by_cache(tmp_path):
@@ -404,7 +404,7 @@ def test_c3_3_hypothesis_assumptions_are_folded(tmp_path):
     assert merged["unknowns"] == ["u1"]
 
 
-# ---- further findings from the same reading --------------------------------
+# Further findings from the same reading
 
 
 def test_r1_analytic_store_protects_semantic_families(tmp_path):

@@ -13,9 +13,9 @@ pytestmark = pytest.mark.no_db
 NOW = "2026-08-15T12:00:00+00:00"
 
 
-# ---------------------------------------------------------------------------
+# -
 # What may lawfully be fetched
-# ---------------------------------------------------------------------------
+# -
 
 def _descriptor(access_class: str):
     from argus.source_intelligence.models import SourceDescriptor
@@ -87,9 +87,9 @@ def test_f01_connectors_shape_leads_without_granting_acquisition():
     assert NEWS_CONNECTOR.policy.prohibited_inference  # the limits are written down
 
 
-# ---------------------------------------------------------------------------
+# -
 # Leaving with a complete, verifiable copy
-# ---------------------------------------------------------------------------
+# -
 
 def test_f14_exit_test_passes_on_faithful_export_and_fails_on_tamper(tmp_path):
     import json

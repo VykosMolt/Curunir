@@ -1,9 +1,8 @@
 """End-to-end runner for SYNTHETIC_CIVIL_DEFENCE_LOGISTICS_CORRIDOR_V1.
 
-Drives the five scenario phases exclusively through public operational APIs
-(pipelines, association engine, providers, workflow, projections, reports,
-sovereignty), collects mission metrics, answers the mission questions, and
-writes the artifact set. Deterministic: all times come from the fixture clock.
+Drives the five scenario phases through public operational APIs only, collects
+mission metrics, answers the mission questions and writes the artifact set.
+Deterministic: all times come from the fixture clock.
 """
 from __future__ import annotations
 
@@ -65,7 +64,7 @@ def run_scenario(store_root: Path, out_dir: Path) -> dict[str, Any]:
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    # ---- setup ----
+    # Setup
     store = MissionDataStore.create(store_root, "vessia-corridor-v1", at(-1.0))
     registry = SchemaRegistry(store)
     for record in _sources():
@@ -91,7 +90,7 @@ def run_scenario(store_root: Path, out_dir: Path) -> dict[str, Any]:
         ingest_log.append(result)
         return result
 
-    # ---- phase 1: initial operating picture ----
+    # Phase 1: initial operating picture
     ingest("infrastructure-status", feeds.infrastructure_registry(), "src-regsys", at(-24), at(0.1))
     ingest("route-registry", feeds.route_registry(), "src-regsys", at(-24), at(0.2))
     ingest("logistics-stock", feeds.STOCK_INITIAL, "src-logsys", at(0.0), at(0.5))
@@ -103,7 +102,7 @@ def run_scenario(store_root: Path, out_dir: Path) -> dict[str, Any]:
     initial_view = WorkbenchRenderer(initial_projection).render(workshop, CONTEXTS["high"])
     _write(out_dir / "cop_initial.html", render_cop_html(initial_view, title="Vessia Corridor — initial picture"))
 
-    # ---- phase 2: disruption ----
+    # Phase 2: disruption
     ingest("civdef-bulletins", feeds.BULLETIN_DAMAGE, "src-civdef", at(24.5), at(24.6))
     ingest("argus-evidence-observations", feeds.ARGUS_BUNDLE_A, "src-argus", at(24.8), at(25.0))
     ingest("argus-evidence-observations", feeds.ARGUS_BUNDLE_B, "src-argus", at(24.8), at(25.2))
@@ -125,7 +124,7 @@ def run_scenario(store_root: Path, out_dir: Path) -> dict[str, Any]:
     timings["phase2_ingest_s"] = round(time.monotonic() - clock, 3)
     clock = time.monotonic()
 
-    # ---- phase 3: ambiguity ----
+    # Phase 3: ambiguity
     ingest("movement-sightings", feeds.SIGHTING_CONV_A, "src-fieldnet", at(28.0), at(28.1))
     ingest("movement-sightings", feeds.SIGHTING_CONV_B, "src-fieldnet", at(28.5), at(28.6))
     engine = AssociationEngine(store)
@@ -143,7 +142,7 @@ def run_scenario(store_root: Path, out_dir: Path) -> dict[str, Any]:
     timings["phase3_association_s"] = round(time.monotonic() - clock, 3)
     clock = time.monotonic()
 
-    # ---- phase 4: detection, alerts, recommendations, decisions ----
+    # Phase 4: detection, alerts, recommendations, decisions
     projection4 = Projection(store, snapshot_time=at(31.0), staleness_hours=STALENESS_HOURS)
     rules = DeterministicRuleProvider(store)
     proposals = rules.run(projection4, CONTEXTS["rules"], recorded_time=at(31.0))
@@ -181,7 +180,7 @@ def run_scenario(store_root: Path, out_dir: Path) -> dict[str, Any]:
     timings["phase4_analytics_workflow_s"] = round(time.monotonic() - clock, 3)
     clock = time.monotonic()
 
-    # ---- phase 5: reporting, export, replay ----
+    # Phase 5: reporting, export, replay
     final_projection = Projection(store, snapshot_time=at(33.0), staleness_hours=STALENESS_HOURS)
     renderer = WorkbenchRenderer(final_projection)
     view_high = renderer.render(workshop, CONTEXTS["high"])
@@ -229,7 +228,7 @@ def run_scenario(store_root: Path, out_dir: Path) -> dict[str, Any]:
     timings["phase5_reporting_export_s"] = round(time.monotonic() - clock, 3)
     clock = time.monotonic()
 
-    # ---- accounting ----
+    # Accounting
     from .questions import answer_questions
     answers = answer_questions(store=store, final_projection=final_projection,
                                projection_high=projection_high, projection_low=projection_low,

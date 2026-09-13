@@ -1,14 +1,8 @@
 """Indicators: registered observation patterns that move forecasts.
 
-A PRESENCE indicator fires on matching evidence recorded after arming, never on
-the evidence that made the question worth watching. An ABSENCE indicator fires
-only at its deadline and only when the declared coverage was achieved;
-insufficient coverage yields COVERAGE_BLOCKED and a collection requirement, so
-silence never moves a number.
-
-A firing does exactly what a human pre-authorized at arming: APPLY_PROBABILITY
-executes their recorded conditional judgment, REVIEW_ONLY marks the forecast
-UPDATE_REQUIRED and queues review.
+PRESENCE fires on evidence recorded after arming. ABSENCE fires only at its
+deadline and only with the declared coverage, so silence never moves a number.
+A firing does exactly what the human pre-authorized at arming.
 """
 from __future__ import annotations
 
@@ -43,10 +37,8 @@ def arm_indicator(ctx: AnalyticContext, *, description: str,
                   coverage_required_source_ids: tuple[str, ...] = (),
                   provenance_kind: str = "ANALYST", inference_id: str = "",
                   proposal_id: str = "", caused_by: str = "") -> dict[str, Any]:
-    """Arm an indicator, idempotent by description and forecasts.
-
-    The named forecasts must exist and be live; arming folds the indicator id
-    into each forecast's list.
+    """Arm an indicator, idempotent by description and forecasts. The named
+    forecasts must exist and be live.
     """
     store = ctx.store
     indicator_id = indicator_id_for(description, forecast_ids)
@@ -82,8 +74,8 @@ def arm_indicator(ctx: AnalyticContext, *, description: str,
                  tuple(existing["coverage_required_source_ids"])),
             ) if supplied != standing]
         if differs:
-            # keeping a superseded authorization silently would break the
-            # pre-authorization guarantee: changing one needs a new indicator
+            # Silently keeping a superseded authorization would break the
+            # guarantee: changing one needs a new indicator.
             raise ValueError(
                 f"indicator {indicator_id[:24]} already stands with a "
                 f"different {', '.join(differs)}: changing a pre-authorization "
@@ -144,7 +136,7 @@ def _fold_into_forecasts(ctx: AnalyticContext, indicator: Mapping[str, Any]) -> 
         if forecast is None or indicator["indicator_id"] in forecast["indicator_ids"]:
             continue
         if forecast["status"] in FORECAST_TERMINAL_STATUSES:
-            # a settled forecast's record is history and is not rewritten
+            # A settled forecast is history and is not rewritten.
             continue
         _forecast_reappend(ctx, forecast,
                            {"indicator_ids": tuple(forecast["indicator_ids"])
@@ -197,11 +189,9 @@ def _post_arming_matches(indicator: Mapping[str, Any],
                          ) -> list[Mapping[str, Any]]:
     """Matching observations about the world after arming.
 
-    Both the recording time and the source state time must be later than the
-    arming: an archive backfill is history arriving late, and firing on it
-    would contradict the claims. Missing state time refuses the firing, and
-    both bounds are strict, so a same-instant retrieval stays invisible — the
-    safe direction, since a false firing would move a number.
+    Both recording and source state time must be later than the arming, since an
+    archive backfill is history arriving late. Missing state time refuses the
+    firing, and both bounds are strict: a false firing would move a number.
     """
     armed = parse_time(indicator["armed_time"])
     matching = []
@@ -224,11 +214,9 @@ def _defeat_matches(indicator: Mapping[str, Any],
                     ) -> list[Mapping[str, Any]]:
     """Observations defeating an ABSENCE indicator.
 
-    The watched thing holding at any point up to the deadline defeats it,
-    including before arming: the post-arming bound belongs to PRESENCE, and
-    applying it here would let the indicator assert "we never saw it" about a
-    state that already held. Missing state time falls back to recorded time,
-    which can only add a defeat and so never invents a firing.
+    Holding at any point up to the deadline defeats it, arming included: the
+    post-arming bound belongs to PRESENCE, and applying it here would assert "we
+    never saw it" about a state that already held.
     """
     deadline = parse_time(indicator["deadline"])
     defeating = []
@@ -244,12 +232,9 @@ def _defeat_matches(indicator: Mapping[str, Any],
 
 
 def check_indicators(ctx: AnalyticContext) -> list[dict[str, Any]]:
-    """One pass over the live indicators.
-
-    PRESENCE fires on post-arming matches. ABSENCE fires past its deadline only
-    when the declared coverage was achieved, and the watched thing occurring by
-    then retires it instead. A FIRED indicator is revisited only to complete an
-    interrupted effect, and every step is idempotent.
+    """One pass over the live indicators. PRESENCE fires on post-arming matches;
+    ABSENCE fires past its deadline only with the declared coverage. A FIRED
+    indicator is revisited only to complete an interrupted effect.
     """
     store = ctx.store
     outcomes = []
@@ -258,8 +243,7 @@ def check_indicators(ctx: AnalyticContext) -> list[dict[str, Any]]:
     for indicator in sorted(store.current_indicators().values(),
                             key=lambda i: i["indicator_id"]):
         if indicator["status"] == "FIRED":
-            # the FIRED version may have landed while its effect did not;
-            # complete both
+            # The FIRED version may have landed without its effect.
             appended = _apply_effects(ctx, indicator)
             _close_coverage_gap(ctx, "indicator", indicator["indicator_id"],
                                 "coverage was achieved and the indicator fired")
@@ -274,8 +258,8 @@ def check_indicators(ctx: AnalyticContext) -> list[dict[str, Any]]:
         if all(forecasts.get(fid) is None
                or forecasts[fid]["status"] in FORECAST_TERMINAL_STATUSES
                for fid in indicator["forecast_ids"]):
-            # every question it watches is settled, so it can never act again:
-            # expire it rather than keep asking collection for a dead question
+            # Everything it watches is settled, so expire it rather than keep
+            # asking collection about a dead question.
             expired = _reappend(ctx, indicator,
                                 {"status": "EXPIRED_UNFIRED"},
                                 change_reason="all watched forecasts settled "
@@ -312,8 +296,7 @@ def check_indicators(ctx: AnalyticContext) -> list[dict[str, Any]]:
                     and parse_time(ctx.now_fn()) \
                     <= parse_time(indicator["deadline"]):
                 continue
-            # the watched thing holding at any point by the deadline, arming
-            # included, defeats the absence
+            # Holding at any point by the deadline defeats the absence.
             observed = _defeat_matches(indicator, observations, manifestations)
             if observed:
                 retired = _reappend(ctx, indicator,
@@ -337,8 +320,8 @@ def check_indicators(ctx: AnalyticContext) -> list[dict[str, Any]]:
                                     "absence question is settled by defeat")
                 outcomes.append(retired)
                 continue
-            # coverage is measured from the deadline: a search that ran earlier
-            # says nothing about the window it did not see
+            # Coverage is measured from the deadline: an earlier search says
+            # nothing about the window it did not see.
             satisfied, coverage_evidence, explanation = _absence_coverage_satisfied(
                 store,
                 {"absence_min_successful_sources":
@@ -382,15 +365,15 @@ def check_indicators(ctx: AnalyticContext) -> list[dict[str, Any]]:
                     store.append("REVIEW_ITEM_RECORDED", item,
                                  recorded_time=item.recorded_time, actor=ctx.actor)
                 outcomes.append(blocked)
-            # already blocked and still unsatisfied: nothing to append
+            # Already blocked and still unsatisfied: nothing to append.
     return outcomes
 
 
 def _fire(ctx: AnalyticContext, indicator: Mapping[str, Any], *,
           evidence: tuple[str, ...], why: str) -> dict[str, Any]:
     store = ctx.store
-    # the evidence may be more restricted than the indicator, so persist its
-    # references and never a quoted observation value
+    # The evidence may be more restricted, so persist references, never a
+    # quoted observation value.
     fired = _reappend(ctx, indicator,
                       {"status": "FIRED", "fired_time": ctx.now_fn(),
                        "fired_evidence_refs": evidence},
@@ -412,10 +395,9 @@ def _fire(ctx: AnalyticContext, indicator: Mapping[str, Any], *,
 
 def _effect_executed(store: AnalyticStore, indicator: Mapping[str, Any],
                      forecast_id: str, target: float) -> bool:
-    """Did the pre-authorized update land?
-
-    Checked against the version history at or after the firing, not the current
-    number, so a human moving the probability afterwards is not overwritten.
+    """Did the pre-authorized update land? Checked against the version history at
+    or after the firing, so a human moving the number afterwards is not
+    overwritten.
     """
     fired_time = indicator.get("fired_time", "")
     for version in store.analytic_versions("analytic_forecast", forecast_id):
@@ -442,8 +424,8 @@ def _apply_effects(ctx: AnalyticContext, indicator: Mapping[str, Any]) -> int:
         forecast = store.current_forecasts().get(forecast_id)
         if forecast is None or forecast["status"] in FORECAST_TERMINAL_STATUSES:
             continue
-        # the INDICATOR_FIRED transition lands last and marks completion, so
-        # a later pass must not re-run an effect that already ran
+        # The transition lands last and marks completion, so a later pass must
+        # not re-run the effect.
         marker = digest_id("fire", indicator["indicator_id"], forecast_id)
         if any(t["transition_type"] == "INDICATOR_FIRED"
                and t["caused_by"] == marker
@@ -452,7 +434,7 @@ def _apply_effects(ctx: AnalyticContext, indicator: Mapping[str, Any]) -> int:
         if effect["mode"] == "APPLY_PROBABILITY":
             if not _effect_executed(store, indicator, forecast_id,
                                     effect["target_probability"]):
-                # execute the human's recorded conditional judgment as written
+                # Execute the human's recorded conditional judgment as written.
                 update_probability(
                     ctx, forecast_id,
                     probability=effect["target_probability"],

@@ -1,12 +1,9 @@
 """Current-state and historical-as-of projections with fail-closed access
 filtering.
 
-A projection is derived purely from the event log up to a cutoff, plus a
-snapshot time for freshness. Access-filtered views compute every list and
-every count from the filtered set only, so nothing about hidden records —
-existence, counts, labels, provenance or alert state — leaks into a lower
-view. The quality summary is a versioned convenience policy over visible
-dimensions; unknown never becomes zero or certainty.
+A projection is derived purely from the event log up to a cutoff. Filtered views
+compute every list and count from the filtered set only, so nothing about hidden
+records leaks into a lower view, and unknown never becomes zero or certainty.
 """
 from __future__ import annotations
 
@@ -72,11 +69,9 @@ class Projection:
         self.state_token = events[-1]["entry_hash"][:16] if events else "genesis"
         self.snapshot_time = snapshot_time or (events[-1]["recorded_time"] if events else store.meta["created_time"])
         self.staleness_hours = dict(staleness_hours or {})
-        # Bounded valid-time as-of: only versions whose valid point is at or
-        # before `valid_at` participate; the current-state rule then applies
-        # within that subset. Combined with `as_of_seq` this answers both
-        # knowledge-as-of and (bounded) validity-as-of; ranged valid intervals
-        # and full bitemporal joins remain out of scope (BITEMPORAL_LITE).
+        # Bounded valid-time as-of: only versions valid at or before `valid_at`
+        # participate, and the current-state rule applies within that subset.
+        # Ranged intervals and full bitemporal joins are out of scope.
         self.valid_at = valid_at
         self.event_actor: dict[str, str] = {}
         self.objects: dict[str, dict[str, Any]] = {}
@@ -215,7 +210,7 @@ class Projection:
                     groups.setdefault(group, set()).add(object_id)
         self.dependence_groups = {k: sorted(v) for k, v in sorted(groups.items())}
 
-    # ---- access-aware views ----
+    # Access-aware views
 
     def view(self, context: AccessContext) -> dict[str, Any]:
         def _visible_transitions(entry: Mapping[str, Any]) -> list[dict[str, Any]]:

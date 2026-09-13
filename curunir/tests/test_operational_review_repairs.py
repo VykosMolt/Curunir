@@ -56,7 +56,7 @@ def obj(object_id, version, *, object_type, mark, hours=0.0, attributes=None, ge
     )
 
 
-# ---- B1: the analytics join unions compartments -----------------------------
+# B1: the analytics join unions compartments
 
 def test_b1_rule_marking_joins_every_contributing_compartment(tmp_path):
     """A rule's inference is not viewable by a context blind to one of its inputs."""
@@ -83,7 +83,7 @@ def test_b1_rule_marking_joins_every_contributing_compartment(tmp_path):
     assert not can_view(inference["marking"], context("no-Y", "X", "Z"))
 
 
-# ---- B2: a situation report never prints an id the reader cannot view -------
+# B2: a situation report never prints an id the reader cannot view
 
 def _route_exposure_store(tmp_path):
     store = make_store(tmp_path)
@@ -112,7 +112,7 @@ def test_b2_situation_report_omits_unviewable_disruption_ids(tmp_path):
         assert "hazard-SECRET" not in rendered
 
 
-# ---- B3: explanations do not list hidden dependence-group members -----------
+# B3: explanations do not list hidden dependence-group members
 
 def _dependence_store(tmp_path):
     store = make_store(tmp_path)
@@ -152,7 +152,7 @@ def test_b3_explain_filters_dependence_group_members(tmp_path):
     assert high_groups == [{"group_id": "GRP-1", "member_object_ids": ["obs-HIDDEN", "obs-PUBLIC"]}]
 
 
-# ---- B4/B5: feeds are parsed and validated at the boundary ------------------
+# B4/B5: feeds are parsed and validated at the boundary
 
 FEED_SCHEMA = {
     "schema_id": "feed-doc", "version": "1.0", "media_type": "application/json",
@@ -232,7 +232,7 @@ def test_b5_non_object_geojson_feature_yields_an_invalid_ingestion(tmp_path):
     assert result["status"] == "INVALID"
 
 
-# ---- B6: verify_chain reports damage instead of raising --------------------
+# B6: verify_chain reports damage instead of raising
 
 def test_b6_verify_chain_reports_a_record_missing_its_index_field(tmp_path):
     store = make_store(tmp_path)
@@ -248,7 +248,7 @@ def test_b6_verify_chain_reports_a_record_missing_its_index_field(tmp_path):
         MissionDataStore(store.root)
 
 
-# ---- B7: state checks repeat under the append lock -------------------------
+# B7: state checks repeat under the append lock
 
 def test_b7_requirement_transition_rechecks_status_under_the_lock(tmp_path):
     first = make_store(tmp_path)
@@ -290,7 +290,7 @@ def test_b7_alert_dedup_rechecks_under_the_lock(tmp_path):
     assert len(MissionDataStore(first.root).records_of("alert")) == 1
 
 
-# ---- B8: PACE bundles are written and verified through safe paths ----------
+# B8: PACE bundles are written and verified through safe paths
 
 def _pace_store(tmp_path):
     store = make_store(tmp_path, name="pace-store")
@@ -346,7 +346,7 @@ def test_b8_build_still_publishes_a_verifiable_bundle(tmp_path):
     assert manifest["combined_sha256"] == sha256(manifest["members"])
 
 
-# ---- B9: an unknown role can never rank below a known one ------------------
+# B9: an unknown role can never rank below a known one
 
 @pytest.mark.parametrize("records", [
     [{"owning_authority": AUTH, "min_role": "OBSERVER"}, {"owning_authority": AUTH, "min_role": "ROOT"}],
@@ -357,7 +357,7 @@ def test_b9_unknown_min_role_refuses_in_either_order(records):
         most_restrictive(records)
 
 
-# ---- B10: an unassessed mapping confidence dominates -----------------------
+# B10: an unassessed mapping confidence dominates
 
 def test_b10_unknown_mapping_confidence_dominates():
     left = {"object_type": "INFRASTRUCTURE", "quality": {"mapping_confidence": "UNKNOWN"}}
@@ -366,7 +366,7 @@ def test_b10_unknown_mapping_confidence_dominates():
     assert association.compute_features(right, left)["mapping_confidence"] == "UNKNOWN"
 
 
-# ---- B11: bundle invariants refuse rather than assert ----------------------
+# B11: bundle invariants refuse rather than assert
 
 def test_b11_full_bundle_invariant_raises_store_error(tmp_path, monkeypatch):
     store = make_store(tmp_path)
@@ -376,7 +376,7 @@ def test_b11_full_bundle_invariant_raises_store_error(tmp_path, monkeypatch):
         delta.build_full_bundle(store, tmp_path / "bundle")
 
 
-# ---- P2: the record index answers exactly what a scan would ----------------
+# P2: the record index answers exactly what a scan would
 
 def _scan_latest(store, record_type, id_field, record_id):
     version = None
@@ -414,7 +414,7 @@ def test_p2_latest_matches_a_full_scan(tmp_path):
     assert PRIMARY_ID_FIELDS["object_version"] == "object_id"
 
 
-# ---- review follow-ups ------------------------------------------------------
+# Review follow-ups
 
 def _rel(rel_id, relation_type, source, target, mark):
     return RelationshipVersion(rel_id, 1, relation_type, source, target, t(0), None, t(0),

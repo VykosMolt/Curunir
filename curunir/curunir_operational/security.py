@@ -181,10 +181,9 @@ _BLOB_POLICY: tuple[dict[str, RefTo], tuple[tuple[str, str], ...], int] | None =
 def _blob_policy() -> tuple[dict[str, RefTo], tuple[tuple[str, str], ...]]:
     """Field names that mean a reference anywhere inside an unstructured mapping.
 
-    Derived from every record class, so a name means the same thing inside a
-    free-form payload as it does on a typed record. A name that is a label on
-    one class and a reference on another still counts: joining too much is
-    safe, missing a reference is not. Rebuilt whenever the registry changes.
+    Derived from every record class, so a name means the same thing in a
+    free-form payload as on a typed record. Joining too much is safe, missing a
+    reference is not.
     """
     global _BLOB_POLICY
     _register_product_contracts()

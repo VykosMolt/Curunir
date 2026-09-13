@@ -1,9 +1,9 @@
 """Bounded synthetic ingestion and replay harness.
 
-It drives a mix of valid, duplicate, late, corrected and malformed records
-through the real pipeline so the store, projection, export and replay run at
-volume, then checks that replay reproduces the same projection. The timings
-are fixture-scale, not a performance claim.
+It drives valid, duplicate, late, corrected and malformed records through the
+real pipeline so the store, projection, export and replay run at volume, then
+checks that replay reproduces the same projection. The timings are
+fixture-scale, not a performance claim.
 """
 from __future__ import annotations
 

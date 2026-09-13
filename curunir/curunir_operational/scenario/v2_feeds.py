@@ -1,12 +1,9 @@
 """Synthetic feed payloads for scenarios B and C. All invented.
 
-Scenario B is an infrastructure cascade: a hazard degrades a substation and a
-bridge, pulling in a communications dependency, a restricted assessment,
-conflicting reports and a route consequence in the other workbench.
-
-Scenario C is false corroboration and schema drift: several reports off one
-basis, one genuinely independent source, a schema version change, a delayed
-correction, a retraction, a duplicate publication and an ambiguous object.
+B is an infrastructure cascade: a hazard degrades a substation and a bridge,
+pulling in a dependency, a restricted assessment and conflicting reports. C is
+false corroboration and schema drift: several reports off one basis, one
+independent source, a version change, a correction, a retraction, a duplicate.
 """
 from __future__ import annotations
 
@@ -109,7 +106,7 @@ def field_observation(report_id, subject_ref, subject_kind, status, observed, de
     return json.dumps(payload).encode()
 
 
-# ---- scenario C: false corroboration and schema drift ----
+# Scenario C: false corroboration and schema drift
 
 def argus_bundle(source_key, assertion_id, publisher, basis, subject, status, report_time, *,
                  dependents=(), review_state="UNREVIEWED", retraction=False) -> bytes:

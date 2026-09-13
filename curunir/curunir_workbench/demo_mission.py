@@ -3,13 +3,8 @@ the workbench HTTP API.
 
     python -m curunir_workbench.demo_mission --root missions/apple_workbench_v66
 
-The root must already hold a mission from the live analytic demo. This walks the
-operator loop: overview, warning and forecast, provenance descent, hypothesis,
-review disposition, a live collection launch, annotation, a second analyst with
-narrower access, a dossier that fails validation and is repaired and approved,
-a restart, and a replay fingerprint. Every step is a real authenticated call and
-a failure is reported rather than painted over. The one restricted record is
-labelled test data; the mission itself holds nothing naturally secret.
+The root must already hold a mission from the live analytic demo. Every step is a
+real authenticated call and a failure is reported rather than painted over.
 """
 from __future__ import annotations
 

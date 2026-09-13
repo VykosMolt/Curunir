@@ -1,8 +1,7 @@
 """Typed records for the semantic plane's event log.
 
-Frozen dataclasses that validate themselves at construction, are serialized
-once and replayed as dicts. "The source says X" (an observation) and "our
-current reading of X" (a claim plus its state) are separate record types.
+Frozen dataclasses that validate themselves at construction. "The source says X"
+and "our current reading of X" are separate record types.
 """
 from __future__ import annotations
 
@@ -51,9 +50,8 @@ REVIEW_STATUSES = ("OPEN", "RESOLVED", "DISMISSED")
 class EvidenceAnchor(Record):
     """Where a piece of evidence sits: a manifestation plus a span or field.
 
-    ``normalized_sha256`` names the payload the offsets or field path address —
-    the normalized text for span and document anchors, the field table for field
-    anchors. ``mapping_status`` says how that maps back to the original bytes.
+    ``normalized_sha256`` names the payload the offsets address;
+    ``mapping_status`` says how that maps back to the original bytes.
     """
     RECORD_TYPE = "evidence_anchor"
     manifestation_id: Ref("fabric_manifestation")
@@ -89,9 +87,8 @@ class EvidenceAnchor(Record):
 @dataclass(frozen=True)
 class NormalizedDocumentRecord(Record):
     """One manifestation normalized into text and, if structured, a field table.
-
-    Both payloads are content-addressed in the store; this record binds their
-    hashes to the manifestation and parser so replay can recover them.
+    Binding both payload hashes to the manifestation and parser lets replay
+    recover them.
     """
     RECORD_TYPE = "semantic_document"
     ID_FIELD = "document_id"
@@ -135,10 +132,9 @@ class NormalizedDocumentRecord(Record):
 
 @dataclass(frozen=True)
 class SemanticObservation(Record):
-    """One "the source says X", pinned to evidence.
-
-    Observations never change when our reading of them changes. Model-produced
-    observations also carry the inference record that produced them.
+    """One "the source says X", pinned to evidence. Observations never change when
+    our reading of them does, and model-produced ones carry their inference
+    record.
     """
     RECORD_TYPE = "semantic_observation"
     ID_FIELD = "observation_id"
@@ -184,12 +180,9 @@ class SemanticObservation(Record):
 
 @dataclass(frozen=True)
 class SemanticClaim(Record):
-    """Our current reading of a set of observations.
-
-    A claim gathers observations into one proposition, counts how many
-    independent origins back it, and names the world-model versions it produced.
-    Claims version forward: re-appending with version+1 supersedes on replay and
-    every prior version stays in the log.
+    """Our current reading of a set of observations: one proposition, how many
+    independent origins back it, and the world-model versions it produced.
+    Claims version forward and every prior version stays in the log.
     """
     RECORD_TYPE = "semantic_claim"
     ID_FIELD = "claim_id"
@@ -292,11 +285,9 @@ class SemanticChangeRecord(Record):
 
 @dataclass(frozen=True)
 class HypothesisRecord(Record):
-    """One competing explanation and the evidence for and against it.
-
-    Re-appending the same hypothesis supersedes on replay; ``history`` carries
-    the readable trail. A hypothesis is never born supported — a new one starts
-    UNRESOLVED.
+    """One competing explanation and the evidence for and against it. Re-appending
+    supersedes on replay, and a hypothesis is never born supported: a new one
+    starts UNRESOLVED.
     """
     RECORD_TYPE = "hypothesis"
     ID_FIELD = "hypothesis_id"
@@ -344,9 +335,9 @@ class DiscriminatingObservation(Record):
     desired_attribute: str
     source_family_hints: tuple[str, ...]
     independence_required: bool
-    # The origin families backing the question when it was asked. Evidence
-    # collected to answer it is checked against this snapshot, so it cannot
-    # disqualify itself by joining the basis first.
+    # The families backing the question when asked. Evidence collected to
+    # answer it is checked against this snapshot, so it cannot disqualify
+    # itself by joining the basis first.
     basis_groups_at_pose: tuple[str, ...]
     requirement_id: Ref("information_requirement")
     status: str

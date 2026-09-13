@@ -2,8 +2,8 @@
 
 `process_new_evidence` carries every unprocessed manifestation through
 normalization, extraction and integration. `process_fabric_changes` turns each
-byte-level change the watch layer found into an interpreted semantic change and
-an alert whose body explains the difference instead of showing a hash.
+byte-level change into an interpreted semantic change and an alert that explains
+the difference instead of showing a hash.
 """
 from __future__ import annotations
 
@@ -43,7 +43,7 @@ class SemanticPipeline:
         return IntegrationContext(store=self.store, actor=self.actor,
                                   marking=marking or self.marking, now_fn=self.now_fn)
 
-    # ---- understanding ---------------------------------------------------
+    # Understanding
 
     def _failure_item_id(self, manifestation_id: str) -> str:
         return digest_id("review-processing", manifestation_id)
@@ -178,7 +178,7 @@ class SemanticPipeline:
                 "failed": [p for p in processed if p["status"] != "PROCESSED"],
                 "association_proposals": len(associations)}
 
-    # ---- semantic monitoring --------------------------------------------
+    # Semantic monitoring
 
     def _interpreted_pairs(self) -> set[tuple[str, str]]:
         return {(r["prior_manifestation_id"], r["current_manifestation_id"])

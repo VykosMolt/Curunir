@@ -142,7 +142,7 @@ class SourceConnector:
     def _execute(self, request: ConnectorRequest, transport: Transport, now: str) -> ConnectorResponse:
         raise NotImplementedError
 
-    # ---- shared plumbing -------------------------------------------------
+    # Shared plumbing
 
     def _get(self, url: str, transport: Transport, *, headers: Mapping[str, str] | None = None) -> dict:
         request_headers = {"User-Agent": self.user_agent, **(headers or {})}

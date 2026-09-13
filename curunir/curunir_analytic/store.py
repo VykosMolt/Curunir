@@ -59,7 +59,7 @@ class AnalyticStore(SemanticStore):
            for record_type, (_, id_field) in ANALYTIC_ID_FIELDS.items()},
     }
 
-    # ---- log-derived indexes ---------------------------------------------
+    # Log-derived indexes
 
     def _reset_indexes(self) -> None:
         super()._reset_indexes()
@@ -88,7 +88,7 @@ class AnalyticStore(SemanticStore):
     def has_transition(self, transition_id: str) -> bool:
         return transition_id in self._transition_ids
 
-    # ---- generic versioned views ----------------------------------------
+    # Generic versioned views
 
     def current_analytics(self, record_type: str) -> dict[str, dict]:
         """Latest version per object id; every prior version stays in the log."""
@@ -113,7 +113,7 @@ class AnalyticStore(SemanticStore):
         return [r for r in self.records_of("analytic_transition")
                 if r["subject_id"] == subject_id]
 
-    # ---- typed convenience views ----------------------------------------
+    # Typed convenience views
 
     def current_themes(self) -> dict[str, dict]:
         return self.current_analytics("analytic_theme")

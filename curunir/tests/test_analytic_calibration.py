@@ -42,7 +42,7 @@ def _forecast(ctx, by_predicate, *, question, probability, author="jan",
         supporting_claim_ids=[by_predicate["entity_status"]])
 
 
-# ---- pure math -------------------------------------------------------------
+# Pure math
 
 
 def test_proper_scores_are_the_textbook_functions():
@@ -96,7 +96,7 @@ def test_scoring_survives_a_frozen_clock():
     assert standing_probability(versions) == 0.62
 
 
-# ---- over the store --------------------------------------------------------
+# Over the store
 
 
 def test_scoring_uses_the_standing_probability_and_reports_coverage(tmp_path):

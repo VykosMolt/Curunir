@@ -55,7 +55,7 @@ def _flip_to_suspended(pipeline, ctx):
     pipeline.process_new_evidence()
 
 
-# ---- an authorization belongs to the act that earned it --------------------
+# An authorization belongs to the act that earned it
 
 
 def test_human_update_cannot_carry_an_indicator_id(tmp_path):
@@ -87,7 +87,7 @@ def test_human_update_cannot_carry_an_indicator_id(tmp_path):
         "the analyst's pre-authorized judgment executes when its trigger fires"
 
 
-# ---- a forecast written after the fact is not calibration ------------------
+# A forecast written after the fact is not calibration
 
 
 def test_forecast_authored_after_its_horizon_feeds_no_aggregate(tmp_path):
@@ -111,7 +111,7 @@ def test_forecast_authored_after_its_horizon_feeds_no_aggregate(tmp_path):
     assert board["coverage"]["scored"] == 0
 
 
-# ---- a settled question leaves nothing in the queue ------------------------
+# A settled question leaves nothing in the queue
 
 
 def test_latematch_item_closes_when_the_forecast_settles(tmp_path):
@@ -135,7 +135,7 @@ def test_latematch_item_closes_when_the_forecast_settles(tmp_path):
         "a settled question leaves nothing in the queue"
 
 
-# ---- a short identifier cannot claim unrelated searches --------------------
+# A short identifier cannot claim unrelated searches
 
 
 def test_short_subject_values_do_not_match_urls():

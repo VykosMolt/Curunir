@@ -1,8 +1,7 @@
 """Record shapes for annotations, dissent and reports.
 
-A report is a versioned structure, not generated prose: every sentence in it is
-SUPPORTED, EXPLICITLY_INFERENTIAL or UNRESOLVED, and says on what. Approving one
-is a recorded human act over a fixed version; a revision is a new version.
+A report is a versioned structure, not generated prose: every sentence is
+SUPPORTED, EXPLICITLY_INFERENTIAL or UNRESOLVED, and says on what.
 """
 from __future__ import annotations
 
@@ -53,11 +52,9 @@ ANNOTATION_TARGET_KINDS = (
 
 @dataclass(frozen=True)
 class AnnotationRecord(Record):
-    """One analyst statement bound to a mission record.
-
-    Dissent is an annotation of kind DISSENT: it never overwrites what it
-    disagrees with, and resolving it takes a note. A reply names its parent, so
-    the whole discussion stays attached to the target.
+    """One analyst statement bound to a mission record. Dissent never overwrites what
+    it disagrees with, and a reply names its parent so the discussion stays
+    attached to the target.
     """
     RECORD_TYPE = "workbench_annotation"
     ID_FIELD = "annotation_id"
@@ -94,10 +91,9 @@ class AnnotationRecord(Record):
 class ReportSentence(Record):
     """One statement a reader can approve, with the status that qualifies it.
 
-    SUPPORTED needs a basis that resolves; EXPLICITLY_INFERENTIAL needs the
-    inference written out; UNRESOLVED needs the reason. A sentence that sets
-    asserts_independent is claiming independent corroboration, and validation
-    checks that claim against the sources behind its basis.
+    SUPPORTED needs a basis that resolves, EXPLICITLY_INFERENTIAL the inference
+    written out, UNRESOLVED the reason. asserts_independent is checked against
+    the sources behind the basis.
     """
     RECORD_TYPE = "report_sentence"
     sentence_id: Ref("workbench_report")
@@ -139,11 +135,9 @@ class ReportSection(Record):
 
 @dataclass(frozen=True)
 class ReportRecord(Record):
-    """One version of a mission report.
-
-    The record holds the whole report at this version; the log keeps the earlier
-    ones. based_on_state_token pins the mission state the draft was written
-    against, so a reviewer can see that it has moved on.
+    """One version of a mission report; the log keeps the earlier ones.
+    based_on_state_token pins the mission state it was written against, so a
+    reviewer can see that it has moved on.
     """
     RECORD_TYPE = "workbench_report"
     ID_FIELD = "report_id"
@@ -178,10 +172,9 @@ class ReportRecord(Record):
 
 @dataclass(frozen=True)
 class ReportDisposition(Record):
-    """One named act on one fixed report version.
-
-    An approval records the hash of the validation result it accepted and the
-    mission state at the time, so what was approved can be checked again later.
+    """One named act on one fixed report version. An approval records the validation
+    result it accepted and the mission state at the time, so it can be checked
+    again later.
     """
     RECORD_TYPE = "workbench_report_disposition"
     ID_FIELD = "disposition_id"
@@ -212,10 +205,9 @@ class ReportDisposition(Record):
 
 @dataclass(frozen=True)
 class SavedViewRecord(Record):
-    """A saved layout: filters, focus and windows.
-
-    This is presentation only, never analytical truth. It lives in the store so
-    a mission's working views survive a restart and stay attributable.
+    """A saved layout: filters, focus and windows. Presentation only, never
+    analytical truth, but stored so it survives a restart and stays
+    attributable.
     """
     RECORD_TYPE = "workbench_saved_view"
     ID_FIELD = "view_id"

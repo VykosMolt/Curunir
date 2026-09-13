@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from curunir_operational.access import AccessContext, Marking
 
-# ---- markings and access contexts ----
+# Markings and access contexts
 
 CIVDEF = "CIVDEF-AUTH"
 BASE_MARKING = Marking(owning_authority=CIVDEF, releasability=("CORRIDOR-OPS",))
@@ -33,7 +33,7 @@ CONTEXTS = {
 STALENESS_HOURS = {"RESOURCE_STOCK": 36.0, "OBSERVATION": 48.0, "INFRASTRUCTURE": 96.0,
                    "ROUTE": 96.0, "MOVEMENT": 48.0, "OPERATIONAL_CONCERN": 72.0}
 
-# ---- hazard schema, shaped like a GDACS feature collection ----
+# Hazard schema, shaped like a GDACS feature collection
 
 HAZARD_SCHEMA = {
     "schema_id": "gdacs-hazard", "version": "1.0", "media_type": "application/geo+json",
@@ -73,7 +73,7 @@ HAZARD_PIPELINE = {
     "marking": BASE_MARKING.to_record(),
 }
 
-# ---- schema evolution: engineering assessment feed, v1 to v1.1 to v2 ----
+# Schema evolution: engineering assessment feed, v1 to v1.1 to v2
 
 ENGINEERING_SCHEMA_V1 = {
     "schema_id": "eng-assessment", "version": "1.0", "media_type": "application/json",
@@ -138,7 +138,7 @@ ENGINEERING_PIPELINE_V2 = {**ENGINEERING_PIPELINE_V1, "version": "2.0", "schema_
                            "mappings": [{"mapping_id": "eng-map", "version": "2.0"}],
                            "observation": {"target_field": "asset_ref", "target_prefix": "infra-"}}
 
-# ---- second workbench ----
+# Second workbench
 
 INFRASTRUCTURE_WORKBENCH = {
     "workshop_id": "INFRASTRUCTURE_RESILIENCE_AND_CIVIL_PROTECTION_WORKBENCH_V2", "version": "1.0",

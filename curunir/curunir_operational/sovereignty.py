@@ -1,11 +1,9 @@
 """Sovereignty manifest, open-export exit test, and the PACE bundle.
 
 The exit test proves the whole mission state exports into open formats and
-re-imports into a fresh store with nothing lost. A PACE bundle (a briefing
-pack for degraded conditions) is a deterministic, hashed, access-filtered
-directory readable without this application; restricted content is omitted
-under a fixed statement, and its existence and counts are never shown.
-Integrity is plain sha256 — no claim of secure cross-domain transport.
+re-imports with nothing lost. A PACE bundle is a deterministic, hashed,
+access-filtered directory readable without this application; restricted content
+is omitted under a fixed statement. Integrity is plain sha256.
 """
 from __future__ import annotations
 
@@ -134,7 +132,7 @@ def run_exit_test(store: MissionDataStore, export_dir: str | Path, fresh_root: s
             "original_head": store.head(), "imported_head": imported.head()}
 
 
-# ---- PACE bundle ----
+# PACE bundle
 
 def build_pace_bundle(store: MissionDataStore, projection: Projection, context: AccessContext,
                       out_dir: str | Path, *, operational_context: str, since_seq: int = 0) -> dict[str, Any]:

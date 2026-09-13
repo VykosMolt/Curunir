@@ -1,15 +1,10 @@
-"""The providers behind the analytical-proposal seam: `anthropic`, `openai`,
-and `deterministic`, an offline backend needing no network or credential.
+"""The providers behind the analytical-proposal seam: `anthropic`, `openai`, and
+`deterministic`, an offline backend needing no network or credential.
 
-This module supplies a provider and nothing else — `providers.AnalyticalAssist`
-owns the egress refusal, the retained inference record and the human gate. It
-makes no authorization decision, writes no record, and cannot promote anything.
-
-Credentials are not handled here: each backend constructs a zero-argument
-client and lets the vendor SDK run its own resolution chain, so whatever that
-chain supports, this supports. `base_url` is passed through for gateways and
-self-hosted endpoints. Both SDKs are optional and imported lazily, so a checkout
-with neither behaves as one with no provider configured.
+This supplies a provider and nothing else; `providers.AnalyticalAssist` owns the
+egress refusal, the inference record and the human gate. Credentials are left to
+each vendor SDK's own resolution chain, and both SDKs are optional and imported
+lazily.
 """
 from __future__ import annotations
 
@@ -94,10 +89,9 @@ class ModelBackend(ABC):
 
     def infer(self, task: str, inputs: Mapping[str, Any],
               target_kind: str) -> Mapping[str, Any]:
-        """Propose one candidate of `target_kind`, or raise.
-
-        Raising is a supported outcome: the caller retains the failure as an
-        INVALID inference rather than letting a bad response become content.
+        """Propose one candidate of `target_kind`, or raise. Raising is
+        supported: the caller retains the failure as an INVALID inference
+        rather than letting a bad response become content.
         """
         reason = refusal_reason(target_kind)
         if reason is not None:
@@ -122,9 +116,8 @@ class ModelBackend(ABC):
 
 
 # The member of each closed vocabulary that asks for the least, so the enum
-# choice is never what blocks materialization: ABSENCE would demand a deadline
-# and coverage sources, a non-VERBATIM variant relation and LIKELY_INFLUENCES
-# a mechanism.
+# choice never blocks materialization: ABSENCE would demand a deadline and
+# coverage sources, and some relations would demand a mechanism.
 _SAFEST_ENUM_MEMBER = {
     ("narrative_variant", "relation"): "UNRESOLVED_RELATION",
     ("stakeholder_assessment", "context_kind"): "MISSION",
@@ -138,10 +131,8 @@ _NO_IDENTIFIER = "(no identifier was supplied)"
 class DeterministicBackend(ModelBackend):
     """An offline backend: no network, no credential, no vendor SDK.
 
-    It does not reason. It fills each binding field from the request in a fixed,
-    inspectable way, so the seam, the schema, the id check, the proposal record
-    and the human resolution path can be exercised end to end. Its proposals say
-    so in their text.
+    It does not reason; it fills each binding field from the request in a fixed
+    way, so the whole seam can be exercised end to end. Its proposals say so.
     """
 
     def __init__(self, spec: ProviderSpec | None = None) -> None:
@@ -318,13 +309,9 @@ def availability() -> dict[str, Any]:
 def assist_from_environment(env: Mapping[str, str] | None = None):
     """Build a configured `AnalyticalAssist`, or None if none is configured.
 
-    Read from ``CURUNIR_MODEL_PROVIDER`` (unset means no provider, which is a
-    safe state), ``CURUNIR_MODEL_ID``, ``CURUNIR_MODEL_EFFORT``,
-    ``CURUNIR_MODEL_BASE_URL`` and ``CURUNIR_MODEL_MAX_TOKENS``, so switching
-    provider is a deployment decision.
-
-    The egress ceiling stays out of the environment: widening what may leave the
-    deployment is a code and review change.
+    Read from ``CURUNIR_MODEL_PROVIDER`` (unset is a safe state), ``_MODEL_ID``,
+    ``_MODEL_EFFORT``, ``_MODEL_BASE_URL`` and ``_MODEL_MAX_TOKENS``. The egress
+    ceiling stays out of the environment: widening it is a code change.
     """
     import os
     env = os.environ if env is None else env

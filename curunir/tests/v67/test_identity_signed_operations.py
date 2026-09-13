@@ -1,9 +1,8 @@
 """Signing a report approval, end to end.
 
-An analyst proves it holds its key, signs an approval bound to the report's
-exact version, and the signature is recorded only after the act commits. A
-service key, a self-approval, a tampered payload, a stale version and an expired
-session are all refused, and a rotated key leaves old signatures verifiable.
+An analyst proves it holds its key and signs an approval bound to the report's
+exact version. A service key, a self-approval, a tampered payload, a stale
+version and an expired session are all refused.
 """
 from __future__ import annotations
 

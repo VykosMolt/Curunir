@@ -2,13 +2,9 @@
 
     python -m curunir_fabric.demo --root /tmp/fabric-demo [--phase 1|2|3]
 
-Phase 1: need → capable sources → multilingual plan → live execution across
-         Wikidata / GLEIF / SEC EDGAR → custody → pivots → coverage → watches.
-Phase 2: (separate process = restart) run due watches, baseline observations.
-Phase 3: (separate process) run watches again, detect real changes, alert,
-         export and replay the lineage.
-
-Every retrieval is a real network request. The store root persists between phases.
+Phase 1 plans and executes a need across Wikidata, GLEIF and SEC EDGAR; phases 2
+and 3 run due watches in separate processes and replay the lineage. Every
+retrieval is a real network request and the store root persists between phases.
 """
 from __future__ import annotations
 

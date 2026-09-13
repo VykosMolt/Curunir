@@ -1,14 +1,9 @@
-"""Narratives: which proposition is being propagated, through which
-manifestations and source families, in which variants.
+"""Narratives: which proposition is propagating, through which manifestations
+and source families, in which variants.
 
-Reach (how many manifestations carry it) and independence (how many origin
-families they descend from) are kept apart, so a widely propagated but
-evidentially narrow narrative stays visible as one. Origin is never proven:
-the strongest status is EARLIEST_OBSERVED_KNOWN. Derived propagation asserts
-only what the evidence supports — one family is SAME_ORIGIN_FAMILY, a long
-verbatim match across families in temporal order is LIKELY_DERIVATIVE, and
-anything less is UNRESOLVED. INDEPENDENT_ADOPTION is a judgment and needs an
-analyst or an accepted model candidate.
+Reach and independence are kept apart, so a widely propagated but evidentially
+narrow narrative stays visible as one. Origin is never proven; the strongest
+status is EARLIEST_OBSERVED_KNOWN.
 """
 from __future__ import annotations
 
@@ -28,10 +23,10 @@ from .substrate import (AnalyticContext, append_version, creation_authority,
                         require_accepted_candidate)
 
 _MIN_DERIVATIVE_WORDS = 6   # a verbatim-match derivation needs distinctive text
-# a manifestation with no known state time sorts last, never first
+# A manifestation with no known state time sorts last, never first.
 _UNDATED_LAST = datetime.max.replace(tzinfo=timezone.utc)
 
-# how a variant's evidence bears on the narrative basis, by relation
+# How a variant's evidence bears on the narrative basis, by relation.
 _SUPPORTING_VARIANT_RELATIONS = ("VERBATIM", "PARAPHRASE", "NARROWING",
                                  "BROADENING", "CERTAINTY_SHIFT", "FRAMING_SHIFT")
 _CONTRADICTING_VARIANT_RELATIONS = ("COUNTER_NARRATIVE", "POLARITY_SHIFT")
@@ -107,14 +102,13 @@ def create_narrative(ctx: AnalyticContext, *, statement: str,
                           evidence_refs=tuple(
                               existing["basis"]["supporting_claim_ids"][:10]),
                           to_status=existing["status"])
-        # model provenance may only complete the materialization the human
-        # accepted, never modify an object under another or absent proposal
+        # A model may only complete the materialization the human accepted.
         if provenance_kind == "MODEL" and (not proposal_id or proposal_id
                                        != existing.get("proposal_id")):
             raise ValueError(
                 "an existing narrative cannot be modified under model provenance "
                 "with a different proposal: propose and accept a new candidate")
-        # fold in evidence the caller brought that the basis lacks
+        # Fold in evidence the caller brought that the basis lacks.
         new_supporting = [c for c in supporting_claim_ids
                           if c not in existing["basis"]["supporting_claim_ids"]]
         new_contradicting = [c for c in contradicting_claim_ids
@@ -223,15 +217,15 @@ def add_variant(ctx: AnalyticContext, narrative_id: str, *, relation: str,
     narrative = store.current_narratives().get(narrative_id)
     if narrative is None:
         raise ValueError(f"unknown narrative: {narrative_id}")
-    # VERBATIM means text identity with the narrative's own proposition,
-    # checked here: a false verbatim label would fold unrelated evidence in
+    # VERBATIM means text identity with the narrative's own proposition; a
+    # false label would fold unrelated evidence in.
     if relation == "VERBATIM" \
             and normalize_statement(statement) != narrative["normalized_statement"]:
         raise ValueError(
             "a VERBATIM variant must state the narrative's own proposition "
             "verbatim; a materially different text is a judgment-bearing "
             "relation (PARAPHRASE/…), not text identity")
-    # every cited id must resolve in the log: a phantom id is not evidence
+    # Every cited id must resolve: a phantom id is not evidence.
     known_claims = store.current_claims()
     known_observations = _observation_index(store)
     known_manifestations = _manifestation_index(store)
@@ -245,8 +239,7 @@ def add_variant(ctx: AnalyticContext, narrative_id: str, *, relation: str,
                              "resolves to nothing in the log: phantom ids are "
                              "not evidence")
     variant_id = digest_id("narvar", narrative_id, normalize_statement(statement), relation)
-    # always construct the record, so every contract invariant runs even on
-    # the reconcile path
+    # Always construct, so the contract invariants run on the reconcile path too.
     record = NarrativeVariant(
         variant_id=variant_id, narrative_id=narrative_id, relation=relation,
         statement=statement, claim_ids=claim_ids, observation_ids=observation_ids,
@@ -266,15 +259,14 @@ def add_variant(ctx: AnalyticContext, narrative_id: str, *, relation: str,
         append_version(ctx, record)
         stored = record.to_record()
     else:
-        # a completion under MODEL may only continue its own accepted
-        # materialization; the consumption check is not re-entered
+        # A completion continues its own accepted materialization; the
+        # consumption check is not re-entered.
         if provenance_kind == "MODEL" and (not proposal_id or proposal_id
                                            != stored.get("proposal_id")):
             raise ValueError(
                 "an existing variant cannot be reconciled under model "
                 "provenance with a different proposal")
-        # a re-call may only reconcile the same variant: a revision is an
-        # explicit new version
+        # A re-call reconciles the same variant; a revision is a new version.
         def _plain_value(value):
             return list(value) if isinstance(value, (list, tuple)) else value
 
@@ -286,10 +278,9 @@ def add_variant(ctx: AnalyticContext, narrative_id: str, *, relation: str,
                     f"variant {variant_id[:24]} already exists with different "
                     f"{field_name}: a re-call reconciles the same content; a "
                     "revision is an explicit new version")
-    # The relation decides which side of the basis the variant's claims join:
-    # a reframing supports, a counter or polarity flip contradicts, a shift in
-    # what is asserted joins neither. The fold reads the stored variant, so a
-    # divergent re-call cannot smuggle claims in.
+    # The relation decides which side of the basis the claims join: reframing
+    # supports, a counter or polarity flip contradicts, a shift joins neither.
+    # The fold reads the stored variant, so a re-call cannot smuggle claims in.
     stored_claims = tuple(stored["claim_ids"])
     if relation in _SUPPORTING_VARIANT_RELATIONS:
         add_supporting, add_contradicting = stored_claims, ()
@@ -302,8 +293,8 @@ def add_variant(ctx: AnalyticContext, narrative_id: str, *, relation: str,
     contradicting = tuple(dict.fromkeys(
         tuple(narrative["basis"]["contradicting_claim_ids"]) + tuple(add_contradicting)))
     basis = compute_basis(store, supporting, contradicting)
-    # complete the narrative version, membership and transition even when the
-    # variant record landed in an earlier attempt
+    # Complete version, membership and transition even if the variant landed
+    # in an earlier attempt.
     updated = narrative
     if variant_id not in narrative["variant_ids"] \
             or set(supporting) != set(narrative["basis"]["supporting_claim_ids"]) \
@@ -317,7 +308,7 @@ def add_variant(ctx: AnalyticContext, narrative_id: str, *, relation: str,
     record_transition(ctx, subject_kind="analytic_narrative", subject_id=narrative_id,
                       transition_type="VARIANT_ADDED",
                       detail=f"{relation} variant: {statement[:160]!r} ({authority})",
-                      # derived, not caller-chosen: one variant, one transition
+                      # Derived, not caller-chosen: one variant, one transition.
                       caused_by=digest_id("variant-added", variant_id),
                       evidence_refs=tuple(claim_ids)[:5] or tuple(observation_ids)[:5])
     return updated
@@ -350,9 +341,8 @@ def link_counter_narrative(ctx: AnalyticContext, narrative_id: str,
 def derive_propagation(ctx: AnalyticContext, narrative_id: str) -> list[dict[str, Any]]:
     """Derive propagation edges among the manifestations carrying a narrative.
 
-    One origin family gives SAME_ORIGIN_FAMILY; across families, a long
-    verbatim match in temporal order gives LIKELY_DERIVATIVE; anything less is
-    UNRESOLVED. Existing edges are not re-appended.
+    One origin family is SAME_ORIGIN_FAMILY; across families a long verbatim
+    match in temporal order is LIKELY_DERIVATIVE; anything less is UNRESOLVED.
     """
     store = ctx.store
     narrative = store.current_narratives().get(narrative_id)
@@ -363,8 +353,8 @@ def derive_propagation(ctx: AnalyticContext, narrative_id: str) -> list[dict[str
         variant_claims.extend(variant["claim_ids"])
     all_claims = tuple(narrative["basis"]["supporting_claim_ids"]) + tuple(variant_claims)
     entries = _claim_manifestations(store, all_claims)
-    # what each manifestation itself states: a verbatim match must compare the
-    # two manifestations' own propositions, not the narrative's headline
+    # A verbatim match compares the two manifestations' own propositions, not
+    # the narrative's headline.
     claims = store.current_claims()
     observations = _observation_index(store)
     stated: dict[str, set[str]] = {}
@@ -431,18 +421,16 @@ def assert_independent_adoption(ctx: AnalyticContext, narrative_id: str, *,
                                 mechanism: str, actor_id: str, actor_kind: str,
                                 inference_id: str = "",
                                 proposal_id: str = "") -> dict[str, Any]:
-    """Assert that a family reached the proposition on its own evidence.
-
-    A judgment: an analyst act, or an accepted model candidate. Revising an
-    existing derived edge appends a new version rather than overwriting.
+    """Assert that a family reached the proposition on its own evidence: a
+    judgment, so it needs an analyst act or an accepted model candidate.
     """
     store = ctx.store
     edge_id = digest_id("propedge", narrative_id, from_manifestation_id,
                         to_manifestation_id)
     existing_edge = store.current_analytics("propagation_edge").get(edge_id)
     if existing_edge is not None and existing_edge["relation"] == "INDEPENDENT_ADOPTION":
-        # completion of an earlier attempt: the consumption check is not
-        # re-entered, since it would see this very edge
+        # Completing an earlier attempt: the consumption check would see this
+        # very edge, so it is not re-entered.
         if actor_kind != "HUMAN" and (not proposal_id or proposal_id
                                       != existing_edge.get("proposal_id")):
             raise ValueError(
@@ -485,8 +473,7 @@ def assert_independent_adoption(ctx: AnalyticContext, narrative_id: str, *,
         provenance_kind="ANALYST" if actor_kind == "HUMAN" else "MODEL",
         inference_id=inference_id, version=version,
         recorded_time=ctx.now_fn(), marking=ctx.marking,
-        # a human act consumes no candidate, so it never stamps (and spends)
-        # a caller-supplied proposal id
+        # A human act consumes no candidate, so it never spends a proposal id.
         proposal_id=proposal_id if actor_kind != "HUMAN" else "")
     appended = append_version(ctx, record)
     if existing_edge is not None:

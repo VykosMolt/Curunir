@@ -1,9 +1,8 @@
 """Calibration scoring: pure functions over the replayed log, writing nothing.
 
-A score uses the probability the record shows actually stood before resolution,
-never one supplied at scoring time; a resolution carrying a different number
-raises rather than flattering the author. Coverage is part of the answer, so
-every scoreboard reports what it could not score alongside what it did.
+A score uses the probability that actually stood before resolution, never one
+supplied at scoring time. Coverage is part of the answer, so what could not be
+scored is reported rather than dropped.
 """
 from __future__ import annotations
 
@@ -19,13 +18,10 @@ SCORED_STATUSES = ("RESOLVED_TRUE", "RESOLVED_FALSE")
 
 def standing_probability(versions: list[Mapping[str, Any]],
                          horizon_time: str = "") -> float:
-    """The probability that stood on the question.
-
-    The last version at or before the horizon when one is given — a number
-    moved afterwards, with the outcome possibly visible, is not a forecast of
-    it — else the last version before the resolving one. Ordered by version,
-    since a coarse clock can tie timestamps. Raises when the resolution carries
-    a probability the record never held.
+    """The probability that stood on the question: the last version at or before the
+    horizon, else the last before the resolving one. Ordered by version, since a
+    coarse clock can tie timestamps. Raises if the resolution carries a number
+    the record never held.
     """
     terminal = [v for v in versions if v.get("status") in SCORED_STATUSES]
     if not terminal:
@@ -104,12 +100,9 @@ def _opening(versions: list[Mapping[str, Any]]) -> Mapping[str, Any]:
 
 def _claim_answer_entry_time(store: AnalyticStore, claim_id: str,
                              at_time: str = "") -> str:
-    """When this answer entered the record.
-
-    The earliest recorded time of the trailing run of versions sharing the
-    value standing at `at_time` — the resolution instant, never the value
-    standing now, so a replayed scoreboard does not change when the claim moves
-    on afterwards.
+    """When this answer entered the record: the earliest time of the trailing run of
+    versions sharing the value standing at `at_time`, so a replayed scoreboard
+    does not change when the claim moves on.
     """
     versions = sorted((r for r in store.records_of("semantic_claim")
                        if r["claim_id"] == claim_id),
@@ -165,10 +158,9 @@ def resolved_by_prior_evidence(store: AnalyticStore,
                                versions: list[Mapping[str, Any]]) -> bool:
     """Was the answer already on the record when the number was authored?
 
-    True when every resolution-evidence record whose time is known predates the
-    first version. Scope is RESOLVED_TRUE rows and RESOLVED_FALSE rows settled
-    before the horizon: a FALSE settled at or after it was decided by the window
-    closing, and flagging those would drop honest negative forecasts.
+    True when every dated resolution-evidence record predates the first version.
+    A FALSE settled at or after the horizon was decided by the window closing,
+    so it is out of scope.
     """
     status = current.get("status")
     if status == "RESOLVED_FALSE":

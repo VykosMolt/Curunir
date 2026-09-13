@@ -1,9 +1,9 @@
 """Actor registry: a bearer token or an actor id resolves to an access context.
 
-The registry is a static JSON file mapping opaque tokens to an actor and its
-access attributes, so every workbench action has a named actor and a
-fail-closed context. It lives outside the mission store, because it is
-deployment configuration rather than mission truth, and the API never serves it.
+A static JSON file maps opaque tokens to an actor and its access attributes, so
+every workbench action has a named actor and a fail-closed context. It lives
+outside the mission store, being deployment configuration rather than mission
+truth, and the API never serves it.
 """
 from __future__ import annotations
 

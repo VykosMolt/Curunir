@@ -1,9 +1,9 @@
 """Schema registry and explicit mapping contracts.
 
-Schemas and mappings are inspectable records in the event log. Validation is a
-bounded engine over required fields, types, formats and enums, and runs no
-code from configuration. A mapping declares every field route, transform,
-default, ignored field and lossy operation, and unlisted keys are rejected.
+Schemas and mappings are inspectable records in the event log, and validation
+runs no code from configuration. A mapping declares every field route,
+transform, default, ignored field and lossy operation; unlisted keys are
+rejected.
 """
 from __future__ import annotations
 

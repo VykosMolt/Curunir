@@ -1,9 +1,8 @@
 """Cryptographic actor identity, on real Ed25519 keys.
 
-The actor holds the private key and the server only enrolled public keys. These
-tests cover challenge-response login, session expiry, revocation, rotation with
-old signatures still verifying, actions bound to actor, target, version, mission
-and nonce, and replay telling genuine from tampered or revoked-at-the-time.
+The actor holds the private key and the server only enrolled public keys. Covers
+login, session expiry, revocation, rotation with old signatures still verifying,
+action binding, and replay telling genuine from tampered.
 """
 from __future__ import annotations
 
@@ -81,7 +80,7 @@ def _do(store, registry, sessions, session, private_pem, *, nonce,
     return commit_action(store, verified, record_actor=session.actor_id)
 
 
-# ---- authentication ----
+# Authentication
 
 
 def test_authenticate_requires_the_private_key(tmp_path):
@@ -135,7 +134,7 @@ def test_session_expires_and_dies_on_revocation(tmp_path):
         sessions.resolve(registry, session2.session_id)
 
 
-# ---- signed actions ----
+# Signed actions
 
 
 def test_signed_action_binds_actor_mission_nonce_and_version(tmp_path):
@@ -238,7 +237,7 @@ def test_action_timestamp_must_be_near_server_time(tmp_path):
         assert e.value.status == CLOCK_SKEW
 
 
-# ---- key lifecycle and replay ----
+# Key lifecycle and replay
 
 
 def test_rotation_keeps_history_verifiable(tmp_path):

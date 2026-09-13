@@ -1,9 +1,8 @@
 """The one boundary between an inference provider and analytical candidates.
 
-It derives the effective marking from the input records, refuses disallowed
-egress before invoking, retains every attempt as an inference record, and
-admits a successful response only as a candidate awaiting a human. Replay
-reads the retained record and never calls a provider again.
+It derives the marking from the input records, refuses disallowed egress before
+invoking, retains every attempt as an inference record, and admits a response
+only as a candidate awaiting a human. Replay never calls a provider again.
 """
 from __future__ import annotations
 
@@ -116,9 +115,8 @@ class AnalyticalAssist:
     provider_actor: str = "analytic-assist"
     allowed_input_marking: Marking | None = None
     # A `model_backends.ModelBackend`, set instead of `infer_fn` when the
-    # provider needs the target kind (it picks the response schema), which
-    # `InferFn` cannot carry. Typed loosely so this module need not import
-    # the backend package.
+    # provider needs the target kind, which `InferFn` cannot carry. Typed
+    # loosely so this module need not import the backend package.
     backend: Any = None
 
     def available(self) -> bool:

@@ -1,9 +1,8 @@
 """Information requirements, evidence requests and analyst tasks.
 
-An alert raises a requirement, which produces a task or an evidence request,
-which ends in new evidence, a stated failure, or a continued unknown. Only a
-human can answer or close a requirement, answering needs evidence references,
-a failure needs a reason, and every transition is a recorded event.
+An alert raises a requirement, which ends in new evidence, a stated failure, or a
+continued unknown. Only a human can answer or close one, answering needs evidence
+references, and every transition is a recorded event.
 """
 from __future__ import annotations
 

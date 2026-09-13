@@ -1,9 +1,8 @@
 """Harness comparing providers on identical access-filtered projections.
 
 It scores structured-output validity, determinism, latency, abstention,
-unsupported claims, evidence citation, access compliance and reproducibility.
-Providers stay proposals-only: the harness materializes nothing and grants no
-decision authority.
+unsupported claims, evidence citation and reproducibility. Providers stay
+proposals-only: the harness materializes nothing.
 """
 from __future__ import annotations
 

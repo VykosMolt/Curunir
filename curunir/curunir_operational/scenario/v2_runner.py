@@ -1,8 +1,6 @@
-"""Scenarios B and C over one shared fabric and two workbenches.
-
-Live and synthetic content stay distinguishable: a captured public feed schema
-and one real public document are marked as live in origin, while every placed
-corridor object is synthetic.
+"""Scenarios B and C over one shared fabric and two workbenches. Live and
+synthetic content stay distinguishable: the captured feed schema and one real
+public document are marked live, every placed corridor object synthetic.
 """
 from __future__ import annotations
 
@@ -129,8 +127,7 @@ def run_scenario_b(store_root: Path) -> dict[str, Any]:
     missions.transition("analyst_task", task["task_id"], "IN_PROGRESS", actor_id="eng-ruiz",
                         actor_kind="HUMAN", evidence_refs=(), note="en route", recorded_time=at(26.0),
                         marking=v2.ENGINEERING)
-    # The assessment arrives as new evidence, completing the task and
-    # answering the requirement.
+    # New evidence completes the task and answers the requirement.
     ingest("engineering-assessments",
            feeds.engineering_assessment_v1("ENG-2", "BR-7", "DEGRADED", at(30.0), inspector="eng-ruiz"),
            "src-eng", at(30.0), at(30.2), marking_override=v2.ENGINEERING)
@@ -203,11 +200,11 @@ def run_scenario_c(store_root: Path) -> dict[str, Any]:
         log.append(result)
         return result
 
-    # Received times never decrease; source times vary independently so late
-    # arrivals and corrections get exercised.
+    # Received times never decrease; source times vary, to exercise late
+    # arrivals and corrections.
     ingest("infrastructure-status", feeds.corridor_infrastructure(at(-24)), "src-regsys", at(-24), at(0.1))
     # Four dependent reports off one basis, so the count looks higher than the
-    # evidence is. Each names the full peer set, so the group id is stable.
+    # evidence is. Each names the full peer set, keeping the group id stable.
     wire_keys = ["wire-a", "wire-b", "wire-c", "wire-d"]
     for index, (key, letter) in enumerate(zip(wire_keys, "ABCD")):
         peers = [k for k in wire_keys if k != key]
@@ -249,8 +246,7 @@ def run_scenario_c(store_root: Path) -> dict[str, Any]:
            marking_override=v2.ENGINEERING)
 
     final = Projection(store, snapshot_time=at(30.0), staleness_hours=v2.STALENESS_HOURS)
-    # A v2-shaped payload offered to the v1 schema without declaring its
-    # version must come out invalid rather than be quietly coerced.
+    # Undeclared v2 against the v1 schema must be invalid, not coerced.
     v2_shaped_no_version = {"assessment_id": "X", "asset_ref": "BR-7", "condition": "CLOSED",
                             "assessed_time": at(28.0)}
     incompatible = registry.validate_payload("eng-assessment", "1.0", v2_shaped_no_version)

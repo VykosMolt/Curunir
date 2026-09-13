@@ -1,11 +1,9 @@
 """Carry recorded semantic changes up into the analytical layer.
 
-The reverse-dependency index finds exactly the analytical objects resting on
-the changed state; this refreshes only those, questions assumptions whose
-support degraded, refreshes the touched hypotheses, and raises alerts naming
-what changed, what moved, and which mission state is affected. Refreshes append
-only on material change and transitions are keyed by cause, so re-running after
-a crash completes the propagation instead of duplicating it.
+The reverse-dependency index finds exactly the objects resting on the changed
+state, and only those are refreshed. Refreshes append only on material change
+and transitions are keyed by cause, so re-running after a crash completes the
+propagation instead of duplicating it.
 """
 from __future__ import annotations
 
@@ -132,9 +130,8 @@ def propagate_semantic_changes(ctx: AnalyticContext, *,
     """Carry every recorded semantic change into the analytical layer.
 
     Each affected object is refreshed once against its whole set of pending
-    changes, caused by the set as a whole: the refreshers diff against live
-    state, so attributing the movement to whichever change came first would
-    leave the later ones permanently inert. Safe to call repeatedly.
+    changes: the refreshers diff against live state, so blaming the first change
+    would leave the later ones inert. Safe to call repeatedly.
     """
     store: AnalyticStore = ctx.store
     index = DependencyIndex(store)

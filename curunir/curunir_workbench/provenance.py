@@ -1,9 +1,7 @@
 """Trace a conclusion down to its evidence, or evidence up to what rests on it.
 
-Down: warning, forecast, assumption, claim, observation, anchor, manifestation,
-source. Up: source, manifestations, observations, claims, analytical objects.
-Every hop reads the filtered view, and a link into a hidden record ends in a
-node that says so rather than in a chain that looks complete.
+Every hop reads the filtered view, and a link into a hidden record ends in a node
+that says so rather than in a chain that looks complete.
 """
 from __future__ import annotations
 
@@ -258,10 +256,9 @@ def evidence_view(projection: MissionProjection, manifestation_id: str) -> dict[
             # A damaged store slot is never served; a custody copy may still
             # be tried, but only through the hash check below.
             pass
-        # Prefer the custody copy filed under the hash. Fall back to the path
-        # in the record only when it stays inside the mission root and is an
-        # ordinary file of sane size, so a fifo, device node or symlink out of
-        # the root cannot make the server hang or read someone else's data.
+        # Prefer the custody copy filed under the hash. The path in the record
+        # is used only when it stays inside the mission root and is an ordinary
+        # file of sane size, so a fifo or symlink cannot hang the server.
         MAX_PAYLOAD = 64 * 1024 * 1024
         canonical = mission_root / "custody" / "sha256" / sha[:2] / sha[2:4] / sha
         recorded = None

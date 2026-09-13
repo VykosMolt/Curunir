@@ -50,7 +50,7 @@ def _forecast(ctx, by_predicate, probability=0.35, expected="INACTIVE",
         author="jan", domain="corporate-registry", **kwargs)
 
 
-# ---- contract law ----------------------------------------------------------
+# Contract law
 
 
 def test_probability_is_authored_never_machine_made():
@@ -95,7 +95,7 @@ def test_probability_is_authored_never_machine_made():
                           "resolver_kind": "HUMAN"})
 
 
-# ---- lifecycle -------------------------------------------------------------
+# Lifecycle
 
 
 def test_recreation_cannot_silently_move_a_probability(tmp_path):
@@ -189,7 +189,7 @@ def test_degraded_basis_flags_but_never_moves_the_number(tmp_path):
     assert "BASIS_DEGRADED" in kinds
 
 
-# ---- resolution ------------------------------------------------------------
+# Resolution
 
 
 def test_machine_true_resolution_is_evidence_bound(tmp_path):

@@ -1,10 +1,8 @@
 """Reference policy is read from the record classes, not from a table.
 
-Every field that can hold another record's id is annotated in the contracts;
-`security.material_references` walks those annotations. These tests pin the
-mechanism: labels are skipped, dynamic kinds resolve, blobs and undeclared
-keys are scanned by name, untyped families are scanned in full, and a marked
-record of an unknown type is refused rather than passed through.
+These tests pin the mechanism: labels are skipped, dynamic kinds resolve, blobs
+and undeclared keys are scanned by name, untyped families are scanned in full,
+and a marked record of an unknown type is refused rather than passed through.
 """
 from __future__ import annotations
 

@@ -1,11 +1,8 @@
 """Themes and issues over the claim ledger.
 
-A theme is typed state: its membership, entities, events, source families,
-interval and status are all inspectable, and every change is a recorded
-transition. Discovery clusters claims over the world model's own structure and
-invents no semantics; analyst acts and accepted model candidates do the rest.
-Merge and split are non-destructive — lineage is recorded both ways and the
-superseded theme keeps its history.
+A theme is typed, inspectable state and every change is a recorded transition.
+Discovery clusters claims over the world model's own structure and invents no
+semantics. Merge and split are non-destructive: lineage is recorded both ways.
 """
 from __future__ import annotations
 
@@ -19,15 +16,13 @@ from .store import AnalyticStore
 from .substrate import (AnalyticContext, append_version, creation_authority,
                         ensure_transition, record_transition)
 
-# statuses the machine may derive; the rest come from analyst acts
+# Statuses the machine may derive; the rest come from analyst acts.
 _MACHINE_STATUSES = ("EMERGING", "ACTIVE", "CONTESTED", "STALE")
 
 
 def _derive_status(basis) -> str:
-    """Status from the live basis.
-
-    Independence promotes a theme, not raw count: one origin family stays
-    EMERGING however many derivative manifestations restate it.
+    """Status from the live basis. Independence promotes a theme, not raw count:
+    one origin family stays EMERGING however many derivatives restate it.
     """
     active_support = len(basis.supporting_claim_ids) - basis.degraded_claim_count
     if active_support <= 0:
@@ -52,16 +47,15 @@ def create_theme(ctx: AnalyticContext, *, title: str, description: str = "",
                  provenance_kind: str = "ANALYST", inference_id: str = "",
                  proposal_id: str = "", caused_by: str = "",
                  lineage: tuple[tuple[str, str], ...] = ()) -> dict[str, Any]:
-    """Create a theme, idempotent by title and parent.
-
-    Authority follows provenance: DERIVED for a rule, ANALYST_ASSESSMENT for an
-    analyst, SUPPORTED_INFERENCE for model output through the candidate gate.
+    """Create a theme, idempotent by title and parent. Authority follows provenance:
+    DERIVED for a rule, ANALYST_ASSESSMENT for an analyst, SUPPORTED_INFERENCE
+    for model output through the candidate gate.
     """
     store = ctx.store
     theme_id = theme_id_for(title, parent_theme_id)
     existing = store.current_themes().get(theme_id)
     if existing is not None:
-        # complete a creation whose transitions never landed
+        # Complete a creation whose transitions never landed.
         ensure_transition(ctx, subject_kind="analytic_theme", subject_id=theme_id,
                           transition_type="CREATED",
                           detail=f"theme created ({existing['provenance_kind']}, "
@@ -76,21 +70,19 @@ def create_theme(ctx: AnalyticContext, *, title: str, description: str = "",
                               transition_type="SUBTHEME_EMERGED",
                               detail=f"subtheme emerged: {existing['title'][:120]}",
                               caused_by=theme_id, evidence_refs=(theme_id,))
-        # model provenance may only complete the materialization the human
-        # accepted, never modify an object under another or absent proposal
+        # A model may only complete the materialization the human accepted.
         if provenance_kind == "MODEL" and (not proposal_id or proposal_id
                                        != existing.get("proposal_id")):
             raise ValueError(
                 "an existing theme cannot be modified under model provenance "
                 "with a different proposal: propose and accept a new candidate")
-        # evidence beyond the existing basis is folded in rather than
-        # discarded, with the fold's provenance on record
+        # Evidence beyond the basis is folded in, with its provenance recorded.
         new_supporting = [c for c in supporting_claim_ids
                           if c not in existing["basis"]["supporting_claim_ids"]]
         new_contradicting = [c for c in contradicting_claim_ids
                              if c not in existing["basis"]["contradicting_claim_ids"]]
         if provenance_kind == "MODEL" and (new_supporting or new_contradicting):
-            # a completion may fold only the claims the human accepted
+            # A completion folds only the claims the human accepted.
             proposal = store.latest_by_id("analytical_proposal",
                                           "proposal_id").get(proposal_id, {})
             accepted_claims = set(proposal.get("content", {})
@@ -137,8 +129,7 @@ def create_theme(ctx: AnalyticContext, *, title: str, description: str = "",
                       evidence_refs=tuple(basis.supporting_claim_ids[:10]),
                       to_status=status)
     if parent_theme_id:
-        # keyed by the subtheme id, so every subtheme's emergence is recorded
-        # and a crashed run still completes on the exists path
+        # Keyed by subtheme id, so a crashed run completes on the exists path.
         record_transition(ctx, subject_kind="analytic_theme",
                           subject_id=parent_theme_id,
                           transition_type="SUBTHEME_EMERGED",
@@ -288,7 +279,7 @@ def resolve_theme(ctx: AnalyticContext, theme_id: str, *, actor_id: str,
     return updated
 
 
-# ---- merge / split (lineage-preserving) -----------------------------------
+# Merge and split, lineage-preserving
 
 
 def propose_merge(ctx: AnalyticContext, left_theme_id: str, right_theme_id: str,
@@ -304,10 +295,8 @@ def propose_merge(ctx: AnalyticContext, left_theme_id: str, right_theme_id: str,
 
 def apply_merge(ctx: AnalyticContext, into_theme_id: str, from_theme_id: str, *,
                 actor_id: str, actor_kind: str, rationale: str) -> dict[str, Any]:
-    """Merge one theme into another, recording lineage both ways.
-
-    The survivor absorbs the basis; the absorbed theme becomes MERGED and keeps
-    its history.
+    """Merge one theme into another, recording lineage both ways. The survivor
+    absorbs the basis; the absorbed theme becomes MERGED and keeps its history.
     """
     if actor_kind != "HUMAN":
         raise ValueError("merging themes is an analyst act: equivalence is a judgment")
@@ -317,7 +306,7 @@ def apply_merge(ctx: AnalyticContext, into_theme_id: str, from_theme_id: str, *,
     if into is None or absorbed is None:
         raise ValueError("both themes must exist to merge")
     if ("MERGED_FROM", from_theme_id) in {tuple(p) for p in into["lineage"]}:
-        # already merged: complete any missing tail, append nothing
+        # Already merged: complete any missing tail, append nothing.
         for theme_id in (into_theme_id, from_theme_id):
             ensure_transition(ctx, subject_kind="analytic_theme", subject_id=theme_id,
                               transition_type="MERGED",
@@ -378,10 +367,8 @@ def apply_merge(ctx: AnalyticContext, into_theme_id: str, from_theme_id: str, *,
 def apply_split(ctx: AnalyticContext, theme_id: str,
                 partitions: list[tuple[str, tuple[str, ...]]], *,
                 actor_id: str, actor_kind: str, rationale: str) -> list[dict[str, Any]]:
-    """Split a theme into parts, recording lineage both ways.
-
-    The original becomes SPLIT and keeps its history; each part records where
-    it came from.
+    """Split a theme into parts, recording lineage both ways. The original becomes
+    SPLIT and keeps its history; each part records where it came from.
     """
     if actor_kind != "HUMAN":
         raise ValueError("splitting a theme is an analyst act")
@@ -390,7 +377,7 @@ def apply_split(ctx: AnalyticContext, theme_id: str,
     if theme is None:
         raise ValueError(f"unknown theme: {theme_id}")
     if theme["status"] == "SPLIT":
-        # already split: return the recorded parts
+        # Already split: return the recorded parts.
         part_ids = [other for kind, other in
                     (tuple(p) for p in theme["lineage"]) if kind == "SPLIT_INTO"]
         current = store.current_themes()
@@ -419,23 +406,21 @@ def apply_split(ctx: AnalyticContext, theme_id: str,
     return parts
 
 
-# ---- deterministic discovery ----------------------------------------------
+# Deterministic discovery
 
 
 def discover_theme_candidates(store: AnalyticStore, *,
                               min_claims: int = 2) -> list[dict[str, Any]]:
-    """Candidate theme clusters: current claims grouped by their subject
-    entity's connected component under ACTIVE typed relations.
-
-    A candidate is a structural grouping, not a theme — the caller decides
-    which become state.
+    """Candidate theme clusters: current claims grouped by their subject entity's
+    connected component under ACTIVE typed relations. A structural grouping, not
+    a theme: the caller decides which become state.
     """
     states = store.claim_states()
     claims = [c for c in store.current_claims().values()
               if states.get(c["claim_id"], {}).get("state", "CURRENT") == "CURRENT"]
     if not claims:
         return []
-    # union-find over subject objects, joined by ACTIVE relations
+    # Union-find over subject objects, joined by ACTIVE relations.
     parents: dict[str, str] = {}
 
     def find(node: str) -> str:

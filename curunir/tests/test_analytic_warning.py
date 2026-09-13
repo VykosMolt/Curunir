@@ -64,7 +64,7 @@ def _path(ctx, by_predicate, objective):
                       summary="registry standing exposure", edges=(edge,))
 
 
-# ---- the named rule --------------------------------------------------------
+# The named rule
 
 
 def test_tier_comes_from_the_table_with_recorded_adjustments():
@@ -114,7 +114,7 @@ def test_a_free_tier_is_unconstructible():
             recorded_time=T0, marking=MARK)
 
 
-# ---- projection over the store --------------------------------------------
+# Projection over the store
 
 
 def test_projection_binds_forecast_objective_and_paths(tmp_path):

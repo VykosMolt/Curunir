@@ -35,7 +35,7 @@ class WorkbenchStore(AnalyticStore):
         "actor_key": "key_id",
     }
 
-    # ---- views over workbench records ----
+    # Views over workbench records
 
     def current_annotations(self) -> dict[str, dict]:
         """Latest version of each annotation; earlier versions stay in the log."""

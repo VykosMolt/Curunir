@@ -1,15 +1,10 @@
 """Deterministic Curunir V6.7 terminal validation.
 
-The full repository is not falsely declared green: exact nonpassing node IDs
-reproduced from accepted V6.6 are permitted as a subset, while every new node,
-increased skip count, collection loss, focused failure, or reconstruction
-failure makes this command non-zero.
-
-The collection floors were re-based on 2026-09-02 to the standalone Curunír
-suite (tests/ledger.json is the per-module record); the earlier floors stay
-accepted for reports already attached to campaign roots. The accepted
-nonpassing set is unchanged and every node in it now lies outside this
-repository.
+Exact nonpassing node IDs reproduced from accepted V6.6 are permitted as a
+subset, while every new node, increased skip count, collection loss, focused
+failure or reconstruction failure makes this command non-zero. The collection
+floors were re-based on 2026-09-02 to the standalone suite; the earlier floors
+stay accepted for reports already attached to campaign roots.
 """
 from __future__ import annotations
 

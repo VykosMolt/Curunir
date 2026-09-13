@@ -254,7 +254,7 @@ def run_v2(root: Path, out_dir: Path) -> dict[str, Any]:
     sovereignty = build_sovereignty_manifest(b_store)
     _wj(out_dir / "06_v2_exports" / "sovereignty_manifest_v2.json", sovereignty)
 
-    # ---- metrics ----
+    # Metrics
     metrics = {
         "scenario_a": {"head": scenario_a["summary"]["store_head"]["head_hash"],
                        "questions_answerable": scenario_a["summary"]["questions_answerable"]},

@@ -1,13 +1,11 @@
 """The HTTP boundary: filtered views and named commands over one mission store.
 
-Every request resolves to an actor, every view is filtered on the server before
-it is serialized, and every command carries that actor into the command layer.
-Unknown and forbidden both answer 404; a stale write answers 409 with the
-current version, so the client can rebase instead of losing work.
+Every request resolves to an actor, every view is filtered before it is
+serialized, and every command carries that actor into the command layer. Unknown
+and forbidden both answer 404; a stale write answers 409 with the current
+version.
 
-Run:
-    uvicorn curunir_workbench.server:app --port 8100        (env-configured)
-or build it in process with create_app(mission_root, actors_path).
+    uvicorn curunir_workbench.server:app --port 8100
 
 Do not add `from __future__ import annotations` here: the request models are
 defined inside create_app, and string annotations would stop FastAPI resolving
@@ -82,11 +80,9 @@ def _deep_render_safe(value):
 def create_app(mission_root: str | Path, actors_path: str | Path,
                now_fn=None) -> FastAPI:
     root = Path(mission_root)
-    # One store for the life of the process. Every request catches up on the
-    # log tail under the store lock instead of re-reading the whole log, and
-    # projections are cached by chain head and viewer, so an unchanged store
-    # answers from memory while any append, from this process or another, is
-    # seen on the next request.
+    # One store for the life of the process. Each request catches up on the log
+    # tail rather than re-reading it, and projections are cached by chain head
+    # and viewer, so an unchanged store answers from memory.
     store = WorkbenchStore(root / "store")
     store_lock = threading.RLock()
     projections: OrderedDict[tuple, MissionProjection] = OrderedDict()
@@ -107,7 +103,7 @@ def create_app(mission_root: str | Path, actors_path: str | Path,
             detail = "invalid request body"
         return JSONResponse(status_code=422, content={"detail": detail})
 
-    # ---- auth ----
+    # Auth
 
     def context(request: Request) -> AccessContext:
         header = request.headers.get("authorization", "")
@@ -151,13 +147,9 @@ def create_app(mission_root: str | Path, actors_path: str | Path,
                        releasability=("PUBLIC",))
 
     def run(request, fn, *args, **kwargs):
-        """Turn a command failure into an honest response, and filter the reply
-        through the caller's own view so a write never hands back state its
-        author could not read.
-
-        Only a typed NotFound becomes 404; a bare KeyError is a bug and must
-        surface as 500 rather than as a claim about what exists. An authority
-        refusal is 403, not 400."""
+        """Turn a command failure into an honest response, filtered through the
+        caller's own view. Only a typed NotFound becomes 404; a bare KeyError is
+        a bug and surfaces as 500. An authority refusal is 403, not 400."""
         def detail(error):
             return render_safe(error)
 
@@ -184,7 +176,7 @@ def create_app(mission_root: str | Path, actors_path: str | Path,
             raise HTTPException(status_code=404, detail="not found")
         return record
 
-    # ---- session ----
+    # Session
 
     @app.get("/api/session")
     def session(request: Request):
@@ -197,7 +189,7 @@ def create_app(mission_root: str | Path, actors_path: str | Path,
                 "releasability": list(ctx.releasability),
                 "mission_id": store.meta.get("store_id", "curunir-workbench")}
 
-    # ---- mission projections ----
+    # Mission projections
 
     @app.get("/api/overview")
     def overview(request: Request):
@@ -307,7 +299,7 @@ def create_app(mission_root: str | Path, actors_path: str | Path,
     def review(request: Request):
         return review_queue(projection(request))
 
-    # ---- reports ----
+    # Reports
 
     @app.get("/api/reports/{report_id}/validate")
     def report_validate(request: Request, report_id: str):
@@ -344,7 +336,7 @@ def create_app(mission_root: str | Path, actors_path: str | Path,
                                  if p.get("workbench_report_disposition",
                                           d["disposition_id"]) is not None]}
 
-    # ---- commands ----
+    # Commands
 
     class AnnotateBody(BaseModel):
         target_kind: str
@@ -651,7 +643,7 @@ def create_app(mission_root: str | Path, actors_path: str | Path,
         return run(request, commands.reject_report, command_context(request), report_id,
                    **body.model_dump())
 
-    # ---- cryptographic identity ----
+    # Cryptographic identity
 
     identity_now = now_fn if now_fn is not None else \
         (lambda: datetime.now(timezone.utc).isoformat())
@@ -807,7 +799,7 @@ def create_app(mission_root: str | Path, actors_path: str | Path,
         return projection_for(actor_context).redact(
             result["result"])
 
-    # ---- UI ----
+    # UI
 
     if STATIC_DIR.exists():
         app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")

@@ -21,7 +21,7 @@ def v2run(tmp_path_factory):
     return run_v2(base / "run", base / "out"), base / "out"
 
 
-# ---- second workbench on the shared fabric ----
+# Second workbench on the shared fabric
 
 def test_second_workbench_reuses_shared_fabric(v2run):
     result, _ = v2run
@@ -51,7 +51,7 @@ def test_infrastructure_workbench_validates_and_renders(v2run):
     assert definition["relationship_tables"][0]["relation_types"]
 
 
-# ---- cross-workbench behaviour ----
+# Cross-workbench behaviour
 
 def test_hazard_to_route_impact_and_dependency(v2run):
     result, _ = v2run
@@ -73,7 +73,7 @@ def test_cross_workbench_decision_preserves_provenance(v2run):
     assert ("route-R1", "ACCEPTED") not in projection["decisions"] or projection["decisions"]
 
 
-# ---- live data and document evidence ----
+# Live data and document evidence
 
 def test_live_vs_synthetic_distinct(v2run):
     live = json.loads(Path("artifacts/curunir_v1_audit_hardening_and_v2_multi_workbench_20260720/"
@@ -93,7 +93,7 @@ def test_public_document_evidence_in_scenario(v2run):
     assert all(e["review_state"] in ("UNREVIEWED", "AI_SECONDARY_REVIEW") for e in q[5]["answer"])
 
 
-# ---- provider evaluation ----
+# Provider evaluation
 
 def test_provider_evaluation(v2run):
     result, _ = v2run
@@ -106,7 +106,7 @@ def test_provider_evaluation(v2run):
     assert result["provider_eval"]["learned_model_comparison"] == "NOT_RUN"
 
 
-# ---- delta sync ----
+# Delta sync
 
 def test_delta_sync_report(v2run):
     result, _ = v2run
@@ -119,7 +119,7 @@ def test_delta_sync_report(v2run):
     assert d["tamper_detected"] is True
 
 
-# ---- cross-workbench access ----
+# Cross-workbench access
 
 def test_cross_workbench_access_no_leakage(v2run):
     result, _ = v2run
@@ -134,7 +134,7 @@ def test_cross_workbench_access_no_leakage(v2run):
     assert not views["civil_protection"]["unauthorized_id_leaks"]
 
 
-# ---- multiple scenarios on one core ----
+# Multiple scenarios on one core
 
 def test_three_scenarios_same_core(v2run):
     result, out = v2run

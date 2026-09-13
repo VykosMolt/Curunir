@@ -1,16 +1,9 @@
 """Command line for the fabric.
 
-    python -m curunir_fabric.cli create-store --store /path
-    python -m curunir_fabric.cli seed-catalog --store /path
-    python -m curunir_fabric.cli sources --store /path [--operation SEARCH] [--historical]
-    python -m curunir_fabric.cli open-need --store /path --mission M --question Q [--entity E ...]
-    python -m curunir_fabric.cli plan --store /path --need NEED_ID
-    python -m curunir_fabric.cli execute --store /path --need NEED_ID [--max-requests N]
-    python -m curunir_fabric.cli coverage --store /path --need NEED_ID
-    python -m curunir_fabric.cli watch-register --store /path --need NEED_ID --source S \
-        --target-kind FEED --target-ref URL --operation POLL --cadence 3600
-    python -m curunir_fabric.cli tick --store /path
-    python -m curunir_fabric.cli verify --store /path
+    python -m curunir_fabric.cli COMMAND --store /path [args]
+
+Commands: create-store, seed-catalog, sources, open-need, plan, execute,
+coverage, watch-register, tick, verify.
 """
 from __future__ import annotations
 

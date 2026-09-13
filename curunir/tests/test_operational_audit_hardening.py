@@ -39,7 +39,7 @@ def version(object_id, number, hours, status, recorded=None, **kw):
                          marking=kw.pop("marking", BASE_MARKING), provenance=kw.pop("provenance", PROV), **kw)
 
 
-# ---- the hash chain catches a mutated record ----
+# The hash chain catches a mutated record
 
 def test_chain_detects_every_direct_field_mutation(tmp_path):
     store = make_store(tmp_path)
@@ -97,7 +97,7 @@ def test_chain_detects_decision_and_relationship_mutation(tmp_path):
     (tmp_path / "store" / "events.jsonl").write_text("\n".join(lines) + "\n")
 
 
-# ---- a late arrival on its own ----
+# A late arrival on its own
 
 def test_late_arrival_alone_does_not_displace_current(tmp_path):
     store = make_store(tmp_path)
@@ -109,7 +109,7 @@ def test_late_arrival_alone_does_not_displace_current(tmp_path):
     assert projection.objects["stock-1"]["history_count"] == 2
 
 
-# ---- a torn final line ----
+# A torn final line
 
 def test_torn_final_line_fails_clearly(tmp_path):
     store = make_store(tmp_path)
@@ -120,7 +120,7 @@ def test_torn_final_line_fails_clearly(tmp_path):
         MissionDataStore(tmp_path / "store")
 
 
-# ---- valid time and knowledge time ----
+# Valid time and knowledge time
 
 def test_valid_at_and_knowledge_as_of_are_independent(tmp_path):
     store = make_store(tmp_path)
@@ -149,7 +149,7 @@ def test_valid_at_and_knowledge_as_of_are_independent(tmp_path):
     assert early.view(HIGH_CONTEXT)["counts"]["objects_total"] == 0
 
 
-# ---- provenance round-trips ----
+# Provenance round-trips
 
 def test_provenance_roundtrip_variants(tmp_path):
     store = make_store(tmp_path)
@@ -198,7 +198,7 @@ def test_provenance_roundtrip_variants(tmp_path):
     assert explain(projection, "obs-restricted", LOW_CONTEXT) == explain(projection, "no-such", LOW_CONTEXT)
 
 
-# ---- state token instead of sequence number ----
+# State token instead of sequence number
 
 def test_no_sequence_side_channel_in_views_reports_bundles(tmp_path):
     from curunir_operational.sitrep import build_situation_report, render_text
@@ -221,7 +221,7 @@ def test_no_sequence_side_channel_in_views_reports_bundles(tmp_path):
     assert "since_seq" not in json.dumps(changes) and re.fullmatch(r"[0-9a-f]{16}", changes["until_state"])
 
 
-# ---- COP page structure ----
+# COP page structure
 
 def test_cop_structure_responsive_and_collision_free(tmp_path):
     store = make_store(tmp_path)
@@ -251,7 +251,7 @@ def test_cop_structure_responsive_and_collision_free(tmp_path):
     assert abs(x1 - x2) >= 110 or abs(y1 - y2) >= 13  # pushed apart
 
 
-# ---- the CLI ----
+# The CLI
 
 def cli(*args, cwd=ROOT):
     return subprocess.run([sys.executable, "-m", "curunir_operational.cli", *args],

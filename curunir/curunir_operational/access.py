@@ -118,9 +118,8 @@ def inherited_marking(
     base: Marking | Mapping[str, Any],
     references: list[Marking | Mapping[str, Any] | None],
 ) -> Marking:
-    """Join that always returns a marking, for derived records.
-
-    Where :func:`most_restrictive` refuses, this seals instead, so a background
+    """Join that always returns a marking, for derived records. Where
+    :func:`most_restrictive` refuses, this seals instead, so a background
     derivation keeps running without ever writing down.
     """
     markings = [base if isinstance(base, Marking) else marking_from_record(base)]
@@ -138,10 +137,9 @@ def inherited_marking(
 
 
 def most_restrictive(markings: list[Marking]) -> Marking:
-    """The marking a record derived from several subjects must carry.
-
-    Compartments union, releasability intersects, min_role takes the maximum,
-    so the result is never less restricted than any input.
+    """The marking a record derived from several subjects must carry: compartments
+    union, releasability intersects, min_role takes the maximum, so the result is
+    never less restricted than any input.
     """
     markings = [m for m in markings if m is not None]
     if not markings:
@@ -171,11 +169,9 @@ def most_restrictive(markings: list[Marking]) -> Marking:
     for record in records:
         caveats += tuple(record.get("caveats", ()))
     authorities = {record["owning_authority"] for record in records}
-    # No releasability means the marking is org-locked, and can_view then
-    # falls back to the organisation: a different axis, not a stricter point
-    # on the same one. Collapsing to org-locked while an input was releasable,
-    # or spanning authorities, would let a reader see a derived record whose
-    # input they could not see. Refuse rather than write down.
+    # No releasability means org-locked: a different axis, not a stricter point
+    # on the same one. Collapsing to it while an input was releasable would let
+    # a reader see a derived record whose input they could not.
     any_releasable = any(r for r in releasabilities)
     if not releasability and (len(authorities) > 1 or any_releasable):
         raise ValueError(

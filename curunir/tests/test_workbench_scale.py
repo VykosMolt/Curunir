@@ -1,9 +1,8 @@
 """One store per process, projections cached by chain head.
 
 The server opens the log once, catches up on the tail before every request,
-reuses a viewer's projection while the head is unchanged, and sees an append
-made by another store instance on the next request. Concurrent readers and
-writers leave a valid chain.
+reuses a viewer's projection while the head is unchanged, and sees another
+instance's append on the next request.
 """
 from __future__ import annotations
 

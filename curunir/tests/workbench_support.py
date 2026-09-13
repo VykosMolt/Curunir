@@ -144,7 +144,7 @@ def seed_mission(pipeline: SemanticPipeline, ctx: AnalyticContext) -> dict:
         due_time=None, depends_on=(), recorded_time=ctx.now_fn(),
         marking=MARK, actor="analyst-a")
 
-    # ---- restricted state ----
+    # Restricted state
     now = ctx.now_fn()
     secret_object = ObjectVersion(
         object_id="obj-secret-partner", version=1, object_type="ORGANISATION",
