@@ -1,16 +1,10 @@
 """One access context's view of a whole mission store, filtered before it is
 serialized.
 
-It joins the operational world view with the fabric, semantic, analytic and
-workbench families from the same store, under three rules: a record the context
-cannot see appears in no list, count, graph, search or timeline; any hidden id
-appearing inside a visible record, in a reference field or in free text, is
-replaced with REDACTED; and a lookup answers the same way for a hidden record as
-for one that does not exist.
-
-The source registry families carry no marking, because they say where Curunír
-may look and how those lookups went, not what it found. Everything acquired or
-derived from them is marking-gated.
+Three rules hold across every plane: a record the context cannot see appears in
+no list, count, graph, search or timeline; a hidden id inside a visible record is
+replaced with REDACTED; and a hidden record answers a lookup exactly as a missing
+one does.
 """
 from __future__ import annotations
 
@@ -23,8 +17,7 @@ from curunir_operational.projection import Projection
 
 from .store import WorkbenchStore
 
-# Families where a re-append supersedes: the newest record for an id is the
-# current one, and earlier versions stay in the log.
+# Families where a re-append supersedes: newest record for an id wins.
 LATEST_FAMILIES: dict[str, str] = {
     # fabric
     "fabric_source_descriptor": "source_id",
@@ -40,7 +33,7 @@ LATEST_FAMILIES: dict[str, str] = {
     "discriminator": "discriminator_id",
     "collection_route": "route_id",
     "review_item": "item_id",
-    # operational model proposals (no version field; the last append wins)
+    # operational model proposals (no version field; last append wins)
     "analytical_proposal": "proposal_id",
     # analytic
     "analytic_theme": "theme_id",
@@ -81,8 +74,7 @@ APPEND_FAMILIES: dict[str, str] = {
 
 ALL_FAMILIES = {**LATEST_FAMILIES, **APPEND_FAMILIES}
 
-# Catalog metadata: unmarked by contract and visible to everyone who is
-# authenticated, so it never joins the hidden set.
+# Catalog metadata is unmarked by contract, so it never joins the hidden set.
 UNMARKED_REGISTRY_FAMILIES = ("fabric_source_descriptor", "fabric_source_profile",
                               "fabric_source_status")
 
@@ -121,15 +113,14 @@ class MissionProjection:
         self._visible_ids: set[str] | None = None
         self._family_cache: dict[str, list[dict]] = {}
 
-        # ---- split each family into visible and hidden, once ----
+        # Split each family into visible and hidden, once.
         self._current: dict[str, dict[str, dict]] = {}
         self._history: dict[str, dict[str, list[dict]]] = {}
         hidden: set[str] = {oid for oid in self.base.objects
                             if not can_view(self.base.objects[oid]["current"].get("marking"), context)}
         hidden |= {rid for rid, entry in self.base.relationships.items()
                    if not can_view(entry["current"].get("marking"), context)}
-        # A hidden activity, alert, task or decision id has to scrub out of
-        # visible records just like a hidden object id does.
+        # Hidden activity, alert, task and decision ids scrub out too.
         def _op_hidden(records, id_field, unwrap=None):
             for entry in records:
                 record = unwrap(entry) if unwrap else entry
@@ -151,13 +142,11 @@ class MissionProjection:
                    lambda e: e["record"])
         _op_hidden(self.base.sources.values(), "source_id")
         _op_hidden(self.base.ingestions.values(), "ingestion_id")
-        # An activity is also suppressed when a participant is hidden; those
-        # count as hidden here too.
+        # An activity with a hidden participant is suppressed, so it counts as hidden.
         for record in self.base.activities:
             if record["activity_id"] not in self._visible_activity_ids:
                 hidden.add(record["activity_id"])
-        # A relationship or proposal dropped because an endpoint is hidden is
-        # itself hidden: its id names structure the context may not see.
+        # Dropped for a hidden endpoint means hidden: the id names unseen structure.
         visible_relationship_ids = {r["relationship_id"]
                                     for r in self.base_view["relationships"]}
         for rid, entry in self.base.relationships.items():
@@ -175,8 +164,8 @@ class MissionProjection:
                 rid = record[id_field]
                 history.setdefault(rid, []).append(record)
             for rid, versions in history.items():
-                # Highest version wins. Families with no version field all tie
-                # at 1, so the last append wins, as the store does it.
+                # Highest version wins; with no version field all tie and the
+                # last append wins, as the store does.
                 current = max(reversed(versions), key=lambda r: r.get("version", 1))
                 if record_type in UNMARKED_REGISTRY_FAMILIES and "marking" not in current:
                     visible[rid] = current
@@ -198,13 +187,9 @@ class MissionProjection:
                     hidden.add(record[id_field])
             self._append[record_type] = visible_records
         self.hidden_ids = hidden
-        # Build one pattern that matches any hidden id, with or without an
-        # "@vN" suffix, anywhere in a string. Records also embed shortened ids
-        # in free text, and a shortened id still identifies the record, so each
-        # hidden id contributes its common truncations as well. A truncation is
-        # only used when no visible id starts with it, since some families share
-        # a long prefix and scrubbing that would damage ids the reader may see.
-        # Longest first, so the full id beats its own prefixes.
+        # One pattern matching any hidden id anywhere in a string, with or
+        # without an "@vN" suffix. Truncations count too, but only those no
+        # visible id starts with. Longest first.
         visible_ids = self.visible_id_set()
         needles: set[str] = set()
         for h in hidden:
@@ -219,9 +204,8 @@ class MissionProjection:
             "|".join(re.escape(n) + r"(?:@v\d+)?"
                      for n in sorted(needles, key=len, reverse=True))
         ) if needles else None
-        # A cluster's representative may itself be hidden. Name each cluster
-        # after its smallest visible member instead, so scrubbing cannot merge
-        # unrelated clusters into one called REDACTED.
+        # A representative may itself be hidden, so name each cluster after its
+        # smallest visible member; otherwise scrubbing merges unrelated clusters.
         groups: dict[str, list[str]] = {}
         for record in self.base_view["objects"]:
             root = self.base.cluster_of.get(record["object_id"], record["object_id"])
@@ -235,16 +219,13 @@ class MissionProjection:
             if root in roots_with_hidden:
                 record["cluster_partially_hidden"] = True
         # The base view redacts its own objects but knows nothing of hidden ids
-        # from the other planes; scrub it once here so every reader of
-        # base_view gets the same treatment.
+        # from other planes, so scrub it once here.
         self.base_view = self._scrub(self.base_view)
 
     def marking_of(self, record_id: str) -> dict | None:
-        """The marking of the visible record with this id, in any plane.
-
-        A new record inherits from what it cites, and this resolves the cite.
-        None when the id is not visible, since a caller may only anchor to
-        records it can see."""
+        """The marking of the visible record with this id, in any plane. None
+        when it is not visible, since a caller may only anchor to what it can
+        see."""
         for record_type in LATEST_FAMILIES:
             record = self._current[record_type].get(record_id)
             if record is not None:
@@ -318,7 +299,7 @@ class MissionProjection:
             self._visible_ids = ids
         return self._visible_ids
 
-    # ---- redaction ----
+    # Redaction
 
     def _scrub(self, value: Any) -> Any:
         if self._scrub_re is None:
@@ -339,7 +320,7 @@ class MissionProjection:
         added later cannot escape redaction by not being listed."""
         return self._scrub(dict(record))
 
-    # ---- family access ----
+    # Family access
 
     def family(self, record_type: str) -> list[dict]:
         """All visible current records of one family, redacted, in a stable order.
@@ -352,7 +333,7 @@ class MissionProjection:
                 records = [self._current[record_type][rid]
                            for rid in sorted(self._current[record_type])]
             elif record_type in APPEND_FAMILIES:
-                # A stable sort keeps log order among records with equal times.
+                # A stable sort keeps log order when times are equal.
                 records = sorted(self._append[record_type], key=record_time)
             else:
                 raise KeyError(f"unknown record family: {record_type}")
@@ -406,7 +387,7 @@ class MissionProjection:
         return [a for a in self.family("workbench_annotation")
                 if a["target_id"] == target_id or a.get("anchor_ref") == target_id]
 
-    # ---- world model ----
+    # World model
 
     def visible_objects(self) -> list[dict]:
         return self.base_view["objects"]
@@ -424,7 +405,7 @@ class MissionProjection:
                 return record
         return None
 
-    # ---- overview ----
+    # Overview
 
     def overview(self) -> dict[str, Any]:
         """The mission at a glance: what is happening, what changed, what is
@@ -506,7 +487,7 @@ class MissionProjection:
             },
         }
 
-    # ---- activity feed ----
+    # Activity feed
 
     _FEED_LABEL_KEYS = ("object_id", "relationship_id", "alert_id",
                         "requirement_id", "task_id", "decision_id",
@@ -517,8 +498,10 @@ class MissionProjection:
 
     def activity_feed(self, limit: int = 100) -> list[dict]:
         """Readable mission history, newest first, over visible records only."""
+        if limit == 0:
+            return []
         feed: list[dict] = []
-        for event in self.store.events(self.base.as_of_seq):
+        for event in reversed(self.store.events(self.base.as_of_seq)):
             record = event["record"]
             kind = record.get("record_type", "")
             if not (kind in UNMARKED_REGISTRY_FAMILIES and "marking" not in record) \
@@ -529,8 +512,7 @@ class MissionProjection:
                 (record[k] for k in self._FEED_LABEL_KEYS if record.get(k)), "")
             if label and _base_id(label) in self.hidden_ids:
                 continue
-            # An activity hidden by its subject in the base view stays hidden
-            # here too.
+            # Hidden by its subject in the base view stays hidden here.
             if kind == "activity" and record.get("activity_id") \
                     not in self._visible_activity_ids:
                 continue
@@ -539,5 +521,6 @@ class MissionProjection:
                          "record_id": label,
                          "version": record.get("version"),
                          "status": self._scrub(record.get("status", ""))})
-        feed.reverse()
+            if limit > 0 and len(feed) >= limit:
+                break
         return feed[:limit]

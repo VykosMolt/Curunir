@@ -6,6 +6,7 @@ import json
 
 import pytest
 
+from curunir_operational.contracts import ActivityRecord, ProvenanceSummary
 from curunir_workbench.projections import MissionProjection
 from curunir_workbench.provenance import ascend, claim_descent, descend, evidence_view
 from curunir_workbench.search import search
@@ -14,7 +15,9 @@ from curunir_workbench.views import (coverage_matrix, entity_dossier, entity_lis
                                      map_view, review_queue,
                                      source_independence, timeline)
 
-from workbench_support import CTX_A, CTX_B, make_workbench, seed_mission
+from workbench_support import (CTX_A, CTX_B, RESTRICTED_MARK, make_workbench,
+                               seed_mission)
+from semantic_support import MARK
 
 pytestmark = pytest.mark.no_db
 
@@ -81,6 +84,60 @@ def test_activity_feed_is_attributable_and_filtered(mission):
     blob = json.dumps(feed_b)
     assert seeded["secret_object_id"] not in blob
     assert len(feed_a) > len(feed_b)
+
+
+def test_activity_feed_limits_preserve_snapshot_and_visibility(mission):
+    _, ctx, seeded = mission
+    old_seq = ctx.store.head()["event_count"]
+    snapshots = [MissionProjection(ctx.store, viewer) for viewer in (CTX_A, CTX_B)]
+    previous = [snapshot.activity_feed(1000) for snapshot in snapshots]
+    added = []
+    for activity_id, marking, subjects in (
+        ("act-feed-public", MARK, ()),
+        ("act-feed-secret", RESTRICTED_MARK, (seeded["secret_object_id"],)),
+    ):
+        now = ctx.now_fn()
+        record = ActivityRecord(
+            activity_id=activity_id, activity_type="MEETING", epistemic_state="REPORTED",
+            subject_ids=subjects, description="feed regression", valid_from=None,
+            valid_to=None, source_time=None, recorded_time=now, evidence_refs=(),
+            marking=marking, provenance=ProvenanceSummary(mode="OPERATIONAL"))
+        ctx.store.append("ACTIVITY_RECORDED", record, recorded_time=now, actor="analyst-a")
+        added.append({"time": now, "actor": "analyst-a", "event_type": "ACTIVITY_RECORDED",
+                      "record_type": "activity", "record_id": activity_id,
+                      "version": None, "status": ""})
+
+    limits = (0, 1, 2, 5, 100, 1000, -1, -10, -1000)
+    for index, viewer in enumerate((CTX_A, CTX_B)):
+        current = MissionProjection(ctx.store, viewer)
+        expected = ([added[1]] if viewer == CTX_A else []) + [added[0]] + previous[index]
+        historical = MissionProjection(ctx.store, viewer, as_of_seq=old_seq)
+        for limit in limits:
+            assert current.activity_feed(limit) == expected[:limit]
+            assert snapshots[index].activity_feed(limit) == previous[index][:limit]
+            assert historical.activity_feed(limit) == previous[index][:limit]
+        if viewer == CTX_B:
+            blob = json.dumps(current.activity_feed(1000))
+            assert "act-feed-secret" not in blob
+            assert seeded["secret_object_id"] not in blob
+
+
+def test_activity_feed_formats_only_requested_visible_rows(mission, monkeypatch):
+    _, ctx, _ = mission
+    projection = MissionProjection(ctx.store, CTX_B)
+    full_feed = projection.activity_feed(1000)
+    original_scrub = projection._scrub
+    formatted = []
+
+    def counted_scrub(value):
+        formatted.append(value)
+        return original_scrub(value)
+
+    monkeypatch.setattr(projection, "_scrub", counted_scrub)
+    for limit in (0, 1, 5, 100):
+        formatted.clear()
+        assert projection.activity_feed(limit) == full_feed[:limit]
+        assert len(formatted) == min(limit, len(full_feed))
 
 
 def test_entity_dossier_distinguishes_history_from_current(mission):

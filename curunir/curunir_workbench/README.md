@@ -209,6 +209,12 @@ append every tenth request (`tools/bench_store.py`); opening the store still
 costs about 65 µs per event, paid once per process, which is why no on-disk
 index exists: at 50k events that is a few seconds at start-up, not per request.
 
+The activity feed walks the snapshot's events newest first and stops once it
+has enough visible rows. Authorization and redaction still precede inclusion;
+hidden events do not consume the limit. The store still copies the snapshot's
+event list, but older rows beyond the limit need no formatting or access checks.
+Zero returns an empty feed; negative limits retain Python slicing semantics.
+
 ## Integrated live demonstration
 
 ```bash

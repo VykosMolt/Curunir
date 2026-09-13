@@ -88,7 +88,7 @@
     "tests/test_v68_pilot_journeys.py": 4,
     "tests/test_workbench_browser.py": 7,
     "tests/test_workbench_commands.py": 8,
-    "tests/test_workbench_projections.py": 15,
+    "tests/test_workbench_projections.py": 17,
     "tests/test_workbench_replay.py": 3,
     "tests/test_workbench_reports.py": 14,
     "tests/test_workbench_review_repairs.py": 12,
