@@ -1,14 +1,14 @@
 {
   "format": "curunir-v6.8-repository-truth-v1",
   "captured_at": "2026-08-21T15:40:00+02:00",
-  "repository_root": "/home/moloch/Curunir",
+  "repository_root": "<repo>",
   "source_checkout": {
     "branch": "feature/curunir-v67-hardening",
     "head": "5341c25bc77c310bb167ae492ef49408d04bc3f9",
     "status": "DIRTY_UNRELATED_USER_WORK_PRESERVED"
   },
   "v6_8_worktree": {
-    "path": "/home/moloch/Curunir",
+    "path": "<repo>",
     "branch": "feature/curunir-v68-terminal-validation",
     "initial_head": "9c0182d47381344a01af996d3b0a4b3e2aec10f2",
     "initial_status": "CLEAN",
@@ -33,14 +33,14 @@
     ]
   },
   "external_kernel": {
-    "path_used_for_preflight": "/home/moloch/Curunir/kernel/argus",
+    "path_used_for_preflight": "<repo>/kernel/argus",
     "python_file_count": 140,
     "tree_sha256": "4c173df7412952b8318b7838a06ee991638fd9144eee2be36232c64aecfb7906",
     "matches_v6_7_pin": true,
     "resolution": "CURUNIR_ARGUS_KERNEL, else <repository>/kernel/argus; the harness verifies tree_sha256 and python_file_count, never the path"
   },
   "live_pre_v6_8_validation": {
-    "command": "PLAYWRIGHT_BROWSERS_PATH=/tmp/curunir-v68-playwright python tools/validate_v67.py --kernel /home/moloch/Curunir/kernel/argus --report /tmp/curunir-v68-preflight-v67-terminal.json",
+    "command": "PLAYWRIGHT_BROWSERS_PATH=/tmp/curunir-v68-playwright python tools/validate_v67.py --kernel <repo>/kernel/argus --report /tmp/curunir-v68-preflight-v67-terminal.json",
     "report_sha256": "cb6cd448e336d02bf80048217fc598f04bf3218d7266c518607dede3665f554d",
     "status": "PASS_WITH_ACCEPTED_BASELINE_RESIDUALS",
     "focused_v67": {
@@ -80,9 +80,15 @@
   "revised_2026_09_02": {
     "date": "2026-09-02",
     "repository": "Curunír, carved out of Saulot with git filter-repo",
-    "repository_root": "/home/moloch/Curunir",
+    "repository_root": "<repo>",
     "commit_ids": "Curunír ids; the Saulot ids they replaced are recoverable through CURUNIR_COMMIT_MAP_SAULOT.txt",
     "paths": "argus_demo -> curunir; argus_demo/argus -> kernel/argus; worktrees folded into main",
     "supersedes_sha256": "f249ff7ce68d212395e51d1966e10a6e53f5d3df7dba4e24ef2da547dfe69037"
+  },
+  "revised_2026_09_14": {
+    "date": "2026-09-14",
+    "reason": "absolute local filesystem paths replaced with the placeholder <repo> before the repository was made public",
+    "content_change": "none beyond those path strings; every hash, commit id, verdict and criterion is unchanged",
+    "supersedes_sha256": "7c4e1f6ba65b8bcb5cfd8d956dc616734fabf4000d0bb69409ae6ddc4882efcd"
   }
 }

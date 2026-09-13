@@ -1,6 +1,6 @@
 {
   "captured_date": "2026-08-21",
-  "repository_root": "/home/moloch/Curunir",
+  "repository_root": "<repo>",
   "foreground": {
     "branch": "feature/curunir-v67-hardening",
     "head": "5341c25bc77c310bb167ae492ef49408d04bc3f9",
@@ -46,7 +46,7 @@
   },
   "rewrite": {
     "branch": "feature/curunir-v67-clean-rewrite",
-    "worktree": "/home/moloch/Curunir (the clean-rewrite worktree was folded into main; its branch became main at the acceptance commit)",
+    "worktree": "<repo> (the clean-rewrite worktree was folded into main; its branch became main at the acceptance commit)",
     "base": "70f8503d70ec4b5febd58323ef4532b9e6185563",
     "initial_status": "clean"
   },
@@ -127,9 +127,15 @@
   "revised_2026_09_02": {
     "date": "2026-09-02",
     "repository": "Curunír, carved out of Saulot with git filter-repo",
-    "repository_root": "/home/moloch/Curunir",
+    "repository_root": "<repo>",
     "commit_ids": "Curunír ids; the Saulot ids they replaced are recoverable through CURUNIR_COMMIT_MAP_SAULOT.txt",
     "paths": "argus_demo -> curunir; argus_demo/argus -> kernel/argus; worktrees folded into main",
     "supersedes_sha256": "f0abd13b1e934b370733124d286a57fa3d68a62b0023b55bcd4832c9f0400d74"
+  },
+  "revised_2026_09_14": {
+    "date": "2026-09-14",
+    "reason": "absolute local filesystem paths replaced with the placeholder <repo> before the repository was made public",
+    "content_change": "none beyond those path strings; every hash, node id, commit id and verdict is unchanged",
+    "supersedes_sha256": "123d900e8dd6160119a9e20e7f9f42d3a91f9b842b8629b88050f6e22f4dd74c"
   }
 }

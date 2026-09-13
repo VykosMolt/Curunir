@@ -13,13 +13,13 @@ manifest, it does not belong in that plane.
 | `kernel/` | the documentation of the pinned ARGUS kernel; the untracked tree, tarball and `schema.sql` beside it | anything Curunír-specific, anything edited |
 
 Imports go one way: `curunir` → `kernel`. The ARGUS research lines (neural
-extractor, codec capsules) and netwatch live in the Argus repository (`/home/moloch/Argus`, called Saulot until 2026-09-02), not
+extractor, codec capsules) and netwatch live in the Argus repository (called Saulot until 2026-09-02), not
 here. If code needs them, that is a design question, not an import.
 
 Outside those two only these are allowed at the repository root:
-`README.md`, `NAVIGATION.md`, `HOUSEKEEPING.md`, `.gitignore`,
-`curunir_v68_runs/` (pilot evidence) and `.claude/`. **No loose files at the
-root.** A stray patch, log, audit or snapshot at the root is a bug.
+`README.md`, `NAVIGATION.md`, `HOUSEKEEPING.md`, `LICENSE`, `NOTICE`,
+`.gitignore`, `curunir_v68_runs/` (pilot evidence) and `.claude/`. **No loose
+files at the root.** A stray patch, log, audit or snapshot at the root is a bug.
 
 ## 2. Tracked vs. untracked is a decision, not an accident
 

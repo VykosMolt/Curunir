@@ -1,0 +1,7 @@
+Curunír
+Copyright 2026 VykosMolt
+
+This product includes software developed as a research prototype.
+
+It depends on the ARGUS kernel, a hash-pinned external tree that is not
+distributed in this repository. See kernel/README.md.

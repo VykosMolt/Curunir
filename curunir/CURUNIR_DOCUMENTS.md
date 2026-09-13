@@ -70,7 +70,7 @@ and how it is accounted for:
 
 | Change | Where it is recorded |
 |---|---|
-| Paths: `argus_demo` → `curunir`, `argus_demo/argus` → `kernel/argus`, `/home/moloch/Saulot` → `/home/moloch/Curunir`, worktrees folded into `main` | every revised JSON carries a `revised_2026_09_02` block with the sha256 it supersedes; the protocol has a revision note at its end |
+| Paths: `argus_demo` → `curunir`, `argus_demo/argus` → `kernel/argus`, the old repository root → the new one, worktrees folded into `main` | every revised JSON carries a `revised_2026_09_02` block with the sha256 it supersedes; the protocol has a revision note at its end |
 | Commit ids: every id in the frozen documents is now a Curunír id | `CURUNIR_COMMIT_MAP_SAULOT.txt` — one `old new` pair per line, covering `main` and the V6.7 reference lineage (tag `archive/curunir-v67-round38-33330efe6ae3`, whose *name* keeps the Saulot short id as a label) |
 | The five V6.8 authority files: `QUALIFICATION`, `MISSIONS` (byte-identical), `REPOSITORY_TRUTH`, `REPAIR_CONTRACT`, `PILOT_PROTOCOL` | `CURUNIR_V6_8_QUALIFICATION.json` re-pins the protocol and repair contract and ledgers the superseded hash set under `authority_supersession`; `tools/curunir_v68.py::_accepted_authorities` accepts a campaign root's authority set only if it is the current one or a ledgered one, and `tests/test_curunir_v68.py` proves an unledgered set is refused |
 | Pilot evidence (`../curunir_v68_runs/`) | **not edited.** It records Saulot ids and the superseded hashes; `V68_TERMINAL_004`'s three missions verify through the ledger |
@@ -89,6 +89,22 @@ They are recoverable at the tag `archive/curunir-partition-custody-2026-09-02`.
 The record of the removal is the executable ledger, `tests/ledger.json`
 (`excised`), held by `tests/test_ledger.py`; `CURUNIR_V6_9_EXCISION.json`
 keeps its bytes and its now-historical "retained" note.
+
+## Revision of 2026-09-14 — local paths removed for publication
+
+The repository was made public. Every absolute local filesystem path in the
+frozen documents was replaced with the placeholder `<repo>`; nothing else in
+them changed. No criterion, verdict, node id, commit id, kernel hash or hash of
+retained evidence was touched.
+
+| Change | Where it is recorded |
+|---|---|
+| The four V6.8 authority files that carried a path (`QUALIFICATION`, `REPOSITORY_TRUTH`, `REPAIR_CONTRACT`, `PILOT_PROTOCOL`). `MISSIONS` carried none and is byte-identical. | each carries a `revised_2026_09_14` block naming the sha256 it supersedes; the protocol has a second revision note at its end |
+| The re-pin | `CURUNIR_V6_8_QUALIFICATION.json` now names the revised protocol and repair-contract bytes in `operator_protocol.sha256` and `base_authority.repair_contract.sha256` |
+| The superseded five-hash set | a second `authority_supersession` entry in the qualification contract, so a campaign root prepared under the previous set still verifies. The 2026-09-02 entry is unchanged, which is what keeps `V68_TERMINAL_004` valid. |
+| The V6.7 manifests and the V6.9 excision ledger (`BASELINE_NONPASSING`, `INVARIANTS`, `RECONSTRUCTION`, `REPOSITORY_TRUTH`, `V6_9_EXCISION`) | each carries a `revised_2026_09_14` block with the sha256 it supersedes. None of these is hash-pinned by another document, and `repository_root` is descriptive: no code reads it. |
+| Pilot evidence (`../curunir_v68_runs/`) | **not edited.** It is untracked, never published, and still records the superseded hashes; it verifies through the ledger as before. |
+| The pinned kernel (`../kernel/argus/`) | untouched. |
 
 ## Conventions
 

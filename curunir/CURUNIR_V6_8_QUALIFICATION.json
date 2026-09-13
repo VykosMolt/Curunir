@@ -12,7 +12,7 @@
     "mission_set": "CURUNIR_V6_8_MISSIONS.json",
     "repair_contract": {
       "path": "CURUNIR_V6_8_REPAIR_CONTRACT.json",
-      "sha256": "ce1213a0ff1e8a358692b342a043d45ab82673e757221d48602ff54841a037ea"
+      "sha256": "2428acd13b58954a06c7e45a6048ba2e3488d43ef879f3d09e2866b7a4437513"
     }
   },
   "scope": [
@@ -33,7 +33,7 @@
   ],
   "operator_protocol": {
     "path": "CURUNIR_V6_8_PILOT_PROTOCOL.md",
-    "sha256": "37b1a34ca03ada3efcaa8c01bc065910f69240f7f5c250dd4b12c9ea2afce128",
+    "sha256": "daf5a95591e5eaa7e712dfd7bba432f0092c60f023ea3199cce6134782cf2f35",
     "revision_note": "V68_TERMINAL_001 through V68_TERMINAL_003 are retained pre-human roots. Canonical human-pilot root is V68_TERMINAL_004 after closing remaining M3 path and content-binding residuals. Acceptance criteria are unchanged.",
     "surface": "Existing Curunir workbench, CLI, and HTTP API only; no new UI.",
     "participants": [
@@ -221,15 +221,31 @@
       "repository_truth_sha256": "f249ff7ce68d212395e51d1966e10a6e53f5d3df7dba4e24ef2da547dfe69037",
       "repair_contract_sha256": "e2c74f8ce517379d9948ef2199385b44ee2b468fe0f3ddf4ac92ed295752cc5b",
       "pilot_protocol_sha256": "b1fe7e605cc9538d16f7c40e9f33d623dd5cca313a5d2a708f3641afd3ab62d6"
+    },
+    {
+      "superseded_on": "2026-09-14",
+      "reason": "absolute local filesystem paths were replaced with the placeholder <repo> before the repository was made public. No criterion, verdict, hash of evidence or commit id changed. Campaign roots prepared under this authority set remain valid and are recognised by the harness through this ledger.",
+      "contract_sha256": "52ae03525fe69ce9a50b2d43a35746c7c618e93022d94cdb9a87d1df36ce5c05",
+      "missions_sha256": "4bb1b0a0568a268693d5a59bdd11bbdc7d1e27d5b39a288ebfad5c768a7940c5",
+      "repository_truth_sha256": "7c4e1f6ba65b8bcb5cfd8d956dc616734fabf4000d0bb69409ae6ddc4882efcd",
+      "repair_contract_sha256": "ce1213a0ff1e8a358692b342a043d45ab82673e757221d48602ff54841a037ea",
+      "pilot_protocol_sha256": "37b1a34ca03ada3efcaa8c01bc065910f69240f7f5c250dd4b12c9ea2afce128"
     }
   ],
   "revised_2026_09_02": {
     "date": "2026-09-02",
     "repository": "Curunír, carved out of Saulot with git filter-repo",
-    "repository_root": "/home/moloch/Curunir",
+    "repository_root": "<repo>",
     "commit_ids": "Curunír ids; the Saulot ids they replaced are recoverable through CURUNIR_COMMIT_MAP_SAULOT.txt",
     "paths": "argus_demo -> curunir; argus_demo/argus -> kernel/argus; worktrees folded into main",
     "supersedes_sha256": "0df1f385662b9f56c115bb8dba796fb9a95bf9382e9213da1ce4dc067964a2b4",
     "note": "MISSIONS.json is byte-identical to the frozen version; the other four authority files were revised and re-pinned here"
+  },
+  "revised_2026_09_14": {
+    "date": "2026-09-14",
+    "reason": "absolute local filesystem paths replaced with the placeholder <repo> before the repository was made public",
+    "content_change": "none beyond those path strings; every criterion, verdict, commit id and evidence hash is unchanged",
+    "supersedes_sha256": "52ae03525fe69ce9a50b2d43a35746c7c618e93022d94cdb9a87d1df36ce5c05",
+    "re_pinned": "operator_protocol.sha256 and base_authority.repair_contract.sha256 now name the revised bytes; the superseded five-hash set is ledgered under authority_supersession"
   }
 }

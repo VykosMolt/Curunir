@@ -1,7 +1,7 @@
 # Curunír V6.9 — handoff
 
 **Date:** 2026-08-26 · **Branch:** `feature/curunir-v69-excision`
-**Worktree:** `/home/moloch/Curunir` *(folded into `main` on 2026-09-02; see §0)*
+**Worktree:** the repository root *(folded into `main` on 2026-09-02; see §0)*
 **Head:** `0494a2e` · 7 commits ahead of `feature/curunir-v68-terminal-validation`
 **Nothing is pushed.** Nothing is merged.
 
@@ -10,8 +10,8 @@
 ## 0. Layout note (2026-09-02, after this handoff was written)
 
 `main` was fast-forwarded to this branch, the product was split away from the
-ARGUS research lines, and Curunír became its own repository at
-`/home/moloch/Curunir` (private on GitHub as `VykosMolt/Curunir`). The product
+ARGUS research lines, and Curunír became its own repository
+(`VykosMolt/Curunir` on GitHub). The product
 root is **`curunir/`** (formerly `argus_demo/`); the ARGUS kernel is an
 untracked, hash-verified tree at **`kernel/argus/`**; the neural and capsule
 lines stayed in the Argus repository (formerly Saulot). Commit ids in this repository differ from Saulot's:
@@ -140,9 +140,9 @@ Fixed at source. The overview header no longer opens with `store … · state �
 ## 8. Running it
 
 ```bash
-cd /home/moloch/Curunir/curunir
+cd <repo>/curunir
 export PYTHONPATH="$PWD:$PWD/../kernel"
-VENV=/home/moloch/Curunir/curunir/.venv/bin/python
+VENV=<repo>/curunir/.venv/bin/python
 
 $VENV -m pytest tests/ -q -p no:cacheprovider          # the suite
 

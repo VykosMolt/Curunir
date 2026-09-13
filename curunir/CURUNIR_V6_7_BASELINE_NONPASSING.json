@@ -162,7 +162,7 @@
   "revised_2026_09_02": {
     "date": "2026-09-02",
     "repository": "Curunír, carved out of Saulot with git filter-repo",
-    "repository_root": "/home/moloch/Curunir",
+    "repository_root": "<repo>",
     "commit_ids": "Curunír ids; the Saulot ids they replaced are recoverable through CURUNIR_COMMIT_MAP_SAULOT.txt",
     "paths": "argus_demo -> curunir; argus_demo/argus -> kernel/argus; worktrees folded into main",
     "supersedes_sha256": "f640956cc69f1d4251867267fd72e84fc77221ca72238f1b7a135448f469fa58"
@@ -179,5 +179,11 @@
       "product_skips": 0
     },
     "ledger": "tests/ledger.json"
+  },
+  "revised_2026_09_14": {
+    "date": "2026-09-14",
+    "reason": "absolute local filesystem paths replaced with the placeholder <repo> before the repository was made public",
+    "content_change": "none beyond those path strings; every hash, node id, commit id and verdict is unchanged",
+    "supersedes_sha256": "c3c78d08002323dc98a95589fb1ac8dd3f5e289c6a817f450c3969676aab777b"
   }
 }

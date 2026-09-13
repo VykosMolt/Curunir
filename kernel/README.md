@@ -77,9 +77,9 @@ the path.
 Only `README.md` and `MANIFEST.md` are tracked. `argus/`, the tarball and
 `schema.sql` (hash-checked by `curunir/tests/test_operational_protection.py`)
 sit beside them untracked. The kernel's Postgres spine, demo kit, docs and the
-ARGUS research-line tests stayed in the Argus repository (`/home/moloch/Argus`, called Saulot until 2026-09-02) (`kernel/` there).
+ARGUS research-line tests stayed in the Argus repository (called Saulot until 2026-09-02) (`kernel/` there).
 
-## The ARGUS demo kit (the original kernel README, kept for reference; the kit itself lives in the Argus repository, `~/Argus/kernel`)
+## The ARGUS demo kit (the original kernel README, kept for reference; the kit itself lives in the Argus repository)
 
 A **Postgres-first, bitemporal, mention-grounded, evidence-span-backed claim
 kernel** for **public-source** AI / regulatory intelligence.

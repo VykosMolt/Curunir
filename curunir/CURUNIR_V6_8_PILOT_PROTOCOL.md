@@ -31,12 +31,12 @@ browsing.
 
 ## Common launch and session procedure
 
-From `curunir` in the V6.8 executable checkout (`/home/moloch/Curunir/curunir`; the kernel is `../kernel/argus`):
+From `curunir` in the V6.8 executable checkout (`<repo>/curunir`; the kernel is `../kernel/argus`):
 
 ```bash
-export PYTHONPATH="$PWD:/home/moloch/Curunir/kernel"
-export V68_PYTHON=/home/moloch/Curunir/curunir/.venv/bin/python
-export CAMPAIGN_ROOT=/home/moloch/Curunir/curunir_v68_runs/V68_TERMINAL_004
+export PYTHONPATH="$PWD:<repo>/kernel"
+export V68_PYTHON=<repo>/curunir/.venv/bin/python
+export CAMPAIGN_ROOT=<repo>/curunir_v68_runs/V68_TERMINAL_004
 $V68_PYTHON -m tools.curunir_v68 prepare-all --campaign-root "$CAMPAIGN_ROOT"
 ```
 
@@ -234,7 +234,7 @@ From a clean exact executable checkout, the terminal reproduction command is:
 ```bash
 PLAYWRIGHT_BROWSERS_PATH=/tmp/curunir-v68-playwright \
   $V68_PYTHON tools/validate_v67.py \
-  --kernel /home/moloch/Curunir/kernel/argus \
+  --kernel <repo>/kernel/argus \
   --report /tmp/curunir-v68-v67-current.json && \
 $V68_PYTHON -m tools.curunir_v68 terminal \
   --campaign-root "$CAMPAIGN_ROOT" \
@@ -257,4 +257,12 @@ agreement with the packaged projections.
 Paths and commit ids in this protocol were revised when Curunír became its own
 repository. The steps, participants, custody and session discipline are
 unchanged. The previous byte identity (sha256 `b1fe7e605cc9538d16f7c40e9f33d623dd5cca313a5d2a708f3641afd3ab62d6`)
+is recorded in `CURUNIR_V6_8_QUALIFICATION.json` under `authority_supersession`.
+
+## Revision note (2026-09-14)
+
+Absolute local filesystem paths were replaced with the placeholder `<repo>`
+before this repository was made public. The steps, participants, custody and
+session discipline are unchanged. The previous byte identity
+(sha256 `37b1a34ca03ada3efcaa8c01bc065910f69240f7f5c250dd4b12c9ea2afce128`)
 is recorded in `CURUNIR_V6_8_QUALIFICATION.json` under `authority_supersession`.
