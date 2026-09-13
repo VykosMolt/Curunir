@@ -1,4 +1,23 @@
+# What HOUSEKEEPING.md section 2 keeps untracked on purpose. These rules live
+# here rather than in .git/info/exclude so a fresh clone and CI see the same
+# clean tree the V6.8 harness requires.
+
+# The external, hash-verified ARGUS kernel and its kit
+kernel/argus/
+kernel/schema.sql
 *.tar.gz
-__pycache__/
+
+# Local test harness config, pinned by the V6.7 baseline but not tracked
+curunir/conftest.py
+
+# Mission roots, pilot evidence and historical working directories
+curunir_v68_runs/
+curunir/missions/
+curunir/docs/
+curunir/research/
+
+# Environments, caches and local agent config
 .venv/
+__pycache__/
 .pytest_cache/
+.claude/

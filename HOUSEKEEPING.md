@@ -26,10 +26,11 @@ files at the root.** A stray patch, log, audit or snapshot at the root is a bug.
 - Tracked: source, tests, contracts, ledgers, READMEs, small fixtures, the
   Saulot commit map. Nothing over a few megabytes; this repository is meant to
   push to GitHub without LFS.
-- Untracked by policy (listed in `.gitignore` / `.git/info/exclude`): the
-  kernel tree, tarball and `schema.sql` (external, hash-verified), the
-  virtualenv, `curunir/conftest.py` and `pytest.ini`, mission roots, pilot
-  evidence, `docs/` and `research/` history.
+- Untracked by policy (all of it listed in the tracked `.gitignore`, so a fresh
+  clone and CI see the same tree): the kernel tree, tarball and `schema.sql`
+  (external, hash-verified), the virtualenv, `curunir/conftest.py`, mission
+  roots, pilot evidence, `docs/` and `research/` history. `curunir/pytest.ini`
+  *is* tracked, and is hash-locked by the reconstruction manifest.
 - Nothing is "untracked because nobody added it". If a file has been untracked
   for more than one campaign, either add it or move it to where untracked
   things live (its plane's `artifacts/`, `docs/`, or out of the repo).
