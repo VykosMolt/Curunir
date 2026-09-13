@@ -57,34 +57,38 @@ how anything superseded leaves.
 
 ## Getting started
 
-**Prerequisites:** Python ≥ 3.12, and the pinned ARGUS kernel (below).
+**Prerequisites:** Python ≥ 3.12 and the pinned ARGUS kernel (below).
 `pdftotext` (poppler-utils) is optional, for PDF ingestion.
-
-```bash
-git clone https://github.com/VykosMolt/Curunir.git
-cd Curunir/curunir
-
-python -m venv .venv
-.venv/bin/pip install -r requirements.txt          # hash-locked
-.venv/bin/python -m playwright install chromium    # for the browser journeys
-```
 
 ### The kernel
 
 A fresh clone has no kernel. Curunír imports eight modules from it and verifies
 the whole tree against a frozen hash before any campaign or reconstruction step
-runs. Fetch the pinned snapshot from the GitHub release
-[`kernel-4c173df7`](https://github.com/VykosMolt/Curunir/releases/tag/kernel-4c173df7)
-and unpack it to `kernel/argus/`:
+runs, so fetch it first. It is published as the GitHub release
+[`kernel-4c173df7`](https://github.com/VykosMolt/Curunir/releases/tag/kernel-4c173df7):
 
 ```bash
+git clone https://github.com/VykosMolt/Curunir.git
+cd Curunir
+
 gh release download kernel-4c173df7 --pattern 'argus_kernel_pinned_*.tar.gz' --dir kernel
-python curunir/tools/kernel_bundle.py --unpack kernel/argus_kernel_pinned_4c173df7.tar.gz
+gh release download kernel-4c173df7 --pattern schema.sql --dir kernel
+python curunir/tools/kernel_bundle.py unpack kernel/argus_kernel_pinned_4c173df7.tar.gz --into kernel
 ```
 
-Do not vendor it into `curunir/`. The default location is `../kernel/argus`;
-override with `CURUNIR_ARGUS_KERNEL`. See [`kernel/README.md`](kernel/README.md)
-for how to verify it.
+`unpack` refuses any tree whose hash is not the pinned one, and prints the hash
+and file count it accepted. Do not vendor the kernel into `curunir/`. The
+default location is `../kernel/argus`; override it with `CURUNIR_ARGUS_KERNEL`.
+See [`kernel/README.md`](kernel/README.md) for how to re-verify it later.
+
+### The product
+
+```bash
+cd curunir
+python -m venv .venv
+.venv/bin/pip install -r requirements.txt          # hash-locked
+.venv/bin/python -m playwright install chromium    # for the browser journeys
+```
 
 ### Running
 
