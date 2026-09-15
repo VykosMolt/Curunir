@@ -21,3 +21,4 @@ curunir/research/
 __pycache__/
 .pytest_cache/
 .claude/
+.idea/
